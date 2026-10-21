@@ -16,6 +16,9 @@ T = TypeVar("T", bound=BaseModel)
 class FakeAdvisoryLLMClient:
     """Mock LLM client returning realistic, schema-valid advisory objects."""
 
+    def model_for(self, agent_name: Optional[str] = None) -> str:
+        return "offline-deterministic"
+
     def __init__(self, override_responses: Optional[Dict[str, Any]] = None):
         self.override_responses = override_responses or {}
         self.call_history = []
@@ -25,11 +28,13 @@ class FakeAdvisoryLLMClient:
         system_prompt: str,
         user_prompt: str,
         response_model: Type[T],
-        temperature: float = 0.2
+        temperature: float = 0.2,
+        agent_name: Optional[str] = None
     ) -> T:
         model_name = response_model.__name__
         self.call_history.append({
             "model_name": model_name,
+            "agent_name": agent_name,
             "system_prompt": system_prompt,
             "user_prompt": user_prompt
         })

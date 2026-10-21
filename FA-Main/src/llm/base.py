@@ -13,7 +13,8 @@ class LLMClientProtocol(Protocol):
         system_prompt: str,
         user_prompt: str,
         response_model: Type[T],
-        temperature: float = 0.2
+        temperature: float = 0.2,
+        agent_name: Optional[str] = None
     ) -> T:
         """Generate content from the model and parse strictly into response_model."""
         ...

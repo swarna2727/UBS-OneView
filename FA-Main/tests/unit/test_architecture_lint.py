@@ -18,7 +18,7 @@ def test_tools_never_import_llm():
                 path = os.path.join(root, f)
                 with open(path, "r", encoding="utf-8") as file_content:
                     content = file_content.read()
-                    if re.search(r"from\s+src\.llm|import\s+src\.llm|google\.genai|gemini", content):
+                    if re.search(r"from\s+src\.llm|import\s+src\.llm|openrouter|httpx", content):
                         violations.append(f"{f} imports LLM components!")
 
     assert len(violations) == 0, f"Architectural boundary violation detected: {violations}"
