@@ -19,6 +19,7 @@ class AllocationDiffRow(BaseModel):
     after_pct: float
     delta_pct: float
     is_breached: bool = False
+    limit_value: Optional[float] = None
 
 class DecisionSpacePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -89,5 +90,6 @@ class PendingReview(BaseModel):
     raw_input: Dict[str, Any] = Field(default_factory=dict)
     candidate_ideas: List[Dict[str, Any]] = Field(default_factory=list)
     escalated: bool = False
+    regeneration_history: List[Dict[str, Any]] = Field(default_factory=list)
 
 AdvisorWorkspaceView.model_rebuild()

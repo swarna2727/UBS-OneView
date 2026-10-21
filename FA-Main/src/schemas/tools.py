@@ -155,9 +155,3 @@ class RuleResult(BaseModel):
     before_value: Optional[float] = None
     after_value: Optional[float] = None
     threshold_value: Optional[float] = None
-
-class RuleCheckResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    overall_status: Literal["PASS", "FLAG", "FAIL"]
-    breaches: List[Breach] = Field(default_factory=list)
-    passed_rules: List[str] = Field(default_factory=list)

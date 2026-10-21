@@ -245,12 +245,18 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         regen_count = state.get("regeneration_count", 0) + 1
         log.record(state.get("session_id", "default_session"), "auto_regeneration",
                    slots=slots, attempt_by_slot=counts, reasons=reasons)
+        history = [{
+            "slot": ie.slot_number, "ticker": ie.ticker, "attempt": counts[ie.slot_number],
+            "rules": sorted({r.rule_id for r in ie.rule_results if r.outcome in ("FAIL", "BLOCK")}),
+            "reason": ie.qualitative_notes
+        } for ie in assessment.idea_evaluations if ie.slot_number in slots]
         return {
             "locked_idea_ids": locked,
             "regenerate_slots": slots,
             "slot_regen_counts": counts,
             "regeneration_count": regen_count,
             "idea_feedback": "Suitability critic rejected these ideas: " + " ".join(reasons),
+            "regeneration_history": history,
             "audit_trail": [{
                 "stage": "mark_failed_slots", "timestamp": datetime.now().isoformat(),
                 "regeneration_round": regen_count, "marked_slots": slots, "locked_ideas": locked
@@ -274,7 +280,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         human_action = _request_review(
             REVIEW_RECOMMENDATIONS, "Suitability Critic Agent", reason, assessment, state,
             candidate_ideas=state["candidate_ideas"].model_dump()["ideas"] if state.get("candidate_ideas") else [],
-            escalated=escalated
+            escalated=escalated,
+            regeneration_history=state.get("regeneration_history") or []
         )
         outcome = resolve_review_outcome(REVIEW_RECOMMENDATIONS, human_action)
         update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
@@ -332,10 +339,12 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         session_id = state.get("session_id", "default_session")
         memo = state["memo"]
         notes = (state.get("human_action") or {}).get("notes")
+        exceptions = [n for n in state.get("advisor_notes") or [] if n.startswith("RM Exception Note:")]
         signature = (
             f"Approved by Relationship Manager on {datetime.now().strftime('%d-%b-%Y %H:%M')}."
             + (f" Note: {notes}" if notes else "")
             + f" Suitability review: {state['assessment'].overall_status}."
+            + (" " + " ".join(exceptions) if exceptions else "")
         )
         approved = memo.model_copy(update={
             "advisor_approved": True,

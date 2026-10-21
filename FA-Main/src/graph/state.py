@@ -33,6 +33,7 @@ class AdvisoryState(TypedDict, total=False):
     slot_regen_counts: Dict[int, int]  # automatic regenerations per idea slot (R10)
     allocation_edited: bool  # set when the advisor edits an allocation; the critic re-validates it
     auto_regenerate: bool  # False after an advisor edit: a resulting FAIL goes back to the advisor
+    regeneration_history: Annotated[List[Dict[str, Any]], append_list]  # automatic replacements shown to the advisor
     market_feedback: Optional[str]
 
     # Governance & Human-In-The-Loop tracking

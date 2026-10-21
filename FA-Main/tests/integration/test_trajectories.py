@@ -108,6 +108,7 @@ def test_fail_is_regenerated_automatically_then_escalated_and_never_reaches_memo
 
     regenerations = [e for e in service.get_run_log(sid) if e["event"] == "auto_regeneration"]
     assert [e["slots"] for e in regenerations] == [[2], [2]]
+    assert [(h["slot"], h["ticker"], h["rules"]) for h in review["regeneration_history"]] == [(2, "NVDA", ["R7"])] * 2
 
 def test_advisor_revision_regenerates_only_that_idea(balanced_client_data):
     service = new_service()

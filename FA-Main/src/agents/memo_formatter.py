@@ -91,7 +91,7 @@ class MemoFormatterAgent(BaseAdvisoryAgent[MemoFormatterInputs, StructuredMemo])
 
         # Page 3: portfolio impact, overall risks, scenarios, sources, approval
         before, after = assessment.before_metrics, assessment.after_metrics
-        open_items = [f"{b.rule_id}: {b.message}" for b in assessment.detected_breaches]
+        open_items = [b.message for b in assessment.detected_breaches]
         page3 = MemoPage3PortfolioView(
             portfolio_level_impact_narrative=(
                 f"Portfolio risk score moves from {before.after_risk_score:.2f} to {after.after_risk_score:.2f} "

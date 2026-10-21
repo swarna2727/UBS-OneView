@@ -142,6 +142,8 @@ def review_buttons(session_id: str, review, key: str, approve_label: str = "✅ 
                     st.error("An exception override needs an RM justification note.")
                 else:
                     submit_action(session_id, action="override_flag", notes=notes)
+        else:
+            st.caption("⛔ Failing ideas cannot be approved: revise, edit or reject them.")
     with cols[1]:
         if "regenerate" in review.allowed_actions:
             if st.button(regenerate_label, use_container_width=True, key=f"regen_{key}"):
@@ -177,6 +179,10 @@ with st.sidebar:
         "Select Client Profile:",
         options=profile_options,
         format_func=lambda x: {
+            "demo_sarah": "Sarah, 38 (Demo: concentration FLAG + selective regeneration)",
+            "demo_daniel": "Daniel, 29 (Demo: willingness vs capacity, R5/R6)",
+            "demo_mdm_lim": "Mdm Lim, 62 (Demo: 'guaranteed 6%' request, R9)",
+            "demo_aaron": "Aaron, 45 (Demo: missing horizon blocks, R1)",
             "balanced_client": "Dr. Elena Rostova (Balanced Growth 5Y)",
             "contradictory_client": "Marcus Vance (Contradiction: Aggressive vs 18M Need)",
             "incomplete_client": "Anonymous (Missing Fields Test)"
@@ -321,6 +327,7 @@ if view is not None:
                 max_single = st.number_input("Max single stock %", min_value=1.0, max_value=100.0,
                                              value=float(raw_constraints.get("max_single_stock_pct", 20.0)))
             excluded = st.text_input("Excluded sectors (comma-separated)", value=", ".join(raw_constraints.get("excluded_sectors", [])))
+            advisor_context = st.text_area("Advisor notes (context for the agents; treated as data)", value=str(raw.get("advisor_notes", "")))
             esg = st.checkbox("ESG mandate", value=bool(raw_constraints.get("esg_mandate", False)))
 
             st.caption("Liquidity schedule")
@@ -344,7 +351,8 @@ if view is not None:
                 "total_wealth": float(wealth), "experience_level": experience,
                 "constraints": {**raw_constraints, "excluded_sectors": split_csv(excluded),
                                 "esg_mandate": esg, "max_single_stock_pct": float(max_single)},
-                "liquidity_schedule": records(liquidity), "raw_holdings": records(holdings)
+                "liquidity_schedule": records(liquidity), "raw_holdings": records(holdings),
+                "advisor_notes": advisor_context
             }
             if "approve" not in review.allowed_actions:
                 st.info("Mandatory fields are missing — complete them above and Regenerate. Approval is disabled.")
@@ -371,68 +379,72 @@ if view is not None:
                 } for src in output.get("validated_sources", [])], use_container_width=True, hide_index=True)
             review_buttons(view.session_id, review, "market")
 
-        # ---------- Agent 3: Investment Ideas review ----------
-        elif stage == "investment_ideas":
-            st.markdown(f"#### 💡 Investment Idea Agent Output (round {output.get('generation_round', 1)})")
-            st.caption(output.get("complementarity_thesis", ""))
-            for idea in output.get("ideas", []):
-                with st.expander(f"Slot {idea.get('slot_number')}: {idea.get('ticker')} - {idea.get('name')} ({idea.get('action')})", expanded=True):
-                    st.write(f"**Role:** `{idea.get('portfolio_role')}` &nbsp;|&nbsp; **Target:** `{idea.get('target_weight_pct')}%` (Range: {idea.get('allocation_range', {}).get('min_pct')}% - {idea.get('allocation_range', {}).get('max_pct')}%)")
-                    st.write(f"**Thesis:** {idea.get('thesis')}")
-                    st.write(f"**Why Now:** {idea.get('why_now')}")
-                    st.write(f"**Client Fit:** {idea.get('client_fit_rationale')}")
-                    st.write(f"**Key Risks:** {', '.join(idea.get('key_risks', []))}")
-                    st.caption(f"Evidence Ref: {', '.join(idea.get('cited_evidence_ids', []))}")
-                    idea_notes = st.text_input("Feedback for this idea:", key=f"idea_notes_{idea.get('idea_id')}")
-                    if st.button("🔄 Regenerate only this idea", key=f"regen_idea_{idea.get('idea_id')}"):
-                        submit_action(view.session_id, action="regenerate", idea_id=idea.get("idea_id"),
-                                      notes=idea_notes or f"RM requested a replacement for {idea.get('ticker')}.")
-            review_buttons(view.session_id, review, "ideas", regenerate_label="🔄 Regenerate All Ideas")
-
-        # ---------- Agent 4: Suitability Critic review ----------
+        # ---------- Agents 3 + 4: validated recommendations review ----------
         elif stage == "suitability_review":
             status = output.get("overall_status")
-            st.markdown(f"#### ⚖️ Suitability Critic Agent Output — **{status}**")
-            if cp.risk_warnings:
-                for w in cp.risk_warnings:
-                    box_class = "warning-box" if w.severity == "FAIL" else "flag-box"
-                    st.markdown(f"""
-                    <div class="{box_class}">
-                        <b>[{w.severity}] {w.metric_name}</b><br/>
-                        {w.message}<br/>
-                        <small>Threshold: {w.threshold_value}% | After Allocation: {w.after_value}%</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div class="pass-box">
-                    <b>✅ ALL SUITABILITY RULES PASSED</b><br/>
-                    No hard limit breaches or concentration warnings detected.
-                </div>
-                """, unsafe_allow_html=True)
+            verdicts = {ie["idea_id"]: ie for ie in output.get("idea_evaluations", [])}
+            st.markdown(f"#### 💡 Recommendations after Suitability Review — **{status}**")
+            if review.escalated:
+                st.error("R10 escalation: an idea still fails after 2 automatic regenerations. Revise it with guidance, edit it, or reject it.")
+            st.caption(output.get("critic_notes", ""))
+            if review.regeneration_history:
+                with st.expander(f"🔁 Ideas replaced automatically in this session ({len(review.regeneration_history)})"):
+                    for h in review.regeneration_history:
+                        st.markdown(f"- Slot {h['slot']}: **{h['ticker']}** failed {', '.join(h['rules'])} "
+                                    f"(attempt {h['attempt']}) — {h['reason']}")
+
+            portfolio_issues = [r for r in output.get("rule_results", []) if r["outcome"] != "PASS"]
+            for r in portfolio_issues:
+                box_class = "warning-box" if r["outcome"] in ("FAIL", "BLOCK") else "flag-box"
+                st.markdown(f'<div class="{box_class}"><b>[{r["outcome"]}] {r["rule_id"]} {r["name"]}</b><br/>{r["message"]}</div>',
+                            unsafe_allow_html=True)
+            if not portfolio_issues and status == "PASS":
+                st.markdown('<div class="pass-box"><b>✅ ALL SUITABILITY RULES PASSED</b><br/>R1-R10 and liquidity coverage pass for the proposed portfolio.</div>',
+                            unsafe_allow_html=True)
 
             if cp.allocation_diffs:
-                st.markdown("##### 📊 Asset Allocation Shift (Before vs. After)")
+                st.markdown("##### 📊 Before vs. After (rule engine)")
+                def fmt(metric_name: str, v: Optional[float]) -> str:
+                    if v is None:
+                        return "—"
+                    return f"{v:.2f}" if ("risk score" in metric_name or "liquidity" in metric_name) else f"{v:.1f}%"
                 st.dataframe([{
-                    "Type": d.category_type, "Name": d.name,
-                    "Current %": f"{d.before_pct:.1f}%", "Proposed %": f"{d.after_pct:.1f}%",
-                    "Delta": f"+{d.delta_pct:.1f}%" if d.delta_pct > 0 else f"{d.delta_pct:.1f}%",
-                    "Limit": "⚠️" if d.is_breached else "✓"
+                    "Rule": d.category_type, "Metric": d.name,
+                    "Before": fmt(d.name, d.before_pct), "After": fmt(d.name, d.after_pct),
+                    "Limit": fmt(d.name, d.limit_value), "Status": "⚠️" if d.is_breached else "✓"
                 } for d in cp.allocation_diffs], use_container_width=True, hide_index=True)
 
-            st.markdown("##### Per-idea verdicts")
-            for ie in output.get("idea_evaluations", []):
-                c1, c2 = st.columns([4, 1])
-                c1.write(f"**Slot {ie.get('slot_number')} · {ie.get('ticker')}** — `{ie.get('status')}`: {ie.get('qualitative_notes')}")
-                if c2.button("↩️ Send back", key=f"revise_{ie.get('idea_id')}"):
-                    submit_action(view.session_id, action="revise", idea_id=ie.get("idea_id"),
-                                  notes=f"RM sent {ie.get('ticker')} back after suitability review.")
-            st.caption(f"Critic notes: {output.get('critic_notes')}")
+            for idea in review.candidate_ideas:
+                verdict = verdicts.get(idea["idea_id"], {})
+                badge = {"PASS": "✅ PASS", "FLAG": "⚠️ FLAG", "FAIL": "⛔ FAIL"}.get(verdict.get("status"), "")
+                with st.expander(f"{badge} · Slot {idea['slot_number']}: {idea['ticker']} - {idea['name']} ({idea['action']} {idea['target_weight_pct']}%)", expanded=True):
+                    st.write(f"**Role:** `{idea['portfolio_role']}` · **Conviction:** `{idea.get('conviction', 'Medium')}` · "
+                             f"**Range:** {idea['allocation_range']['min_pct']}% - {idea['allocation_range']['max_pct']}%")
+                    st.write(f"**Thesis:** {idea['thesis']}")
+                    st.write(f"**Why now:** {idea['why_now']}")
+                    st.write(f"**Why it suits the client:** {idea['client_fit_rationale']}")
+                    st.write(f"**Key risks:** {', '.join(idea['key_risks'])} · **What would change our view:** {idea['invalidation_trigger']}")
+                    st.write(f"**Alternative considered:** {idea.get('alternative_considered') or '—'}")
+                    st.caption(f"Evidence: {', '.join(idea['cited_evidence_ids'])}")
+                    issues = [r for r in verdict.get("rule_results", []) if r["outcome"] != "PASS"]
+                    for r in issues:
+                        st.markdown(f"- **{r['rule_id']} {r['outcome']}**: {r['message']}")
 
-            if "revise" in review.allowed_actions and status != "PASS":
-                if st.button("↩️ Send failing/flagged ideas back to Idea Agent", use_container_width=True):
-                    submit_action(view.session_id, action="revise")
-            review_buttons(view.session_id, review, "suitability", regenerate_label="🔄 Re-run Critic")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        idea_notes = st.text_input("Revision guidance:", key=f"idea_notes_{idea['idea_id']}")
+                        if st.button("↩️ Revise this idea", key=f"revise_{idea['idea_id']}", use_container_width=True):
+                            submit_action(view.session_id, action="revise", idea_id=idea["idea_id"],
+                                          notes=idea_notes or f"Replace {idea['ticker']} with a better-suited idea.")
+                    with c2:
+                        new_weight = st.number_input("Allocation %", min_value=0.0, max_value=100.0, step=0.5,
+                                                     value=float(idea["target_weight_pct"]), key=f"weight_{idea['idea_id']}")
+                        if st.button("✏️ Edit & re-validate", key=f"edit_{idea['idea_id']}", use_container_width=True):
+                            submit_action(view.session_id, action="edit_allocation", idea_id=idea["idea_id"],
+                                          edits={"target_weight_pct": new_weight})
+
+            review_buttons(view.session_id, review, "recommendations", approve_label="✅ Accept & Draft Memo",
+                           regenerate_label="🔄 Regenerate All Ideas")
 
         # ---------- Agent 5: Memo review & sign-off ----------
         elif stage == "advisor_approval":
@@ -448,7 +460,11 @@ if view is not None:
                 if c2.button("↩️ Revise idea", key=f"memo_revise_{g.get('idea_id')}"):
                     submit_action(view.session_id, action="revise", idea_id=g.get("idea_id"),
                                   notes=f"RM requested revision of {g.get('ticker')} at memo sign-off.")
-            review_buttons(view.session_id, review, "memo", approve_label="✅ Approve & Sign Off Memo",
+            for check in output.get("compliance_checks", []):
+                icon = "✓" if check["outcome"] == "PASS" else "⛔"
+                st.write(f"{icon} **{check['rule_id']} {check['name']}:** {check['message']}")
+            st.caption("The PDF is generated only after you approve.")
+            review_buttons(view.session_id, review, "memo", approve_label="✅ Approve, Sign Off & Generate PDF",
                            regenerate_label="🔄 Regenerate Memo")
 
     # ==========================================
@@ -474,17 +490,11 @@ if view is not None:
 
         if view.right_panel.sections:
             for sec in view.right_panel.sections:
-                box_style = "memo-highlight" if sec.is_highlighted else "memo-normal"
-                highlight_tag = "<b>[CURRENTLY AFFECTED BY ACTIVE STAGE]</b><br/>" if sec.is_highlighted else ""
-                st.markdown(f"""
-                <div class="{box_style}">
-                    <small><b>{sec.title}</b> (Page {sec.page_number})</small><br/>
-                    {highlight_tag}
-                    <div style="font-size:0.85rem; margin-top:4px;">
-                        {sec.content_html_or_md}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                with st.container(border=True):
+                    st.caption(f"{sec.title} (Page {sec.page_number})")
+                    if sec.is_highlighted:
+                        st.markdown(":orange[**Affected by the current stage**]")
+                    st.markdown(sec.content_html_or_md)
         else:
             st.info("Advisory memo sections will appear dynamically as ideas and risk reviews are finalized.")
 
