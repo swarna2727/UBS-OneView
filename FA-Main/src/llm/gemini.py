@@ -14,7 +14,7 @@ T = TypeVar("T", bound=BaseModel)
 class GeminiAdvisoryLLMClient(LLMClientProtocol):
     """Client for Google Gemini using modern google-genai SDK with structured output schema."""
 
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-3.8-flash"):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
         self.model_name = model_name
         self._fallback_fake = FakeAdvisoryLLMClient()
