@@ -3,3 +3,5 @@
 secrets/
 __pycache__/
 *.py[cod]
+data/pipeline_data/*.pdf
+data/runs/
