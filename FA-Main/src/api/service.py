@@ -6,22 +6,26 @@ from typing import Dict, Any, Optional, List
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-from src.graph.workflow import build_advisory_graph
+from src.graph.workflow import build_advisory_graph, checkpoint_serializer
 from src.graph.state import AdvisoryState
 from src.schemas.workspace import AdvisorWorkspaceView, AdvisorActionRequest
 from src.api.views import build_workspace_view
 from src.graph.routing import normalize_action
 from src.llm.base import LLMClientProtocol
+from src.llm.openrouter import default_llm_client
+from src.audit.run_log import RunLog, file_fingerprint
+from src.tools.risk_engine import CONFIG_POLICY_PATH
 
 logger = logging.getLogger("AdvisorySessionService")
 
 class AdvisorySessionService:
     """Manages active advisory graph sessions, checkpoints, and human-in-the-loop actions."""
 
-    def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
-        self.checkpointer = MemorySaver()
-        self.llm_client = llm_client
-        self.graph = build_advisory_graph(llm_client=llm_client, checkpointer=self.checkpointer)
+    def __init__(self, llm_client: Optional[LLMClientProtocol] = None, run_log: Optional[RunLog] = None):
+        self.checkpointer = MemorySaver(serde=checkpoint_serializer())
+        self.llm_client = llm_client or default_llm_client()  # one client shared by all agents
+        self.run_log = run_log or RunLog()
+        self.graph = build_advisory_graph(llm_client=llm_client, checkpointer=self.checkpointer, run_log=self.run_log)
         self.active_sessions: Dict[str, Dict[str, Any]] = {}
 
     def start_session(
@@ -39,7 +43,7 @@ class AdvisorySessionService:
             "locked_idea_ids": [],
             "regenerate_slots": [],
             "regeneration_count": 0,
-            "max_regenerations": 3,
+            "slot_regen_counts": {},
             "advisor_notes": [],
             "audit_trail": [],
             "current_stage": "client_profile",
@@ -48,6 +52,13 @@ class AdvisorySessionService:
         }
 
         logger.info(f"Starting advisory session: {sid}")
+        model_for = getattr(self.llm_client, "model_for", None)
+        self.run_log.record(
+            sid, "run_started", inputs=raw_input,
+            policy_version=file_fingerprint(CONFIG_POLICY_PATH),
+            llm_client=type(self.llm_client).__name__,
+            default_model=model_for(None) if callable(model_for) else None
+        )
 
         try:
             self.graph.invoke(initial_state, config=config)
@@ -94,6 +105,7 @@ class AdvisorySessionService:
         if action_request.action == "add_advisor_note":
             self._snapshot(session_id)
             if action_request.notes:
+                self.run_log.record(session_id, "advisor_note", notes=action_request.notes)
                 was_paused = self.get_pending_review(session_id) is not None
                 self.graph.update_state(config, {"advisor_notes": [action_request.notes]})
                 if was_paused:
@@ -112,6 +124,13 @@ class AdvisorySessionService:
                 f"Action '{action_request.action}' is not allowed at the '{stage}' review. "
                 f"Allowed: {pending_review.get('allowed_actions', [])}"
             )
+        if action == "override_flag" and not (action_request.notes or "").strip():
+            raise ValueError("An exception override must document the advisor's reasoning in 'notes'.")
+        if action == "edit_allocation":
+            weight = (action_request.edits or {}).get("target_weight_pct")
+            idea_ids = {i["idea_id"] for i in pending_review.get("candidate_ideas") or (self.get_state(session_id)["candidate_ideas"].model_dump()["ideas"])}
+            if action_request.idea_id not in idea_ids or not isinstance(weight, (int, float)) or not 0 <= weight <= 100:
+                raise ValueError("edit_allocation needs a valid idea_id and edits.target_weight_pct between 0 and 100.")
 
         try:
             self.graph.invoke(Command(resume=action_request.model_dump()), config=config)
@@ -125,6 +144,10 @@ class AdvisorySessionService:
         config = {"configurable": {"thread_id": session_id}}
         state_snapshot = self.graph.get_state(config)
         return state_snapshot.values
+
+    def get_run_log(self, session_id: str) -> List[Dict[str, Any]]:
+        """Full audit record for one run (AS-8)."""
+        return self.run_log.read(session_id)
 
     def get_pdf_path(self, session_id: str) -> Optional[str]:
         """Get path to the rendered PDF memo artifact."""

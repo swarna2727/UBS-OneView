@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from src.schemas.tools import (
     Holding, StandardizedHoldings, QuantMetrics, SentimentBreakdown, 
-    DocumentSnippet, Breach, RiskMetrics
+    DocumentSnippet, Breach, RiskMetrics, RuleResult
 )
 
 # ==========================================
@@ -52,6 +52,9 @@ class ClientAdvisoryProfile(BaseModel):
     current_region_weights: Dict[str, float] = Field(default_factory=dict)
     current_currency_weights: Dict[str, float] = Field(default_factory=dict)
     unresolved_flags: List[ProfileFlag] = Field(default_factory=list)
+    base_currency: str = "USD"
+    near_term_liquidity_need: float = 0.0  # sum of liquidity events due within the liquidity-rule window
+    advisor_notes: str = ""  # free-text advisor context; passed to agents as data, never as instructions
 
     @field_validator("risk_score_range")
     @classmethod
@@ -122,6 +125,8 @@ class InvestmentIdea(BaseModel):
     key_risks: List[str] = Field(..., min_length=1)
     invalidation_trigger: str
     cited_evidence_ids: List[str] = Field(..., min_length=1)
+    conviction: Literal["High", "Medium", "Low"] = "Medium"
+    alternative_considered: str = ""  # AS-7: the alternative the advisor could choose instead
     is_locked: bool = False
     rejection_feedback: Optional[str] = None
 
@@ -157,6 +162,7 @@ class IdeaStatus(BaseModel):
     detected_breaches: List[Breach] = Field(default_factory=list)
     qualitative_notes: str
     evidence_verified: bool = True
+    rule_results: List[RuleResult] = Field(default_factory=list)
 
 class SuitabilityAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -168,6 +174,7 @@ class SuitabilityAssessment(BaseModel):
     required_actions: List[str] = Field(default_factory=list)
     has_blocking_hard_breach: bool = False
     critic_notes: str
+    rule_results: List[RuleResult] = Field(default_factory=list)  # portfolio-level results
 
 # ==========================================
 # 5. MEMO FORMATTER SCHEMAS (Slide 18)
@@ -209,6 +216,8 @@ class MemoPage2IdeaDetail(BaseModel):
     key_risks: List[str]
     what_changes_view: str
     cited_sources_formatted: List[str]
+    conviction: str = "Medium"
+    alternative_considered: str = ""
 
 class MemoPage3PortfolioView(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -228,3 +237,5 @@ class StructuredMemo(BaseModel):
     page_3_portfolio_view: MemoPage3PortfolioView
     pdf_artifact_path: Optional[str] = None
     consistency_hash: str
+    compliance_checks: List[RuleResult] = Field(default_factory=list)  # R9 wording + consistency validator
+    advisor_approved: bool = False

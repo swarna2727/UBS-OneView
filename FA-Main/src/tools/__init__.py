@@ -16,10 +16,7 @@ from src.tools.exposure import (
     portfolio_exposure_calculator
 )
 from src.tools.risk_engine import (
-    portfolio_risk_engine, suitability_rule_engine
-)
-from src.tools.evidence import (
-    evidence_integrity_check
+    suitability_rule_engine, prohibited_wording
 )
 from src.tools.memo_tools import (
     memo_consistency_validator, citation_source_mapper, pdf_memo_renderer
@@ -35,9 +32,8 @@ __all__ = [
     "source_freshness_validator",
     "approved_product_universe_tool",
     "portfolio_exposure_calculator",
-    "portfolio_risk_engine",
     "suitability_rule_engine",
-    "evidence_integrity_check",
+    "prohibited_wording",
     "memo_consistency_validator",
     "citation_source_mapper",
     "pdf_memo_renderer"

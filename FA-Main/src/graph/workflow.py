@@ -1,47 +1,57 @@
-"""LangGraph orchestration layer for human-led multi-agent advisory system."""
+"""LangGraph orchestration layer for the human-led multi-agent advisory system (slides 8, 15, 26)."""
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from pydantic import BaseModel
 
 from src.graph.state import AdvisoryState
 from src.graph.routing import (
-    REVIEW_PROFILE, REVIEW_MARKET, REVIEW_IDEAS, REVIEW_SUITABILITY, REVIEW_MEMO,
-    EDITABLE_PROFILE_FIELDS, allowed_review_actions, resolve_review_outcome,
-    route_after_profile_review, route_after_market_review, route_after_ideas_review,
-    route_after_suitability_review, route_after_memo_review
+    REVIEW_PROFILE, REVIEW_MARKET, REVIEW_RECOMMENDATIONS, REVIEW_MEMO,
+    EDITABLE_PROFILE_FIELDS, MAX_REGENERATIONS_PER_IDEA,
+    allowed_review_actions, resolve_review_outcome, failed_slots, is_escalated,
+    route_after_profile_review, route_after_market_review, route_after_critic,
+    route_after_recommendation_review, route_after_memo_review
 )
 from src.agents.client_profile import ClientProfileAgent
 from src.agents.market_intelligence import MarketIntelligenceAgent
 from src.agents.investment_idea import InvestmentIdeaAgent, InvestmentIdeaAgentInputs
 from src.agents.suitability_critic import SuitabilityCriticAgent, SuitabilityCriticInputs
 from src.agents.memo_formatter import MemoFormatterAgent, MemoFormatterInputs
-from src.schemas.advisory import InvestmentIdea
+from src.audit.run_log import RunLog
+from src.schemas.advisory import InvestmentIdea, CandidateIdeaSet
+from src.tools.memo_tools import pdf_memo_renderer
 from src.llm.base import LLMClientProtocol
 
-def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None):
+PDF_DIR = "data/pipeline_data"
+
+def checkpoint_serializer() -> JsonPlusSerializer:
+    """Allow-list the advisory Pydantic models that are stored in graph checkpoints."""
+    from src.schemas import advisory, tools
+    allowed = [
+        (module.__name__, name)
+        for module in (advisory, tools)
+        for name, obj in vars(module).items()
+        if isinstance(obj, type) and issubclass(obj, BaseModel) and obj.__module__ == module.__name__
+    ]
+    return JsonPlusSerializer(allowed_msgpack_modules=allowed)
+
+def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_log: Optional[RunLog] = None):
     """Factory creating bound node functions for the advisory workflow."""
     profile_agent = ClientProfileAgent(llm_client)
     market_agent = MarketIntelligenceAgent(llm_client)
     idea_agent = InvestmentIdeaAgent(llm_client)
     critic_agent = SuitabilityCriticAgent(llm_client)
     memo_agent = MemoFormatterAgent(llm_client)
+    log = run_log or RunLog()
 
-    def node_client_profile(state: AdvisoryState) -> Dict[str, Any]:
-        raw_input = state.get("raw_input", {})
-        profile = profile_agent.run(raw_input)
-        audit = [{
-            "stage": "client_profile",
-            "timestamp": datetime.now().isoformat(),
-            "flags_detected": len(profile.unresolved_flags)
-        }]
-        return {
-            "profile": profile,
-            "current_stage": "client_profile",
-            "audit_trail": audit
-        }
+    def _agent_audit(state: AdvisoryState, stage: str, agent, output, **extra: Any) -> List[Dict[str, Any]]:
+        """Record an agent's output with its model and prompt version (AS-8)."""
+        log.record(state.get("session_id", "default_session"), "agent_output", stage=stage, **agent.last_run, output=output, **extra)
+        return [{"stage": stage, "timestamp": datetime.now().isoformat(), **agent.last_run, **extra}]
 
     def _request_review(stage: str, agent_name: str, reason: str, output: Any, state: AdvisoryState, **extra: Any) -> Dict[str, Any]:
         """Pause the graph so the RM can inspect an agent's output and approve, regenerate or reject it."""
@@ -55,7 +65,9 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None):
         })
         return resume_val if isinstance(resume_val, dict) else {"action": str(resume_val)}
 
-    def _review_audit(stage: str, human_action: Dict[str, Any], outcome: str) -> List[Dict[str, Any]]:
+    def _review_audit(state: AdvisoryState, stage: str, human_action: Dict[str, Any], outcome: str) -> List[Dict[str, Any]]:
+        log.record(state.get("session_id", "default_session"), "advisor_decision", stage=stage,
+                   decision=human_action, review_outcome=outcome)
         return [{
             "stage": f"review_{stage}",
             "timestamp": datetime.now().isoformat(),
@@ -63,13 +75,60 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None):
             "review_outcome": outcome
         }]
 
+    def _regenerate_slots(state: AdvisoryState, human_action: Dict[str, Any]) -> Dict[str, Any]:
+        """Advisor-requested regeneration: one idea (others locked) or the whole set. Resets R10 counters for those slots."""
+        idea_set = state.get("candidate_ideas")
+        target_id = human_action.get("idea_id")
+        ideas = idea_set.ideas if idea_set else []
+        slots = [i.slot_number for i in ideas if i.idea_id == target_id] if target_id else [i.slot_number for i in ideas]
+        counts = dict(state.get("slot_regen_counts") or {})
+        for slot in slots:
+            counts[slot] = 0
+        return {
+            "regenerate_slots": slots,
+            "locked_idea_ids": [i.idea_id for i in ideas if i.slot_number not in slots],
+            "slot_regen_counts": counts,
+            "regeneration_count": state.get("regeneration_count", 0) + 1,
+            "idea_feedback": human_action.get("notes") or "Advisor requested a different idea for this slot."
+        }
+
+    def _apply_allocation_edit(state: AdvisoryState, human_action: Dict[str, Any]) -> Dict[str, Any]:
+        """AS-6: an advisor-edited allocation is applied, then the critic re-validates it before any memo."""
+        idea_set: CandidateIdeaSet = state["candidate_ideas"]
+        new_weight = float((human_action.get("edits") or {})["target_weight_pct"])
+        updated: List[InvestmentIdea] = []
+        for idea in idea_set.ideas:
+            if idea.idea_id == human_action.get("idea_id"):
+                rng = idea.allocation_range
+                idea = idea.model_copy(update={
+                    "target_weight_pct": new_weight,
+                    "allocation_range": rng.model_copy(update={
+                        "min_pct": min(rng.min_pct, new_weight), "max_pct": max(rng.max_pct, new_weight), "target_pct": new_weight
+                    })
+                })
+            updated.append(idea)
+        return {"candidate_ideas": idea_set.model_copy(update={"ideas": updated}), "allocation_edited": True}
+
+    # ------------------------------------------------------------------
+    # Agent 1: Client Profile + review
+    # ------------------------------------------------------------------
+
+    def node_client_profile(state: AdvisoryState) -> Dict[str, Any]:
+        profile = profile_agent.run(state.get("raw_input", {}))
+        return {
+            "profile": profile,
+            "current_stage": "client_profile",
+            "audit_trail": _agent_audit(state, "client_profile", profile_agent, profile,
+                                        flags_detected=len(profile.unresolved_flags))
+        }
+
     def node_review_profile(state: AdvisoryState) -> Dict[str, Any]:
-        """HITL checkpoint: RM reviews the rendered client profile, resolving any flags."""
+        """Advisor confirms inputs and resolves missing or contradictory information (input confirmation / conflict resolution)."""
         profile = state.get("profile")
-        blocking = [f for f in profile.unresolved_flags if f.severity == "BLOCKING_INTERRUPT"] if profile else []
+        flagged = bool(profile and profile.unresolved_flags)
         reason = (
             "Profile has unresolved flags or conflicts requiring advisor resolution."
-            if blocking else "Review the standardized client profile before market research begins."
+            if flagged else "Confirm the standardized client profile before market research begins."
         )
         human_action = _request_review(
             REVIEW_PROFILE, "Client Profile Agent", reason, profile, state,
@@ -81,7 +140,6 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None):
         update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
 
         if outcome == "approve" and profile:
-            # Mark profile flags as resolved by the RM
             notes = human_action.get("notes") or human_action.get("conflict_resolution") or "Resolved by RM"
             resolved_flags = [f.model_copy(update={"is_resolved": True, "resolution_notes": notes}) for f in profile.unresolved_flags]
             update["profile"] = profile.model_copy(update={"unresolved_flags": resolved_flags})
@@ -91,27 +149,25 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None):
         elif outcome == "reject":
             update["rejected_at_stage"] = REVIEW_PROFILE
 
-        update["audit_trail"] = _review_audit(REVIEW_PROFILE, human_action, outcome)
+        update["audit_trail"] = _review_audit(state, REVIEW_PROFILE, human_action, outcome)
         return update
 
+    # ------------------------------------------------------------------
+    # Agent 2: Market Intelligence + review
+    # ------------------------------------------------------------------
+
     def node_market_intelligence(state: AdvisoryState) -> Dict[str, Any]:
-        profile = state["profile"]
-        brief = market_agent.run(profile, feedback=state.get("market_feedback"))
-        audit = [{
-            "stage": "market_intelligence",
-            "timestamp": datetime.now().isoformat(),
-            "macro_themes": brief.macro_themes,
-            "validated_sources_count": len(brief.validated_sources)
-        }]
+        brief = market_agent.run(state["profile"], feedback=state.get("market_feedback"))
         return {
             "research_brief": brief,
             "current_stage": "market_intelligence",
             "market_feedback": None,
-            "audit_trail": audit
+            "audit_trail": _agent_audit(state, "market_intelligence", market_agent, brief,
+                                        validated_sources_count=len(brief.validated_sources))
         }
 
     def node_review_market(state: AdvisoryState) -> Dict[str, Any]:
-        """HITL checkpoint: RM reviews the evidence-backed research brief."""
+        """Advisor inspects the underlying sources and can challenge the relevance of retrieved research."""
         human_action = _request_review(
             REVIEW_MARKET, "Market Intelligence Agent",
             "Review the research brief and its cited evidence before ideas are generated.",
@@ -123,247 +179,186 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None):
             update["market_feedback"] = human_action.get("notes")
         elif outcome == "reject":
             update["rejected_at_stage"] = REVIEW_MARKET
-        update["audit_trail"] = _review_audit(REVIEW_MARKET, human_action, outcome)
+        update["audit_trail"] = _review_audit(state, REVIEW_MARKET, human_action, outcome)
         return update
 
+    # ------------------------------------------------------------------
+    # Agents 3 + 4: Investment Ideas -> Suitability Critic (auto-regenerate FAILs) -> review
+    # ------------------------------------------------------------------
+
     def node_investment_ideas(state: AdvisoryState) -> Dict[str, Any]:
-        profile = state["profile"]
-        brief = state["research_brief"]
         candidate_ideas = state.get("candidate_ideas")
         locked_ids = set(state.get("locked_idea_ids") or [])
         regenerate_slots = state.get("regenerate_slots") or []
 
-        # Identify locked ideas
         locked_list: List[InvestmentIdea] = []
-        if candidate_ideas and locked_ids:
-            for idea in candidate_ideas.ideas:
-                if idea.idea_id in locked_ids or (idea.slot_number not in regenerate_slots and regenerate_slots):
-                    locked_list.append(idea)
+        if candidate_ideas and regenerate_slots:
+            locked_list = [i for i in candidate_ideas.ideas if i.idea_id in locked_ids and i.slot_number not in regenerate_slots]
 
-        inputs = InvestmentIdeaAgentInputs(
-            profile=profile,
-            research_brief=brief,
+        new_idea_set = idea_agent.run(InvestmentIdeaAgentInputs(
+            profile=state["profile"],
+            research_brief=state["research_brief"],
             locked_ideas=locked_list,
             rejected_slots=regenerate_slots,
             feedback=state.get("idea_feedback")
-        )
-
-        new_idea_set = idea_agent.run(inputs)
-        audit = [{
-            "stage": "investment_ideas",
-            "timestamp": datetime.now().isoformat(),
-            "generation_round": new_idea_set.generation_round,
-            "locked_slots_retained": [i.slot_number for i in locked_list],
-            "regenerated_slots": regenerate_slots
-        }]
+        ))
         return {
             "candidate_ideas": new_idea_set,
             "current_stage": "investment_ideas",
-            "regenerate_slots": [], # reset after generation
-            "audit_trail": audit
+            "regenerate_slots": [],
+            "audit_trail": _agent_audit(state, "investment_ideas", idea_agent, new_idea_set,
+                                        locked_slots_retained=[i.slot_number for i in locked_list],
+                                        regenerated_slots=regenerate_slots)
         }
 
-    def node_review_ideas(state: AdvisoryState) -> Dict[str, Any]:
-        """HITL checkpoint: RM reviews the three candidate ideas before the suitability critic runs."""
-        idea_set = state.get("candidate_ideas")
-        human_action = _request_review(
-            REVIEW_IDEAS, "Investment Idea Agent",
-            "Review the candidate ideas. Approve, regenerate a single idea, or regenerate the full set.",
-            idea_set, state
-        )
-        outcome = resolve_review_outcome(REVIEW_IDEAS, human_action)
-        update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
-
-        if outcome == "regenerate_ideas" and idea_set:
-            target_id = human_action.get("idea_id")
-            if target_id:
-                regen_slots = [i.slot_number for i in idea_set.ideas if i.idea_id == target_id]
-                locked_ids = [i.idea_id for i in idea_set.ideas if i.idea_id != target_id]
-            else:
-                regen_slots = [i.slot_number for i in idea_set.ideas]
-                locked_ids = []
-            update.update({
-                "regenerate_slots": regen_slots,
-                "locked_idea_ids": locked_ids,
-                "regeneration_count": state.get("regeneration_count", 0) + 1,
-                "idea_feedback": human_action.get("notes") or "RM requested regeneration."
-            })
-        elif outcome == "reject":
-            update["rejected_at_stage"] = REVIEW_IDEAS
-
-        update["audit_trail"] = _review_audit(REVIEW_IDEAS, human_action, outcome)
-        return update
-
     def node_suitability_critic(state: AdvisoryState) -> Dict[str, Any]:
-        profile = state["profile"]
-        idea_set = state["candidate_ideas"]
-        brief = state["research_brief"]
-
-        inputs = SuitabilityCriticInputs(
-            profile=profile,
-            candidate_ideas=idea_set,
-            research_brief=brief
-        )
-
-        assessment = critic_agent.run(inputs)
-        audit = [{
-            "stage": "suitability_critic",
-            "timestamp": datetime.now().isoformat(),
-            "overall_status": assessment.overall_status,
-            "breaches_count": len(assessment.detected_breaches)
-        }]
+        assessment = critic_agent.run(SuitabilityCriticInputs(
+            profile=state["profile"],
+            candidate_ideas=state["candidate_ideas"],
+            research_brief=state["research_brief"]
+        ))
+        audit = _agent_audit(state, "suitability_critic", critic_agent, assessment, overall_status=assessment.overall_status)
+        log.record(state.get("session_id", "default_session"), "rule_results",
+                   portfolio=assessment.rule_results,
+                   ideas={ie.idea_id: ie.rule_results for ie in assessment.idea_evaluations})
         return {
             "assessment": assessment,
             "current_stage": "suitability_review",
+            # An advisor's own allocation edit is re-validated and returned to the advisor, never auto-regenerated.
+            "auto_regenerate": not state.get("allocation_edited", False),
+            "allocation_edited": False,
             "audit_trail": audit
         }
 
     def node_mark_failed_slots(state: AdvisoryState) -> Dict[str, Any]:
-        """
-        Selective regeneration preparation:
-        Lock all ideas that PASSED or are not rejected.
-        Mark failed or explicitly rejected slots for regeneration.
-        Increment regeneration_count.
-        """
-        assessment = state.get("assessment")
-        idea_set = state.get("candidate_ideas")
-        human_action = state.get("human_action") or {}
-
-        regen_slots = []
-        locked_ids = []
-
-        # Check if human explicitly rejected an idea by ID
-        target_rejected_id = human_action.get("idea_id")
-
-        if idea_set:
-            for idea in idea_set.ideas:
-                # Check critic evaluation
-                critic_eval = next((ie for ie in assessment.idea_evaluations if ie.idea_id == idea.idea_id), None) if assessment else None
-
-                is_failed = (critic_eval and critic_eval.status == "FAIL") or (target_rejected_id and idea.idea_id == target_rejected_id)
-
-                if is_failed:
-                    regen_slots.append(idea.slot_number)
-                else:
-                    locked_ids.append(idea.idea_id)
-
-        # Fallback when nothing FAILED (e.g. RM asked to revise a FLAG set): regenerate every non-PASS slot,
-        # or the whole set if all ideas passed.
-        if not regen_slots and idea_set:
-            regen_slots = [
-                ie.slot_number for ie in (assessment.idea_evaluations if assessment else []) if ie.status != "PASS"
-            ] or [i.slot_number for i in idea_set.ideas]
-            locked_ids = [i.idea_id for i in idea_set.ideas if i.slot_number not in regen_slots]
-
+        """Automatic selective regeneration: lock PASS/FLAG ideas, regenerate FAIL ideas, feed back the rule messages."""
+        assessment = state["assessment"]
+        slots = failed_slots(state)
+        counts = dict(state.get("slot_regen_counts") or {})
+        for slot in slots:
+            counts[slot] = counts.get(slot, 0) + 1
+        reasons = [
+            f"Slot {ie.slot_number} ({ie.ticker}) failed: {ie.qualitative_notes}"
+            for ie in assessment.idea_evaluations if ie.slot_number in slots
+        ]
+        locked = [ie.idea_id for ie in assessment.idea_evaluations if ie.slot_number not in slots]
         regen_count = state.get("regeneration_count", 0) + 1
-        feedback = human_action.get("notes") or "Critic detected risk limit breach; re-align allocation and role."
-
-        audit = [{
-            "stage": "mark_failed_slots",
-            "timestamp": datetime.now().isoformat(),
-            "regeneration_round": regen_count,
-            "marked_slots": regen_slots,
-            "locked_ideas": locked_ids
-        }]
-
+        log.record(state.get("session_id", "default_session"), "auto_regeneration",
+                   slots=slots, attempt_by_slot=counts, reasons=reasons)
         return {
-            "locked_idea_ids": locked_ids,
-            "regenerate_slots": regen_slots,
+            "locked_idea_ids": locked,
+            "regenerate_slots": slots,
+            "slot_regen_counts": counts,
             "regeneration_count": regen_count,
-            "idea_feedback": feedback,
-            "audit_trail": audit
+            "idea_feedback": "Suitability critic rejected these ideas: " + " ".join(reasons),
+            "audit_trail": [{
+                "stage": "mark_failed_slots", "timestamp": datetime.now().isoformat(),
+                "regeneration_round": regen_count, "marked_slots": slots, "locked_ideas": locked
+            }]
         }
 
-    def node_review_suitability(state: AdvisoryState) -> Dict[str, Any]:
-        """HITL checkpoint: RM reviews the critic's PASS / FLAG / FAIL assessment and any breaches."""
+    def node_review_recommendations(state: AdvisoryState) -> Dict[str, Any]:
+        """Recommendation review / risk exception: advisor accepts, revises, edits or rejects ideas."""
         assessment = state.get("assessment")
         status = assessment.overall_status if assessment else "FAIL"
-        reason = {
-            "PASS": "All suitability rules passed. Confirm the assessment to draft the advisory memo.",
-            "FLAG": "Suitability assessment raised FLAG; an RM exception override is required to proceed.",
-            "FAIL": "Suitability assessment found hard breaches; send failing ideas back for regeneration."
-        }.get(status, "Review the suitability assessment.")
-        human_action = _request_review(REVIEW_SUITABILITY, "Suitability Critic Agent", reason, assessment, state)
-        outcome = resolve_review_outcome(REVIEW_SUITABILITY, human_action)
-
-        advisor_notes = []
+        escalated = is_escalated(state)
+        if escalated:
+            reason = (f"R10: an idea still fails after {MAX_REGENERATIONS_PER_IDEA} automatic regenerations. "
+                      f"Revise it with guidance, edit its allocation, or reject it.")
+        else:
+            reason = {
+                "PASS": "All ideas passed suitability. Accept to draft the memo, or revise individual ideas.",
+                "FLAG": "Judgment case: document an exception to proceed, or request a revision.",
+                "FAIL": "Hard breach: failing ideas cannot reach the memo. Revise, edit or reject them."
+            }[status]
+        human_action = _request_review(
+            REVIEW_RECOMMENDATIONS, "Suitability Critic Agent", reason, assessment, state,
+            candidate_ideas=state["candidate_ideas"].model_dump()["ideas"] if state.get("candidate_ideas") else [],
+            escalated=escalated
+        )
+        outcome = resolve_review_outcome(REVIEW_RECOMMENDATIONS, human_action)
+        update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
         if human_action.get("action") == "override_flag" and human_action.get("notes"):
-            advisor_notes.append(f"RM Exception Note: {human_action['notes']}")
-
-        update: Dict[str, Any] = {
-            "human_action": human_action,
-            "review_outcome": outcome,
-            "advisor_notes": advisor_notes,
-            "audit_trail": _review_audit(REVIEW_SUITABILITY, human_action, outcome)
-        }
-        if outcome == "reject":
-            update["rejected_at_stage"] = REVIEW_SUITABILITY
+            update["advisor_notes"] = [f"RM Exception Note: {human_action['notes']}"]
+        if outcome == "regenerate_ideas":
+            update.update(_regenerate_slots(state, human_action))
+        elif outcome == "revalidate":
+            update.update(_apply_allocation_edit(state, human_action))
+        elif outcome == "reject":
+            update["rejected_at_stage"] = REVIEW_RECOMMENDATIONS
+        update["audit_trail"] = _review_audit(state, REVIEW_RECOMMENDATIONS, human_action, outcome)
         return update
 
+    # ------------------------------------------------------------------
+    # Agent 5: Memo + final approval -> PDF
+    # ------------------------------------------------------------------
+
     def node_memo_formatter(state: AdvisoryState) -> Dict[str, Any]:
-        profile = state["profile"]
-        ideas = state["candidate_ideas"]
-        assessment = state["assessment"]
-        session_id = state.get("session_id", "default_session")
-
-        pdf_target = f"data/pipeline_data/{session_id}_final_memo.pdf"
-        inputs = MemoFormatterInputs(
-            profile=profile,
-            ideas=ideas,
-            assessment=assessment,
-            output_pdf_path=pdf_target
-        )
-
-        memo = memo_agent.run(inputs)
-        audit = [{
-            "stage": "memo_formatter",
-            "timestamp": datetime.now().isoformat(),
-            "memo_id": memo.memo_id,
-            "pdf_path": memo.pdf_artifact_path
-        }]
+        memo = memo_agent.run(MemoFormatterInputs(
+            profile=state["profile"],
+            ideas=state["candidate_ideas"],
+            assessment=state["assessment"],
+            research_brief=state.get("research_brief"),
+            advisor_notes=state.get("advisor_notes") or []
+        ))
         return {
             "memo": memo,
-            "pdf_path": memo.pdf_artifact_path,
+            "pdf_path": None,
             "current_stage": "final_memo",
-            "audit_trail": audit
+            "audit_trail": _agent_audit(state, "memo_formatter", memo_agent, memo, memo_id=memo.memo_id)
         }
 
     def node_review_memo(state: AdvisoryState) -> Dict[str, Any]:
-        """Final HITL checkpoint: RM signs off on the advisory memo."""
+        """Final sign-off: no client-facing memo or PDF without advisor approval."""
         human_action = _request_review(
             REVIEW_MEMO, "Memo Formatter Agent",
-            "Final recommendation memo ready for Relationship Manager approval.",
+            "Final recommendation memo ready for Relationship Manager approval. The PDF is generated only after approval.",
             state.get("memo"), state
         )
         outcome = resolve_review_outcome(REVIEW_MEMO, human_action)
-
-        advisor_notes = []
+        update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
         if human_action.get("notes"):
-            advisor_notes.append(f"Advisor Sign-off Note: {human_action['notes']}")
-
-        update: Dict[str, Any] = {
-            "human_action": human_action,
-            "review_outcome": outcome,
-            "advisor_notes": advisor_notes,
-            "audit_trail": _review_audit(REVIEW_MEMO, human_action, outcome)
-        }
-        if outcome == "reject":
+            update["advisor_notes"] = [f"Advisor Sign-off Note: {human_action['notes']}"]
+        if outcome == "regenerate_ideas":
+            update.update(_regenerate_slots(state, human_action))
+        elif outcome == "revalidate":
+            update.update(_apply_allocation_edit(state, human_action))
+        elif outcome == "reject":
             update["rejected_at_stage"] = REVIEW_MEMO
+        update["audit_trail"] = _review_audit(state, REVIEW_MEMO, human_action, outcome)
         return update
+
+    def node_generate_pdf(state: AdvisoryState) -> Dict[str, Any]:
+        session_id = state.get("session_id", "default_session")
+        memo = state["memo"]
+        notes = (state.get("human_action") or {}).get("notes")
+        signature = (
+            f"Approved by Relationship Manager on {datetime.now().strftime('%d-%b-%Y %H:%M')}."
+            + (f" Note: {notes}" if notes else "")
+            + f" Suitability review: {state['assessment'].overall_status}."
+        )
+        approved = memo.model_copy(update={
+            "advisor_approved": True,
+            "page_3_portfolio_view": memo.page_3_portfolio_view.model_copy(update={"advisor_signature_block": signature})
+        })
+        pdf_path = pdf_memo_renderer(approved, f"{PDF_DIR}/{session_id}_final_memo.pdf")
+        approved = approved.model_copy(update={"pdf_artifact_path": pdf_path})
+        log.record(session_id, "pdf_generated", memo_id=approved.memo_id, pdf_path=pdf_path)
+        return {
+            "memo": approved,
+            "pdf_path": pdf_path,
+            "audit_trail": [{"stage": "generate_pdf", "timestamp": datetime.now().isoformat(), "pdf_path": pdf_path}]
+        }
 
     def node_end_session(state: AdvisoryState) -> Dict[str, Any]:
         outcome = "REJECTED" if state.get("review_outcome") == "reject" else "APPROVED"
-        audit = [{
-            "stage": "end_session",
-            "timestamp": datetime.now().isoformat(),
-            "status": "COMPLETED",
-            "outcome": outcome
-        }]
+        log.record(state.get("session_id", "default_session"), "run_ended", outcome=outcome,
+                   rejected_at_stage=state.get("rejected_at_stage"))
         return {
             "is_completed": True,
             "outcome": outcome,
             "current_stage": "completed" if outcome == "APPROVED" else "rejected",
-            "audit_trail": audit
+            "audit_trail": [{"stage": "end_session", "timestamp": datetime.now().isoformat(), "status": "COMPLETED", "outcome": outcome}]
         }
 
     return {
@@ -372,93 +367,68 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None):
         "market_intelligence": node_market_intelligence,
         "review_market": node_review_market,
         "investment_ideas": node_investment_ideas,
-        "review_ideas": node_review_ideas,
         "suitability_critic": node_suitability_critic,
-        "review_suitability": node_review_suitability,
         "mark_failed_slots": node_mark_failed_slots,
+        "review_recommendations": node_review_recommendations,
         "memo_formatter": node_memo_formatter,
         "review_memo": node_review_memo,
+        "generate_pdf": node_generate_pdf,
         "end_session": node_end_session
     }
 
 def build_advisory_graph(
     llm_client: Optional[LLMClientProtocol] = None,
-    checkpointer: Optional[Any] = None
+    checkpointer: Optional[Any] = None,
+    run_log: Optional[RunLog] = None
 ):
     """
-    Construct the full LangGraph state machine with conditional routing edges,
-    selective regeneration loops, and human-in-the-loop checkpoints.
+    Construct the LangGraph state machine: advisor review after the profile, the research
+    brief, the validated recommendations and the memo; automatic selective regeneration of
+    FAILed ideas (max R10 per idea) between the idea agent and the critic.
     """
-    nodes = create_advisory_nodes(llm_client)
+    nodes = create_advisory_nodes(llm_client, run_log)
     builder = StateGraph(AdvisoryState)
-
-    # Add all nodes
     for name, node_func in nodes.items():
         builder.add_node(name, node_func)
 
-    # Every agent is followed by an RM review checkpoint that can approve
-    # (continue), regenerate (re-run the agent) or reject (end the session).
     builder.add_edge(START, "client_profile")
     builder.add_edge("client_profile", "review_profile")
-    builder.add_conditional_edges(
-        "review_profile",
-        route_after_profile_review,
-        {
-            "market_intelligence": "market_intelligence",
-            "client_profile": "client_profile",
-            "end_session": "end_session"
-        }
-    )
+    builder.add_conditional_edges("review_profile", route_after_profile_review, {
+        "market_intelligence": "market_intelligence",
+        "client_profile": "client_profile",
+        "end_session": "end_session"
+    })
 
     builder.add_edge("market_intelligence", "review_market")
-    builder.add_conditional_edges(
-        "review_market",
-        route_after_market_review,
-        {
-            "investment_ideas": "investment_ideas",
-            "market_intelligence": "market_intelligence",
-            "end_session": "end_session"
-        }
-    )
+    builder.add_conditional_edges("review_market", route_after_market_review, {
+        "investment_ideas": "investment_ideas",
+        "market_intelligence": "market_intelligence",
+        "end_session": "end_session"
+    })
 
-    builder.add_edge("investment_ideas", "review_ideas")
-    builder.add_conditional_edges(
-        "review_ideas",
-        route_after_ideas_review,
-        {
-            "suitability_critic": "suitability_critic",
-            "investment_ideas": "investment_ideas",
-            "end_session": "end_session"
-        }
-    )
-
-    builder.add_edge("suitability_critic", "review_suitability")
-    builder.add_conditional_edges(
-        "review_suitability",
-        route_after_suitability_review,
-        {
-            "memo_formatter": "memo_formatter",
-            "suitability_critic": "suitability_critic",
-            "mark_failed_slots": "mark_failed_slots",
-            "end_session": "end_session"
-        }
-    )
-
-    # Selective regeneration loop: mark_failed_slots -> investment_ideas
+    # Ideas are always validated by the critic before the advisor sees them.
+    builder.add_edge("investment_ideas", "suitability_critic")
+    builder.add_conditional_edges("suitability_critic", route_after_critic, {
+        "mark_failed_slots": "mark_failed_slots",
+        "review_recommendations": "review_recommendations"
+    })
     builder.add_edge("mark_failed_slots", "investment_ideas")
+    builder.add_conditional_edges("review_recommendations", route_after_recommendation_review, {
+        "memo_formatter": "memo_formatter",
+        "investment_ideas": "investment_ideas",
+        "suitability_critic": "suitability_critic",
+        "end_session": "end_session"
+    })
 
     builder.add_edge("memo_formatter", "review_memo")
-    builder.add_conditional_edges(
-        "review_memo",
-        route_after_memo_review,
-        {
-            "end_session": "end_session",
-            "memo_formatter": "memo_formatter",
-            "mark_failed_slots": "mark_failed_slots"
-        }
-    )
-
+    builder.add_conditional_edges("review_memo", route_after_memo_review, {
+        "generate_pdf": "generate_pdf",
+        "memo_formatter": "memo_formatter",
+        "investment_ideas": "investment_ideas",
+        "suitability_critic": "suitability_critic",
+        "end_session": "end_session"
+    })
+    builder.add_edge("generate_pdf", "end_session")
     builder.add_edge("end_session", END)
 
-    saver = checkpointer or MemorySaver()
-    return builder.compile(checkpointer=saver)
+    return builder.compile(checkpointer=checkpointer or MemorySaver(serde=checkpoint_serializer()))

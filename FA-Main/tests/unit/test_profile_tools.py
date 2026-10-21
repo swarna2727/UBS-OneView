@@ -32,7 +32,7 @@ def test_risk_capacity_vs_willingness_conflict():
     assert tier.has_capacity_conflict
     assert tier.willingness_score >= 4.0
     assert tier.capacity_score <= 2.0
-    assert "conflicts" in tier.conflict_rationale.lower() or "constrained" in tier.conflict_rationale.lower()
+    assert "exceeds risk capacity" in tier.conflict_rationale.lower()
     # Effective tier should be constrained to Conservative/Moderate
     assert tier.risk_tier_number <= 2
 
@@ -54,3 +54,21 @@ def test_portfolio_parser_validates_weight_sum():
     parsed_bad = portfolio_parser(bad_holdings)
     assert not parsed_bad.is_balanced_sum
     assert parsed_bad.total_weight_pct == 75.0
+
+def test_any_willingness_capacity_gap_is_flagged_and_lower_band_applied():
+    """R5: even a one-step gap is flagged, and the final band is the lower of the two."""
+    tier = risk_profile_calculator({
+        "stated_risk_willingness": "Balanced Growth",  # willingness 3
+        "time_horizon_months": 24,                     # capacity 2
+        "total_wealth": 500000.0,
+        "liquidity_schedule": []
+    })
+    assert tier.has_capacity_conflict
+    assert tier.risk_tier_number == 2
+
+def test_empty_liquidity_schedule_is_a_valid_answer_but_missing_is_not():
+    base = {"client_id": "C", "name": "N", "goals": ["Growth"], "time_horizon_months": 60,
+            "stated_risk_willingness": "Moderate", "total_wealth": 1.0,
+            "raw_holdings": [{"ticker": "BIL", "weight_pct": 100.0}]}
+    assert "liquidity_schedule" in required_field_validator(base).missing_fields
+    assert required_field_validator({**base, "liquidity_schedule": []}).is_valid

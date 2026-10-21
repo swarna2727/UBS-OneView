@@ -66,13 +66,15 @@ class AdvisorActionRequest(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     action: Literal[
-        "approve", "regenerate", "reject", "revise", "override_flag", "add_advisor_note",
+        "approve", "regenerate", "reject", "revise", "override_flag", "edit_allocation", "add_advisor_note",
         "accept", "resolve_conflict", "abort"
     ]
     idea_id: Optional[str] = None
     notes: Optional[str] = None
     conflict_resolution: Optional[str] = None
-    edits: Optional[Dict[str, Any]] = None  # Client Profile only: corrected raw intake fields applied on 'regenerate'
+    # 'regenerate' at the profile review: corrected raw intake fields.
+    # 'edit_allocation': {"target_weight_pct": <new weight>} for idea_id; the critic re-validates it.
+    edits: Optional[Dict[str, Any]] = None
 
 class PendingReview(BaseModel):
     """The agent output currently paused for Relationship Manager review."""
@@ -85,5 +87,7 @@ class PendingReview(BaseModel):
     unresolved_flags: List[Dict[str, Any]] = Field(default_factory=list)
     editable_fields: List[str] = Field(default_factory=list)
     raw_input: Dict[str, Any] = Field(default_factory=dict)
+    candidate_ideas: List[Dict[str, Any]] = Field(default_factory=list)
+    escalated: bool = False
 
 AdvisorWorkspaceView.model_rebuild()

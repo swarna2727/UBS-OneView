@@ -1,6 +1,7 @@
 """Deterministic Fake LLM Client for unit testing and offline execution."""
 
 import json
+import re
 from typing import Type, TypeVar, Optional, Dict, Any
 from pydantic import BaseModel
 from src.schemas.advisory import (
@@ -22,6 +23,7 @@ class FakeAdvisoryLLMClient:
     def __init__(self, override_responses: Optional[Dict[str, Any]] = None):
         self.override_responses = override_responses or {}
         self.call_history = []
+        self._slot_attempts = {1: 0, 2: 0, 3: 0}
 
     def generate_structured(
         self,
@@ -169,71 +171,98 @@ class FakeAdvisoryLLMClient:
             ]
         )
 
+    # Offline idea pools per slot. A slot's first entry is the initial idea; each regeneration of
+    # that slot moves to the next entry, so selective regeneration produces a genuinely different idea.
+    IDEA_POOLS = {
+        1: [
+            ("VYMI", "EQ-VYMI", "Vanguard International High Dividend Yield ETF", 3.0, "INCOME",
+             "Diversified non-US dividend payers add an income stream outside the existing US equity exposure.",
+             "Dividend yields outside the US remain above their 10-year average while payout ratios are stable.",
+             "Adds income the client asked for without adding to US equity concentration.",
+             ["Non-US equity drawdown", "Currency translation risk"], "Dividend cuts across European banks and energy.",
+             "Medium", "A US dividend fund (rejected: adds to US concentration).", ["SRC-UBS-CIO-2026-101"]),
+            ("AZN", "EQ-AZN", "AstraZeneca PLC", 2.0, "INCOME",
+             "Defensive healthcare franchise with a growing dividend and late-stage oncology pipeline.",
+             "Recent pipeline read-outs de-risk earnings while the shares trade below sector multiples.",
+             "Adds defensive income outside the US.", ["Trial failures", "Drug pricing reform"],
+             "Two consecutive late-stage trial failures.", "Medium", "A global healthcare fund.", ["SRC-UBS-CIO-2026-101"]),
+            ("NESN", "EQ-NESN", "Nestle S.A.", 3.0, "STABILITY",
+             "Defensive global franchise with steady 3.5% dividend yield and low beta to broader market shocks.",
+             "Provides portfolio stabilization against equity volatility while inflation pressures normalize.",
+             "Aligns with capital preservation objective and complements tech exposure.",
+             ["FX headwind from Swiss Franc appreciation", "Commodity packaging cost swings"],
+             "Organic sales growth decelerating below 2.0% for two consecutive quarters.", "Low",
+             "A consumer staples fund.", ["SRC-UBS-CIO-2026-101"]),
+        ],
+        2: [
+            ("SPYG", "EQ-SPYG", "SPDR Portfolio S&P 500 Growth ETF", 10.0, "GROWTH",
+             "US large-cap growth leaders continue to compound earnings through AI-driven productivity gains.",
+             "Earnings revisions for US growth names remain positive into the next reporting season.",
+             "Supports long-term growth over the client's horizon and adds an equity return source.",
+             ["Equity drawdown", "Rate sensitivity of long-duration growth stocks", "Single-market exposure"],
+             "Forward earnings revisions turning negative for two consecutive months.", "Medium",
+             "A global equity fund (lower US weight).", ["SRC-UBS-CIO-2026-101"]),
+            ("IEAC", "FI-EUCORP", "iShares Core EUR Corporate Bond ETF", 8.0, "DIVERSIFICATION",
+             "European investment-grade credit offers carry with lower duration risk than US Treasuries.",
+             "ECB easing supports spread compression while all-in yields remain near multi-year highs.",
+             "Diversifies away from US exposure and adds stable income consistent with the client's band.",
+             ["Credit spread widening", "EUR currency risk"], "Euro area IG spreads widening above 180bps.",
+             "High", "US investment-grade credit (rejected: adds to US exposure).", ["SRC-EURO-CREDIT-2026-10"]),
+            ("GLD", "CM-GOLD", "SPDR Gold Shares", 4.0, "DIVERSIFICATION",
+             "Gold diversifies equity and rate risk while central-bank buying supports demand.",
+             "Real yields are expected to fall as policy rates are cut.", "Adds a diversifier with low equity correlation.",
+             ["No income", "Price volatility"], "Real yields rising above 2.5%.", "Low",
+             "Inflation-linked bonds.", ["SRC-GOLD-MONITOR-2026-10"]),
+        ],
+        3: [
+            ("LQD", "FI-USIG", "iShares iBoxx $ Investment Grade Corporate Bond ETF", 3.0, "STABILITY",
+             "High-quality corporate credit locks in attractive all-in yields with modest default risk.",
+             "Investment-grade yields remain near multi-year highs as the easing cycle begins.",
+             "Adds stable income and dampens portfolio volatility in line with the client's risk band.",
+             ["Credit spread widening", "Duration volatility"], "IG spreads widening above 150bps.",
+             "High", "Short-dated Treasuries (lower yield).", ["SRC-UBS-CIO-2026-101"]),
+            ("IEF", "FI-US10Y", "iShares 7-10 Year Treasury Bond ETF", 3.0, "STABILITY",
+             "Lock in attractive real yields in high-quality intermediate Treasuries to lengthen duration.",
+             "Monetary policy transition creates asymmetric upside during potential economic slowdown.",
+             "Directly addresses the client's income goal with the highest credit quality.",
+             ["Unexpected resurgence in core services inflation", "Duration volatility"],
+             "Fed hawkish surprise re-accelerating terminal rate forecasts above 5.5%.", "Medium",
+             "Holding cash (lower expected return).", ["SRC-UBS-CIO-2026-101", "SRC-FED-MINUTES-2026-09"]),
+            ("MSFT", "EQ-MSFT", "Microsoft Corporation", 1.5, "GROWTH",
+             "Secular enterprise software leader monetizing generative AI across extensive customer base.",
+             "Accelerating commercial cloud bookings and operating margin expansion.",
+             "Fulfills long-term growth mandate with high quality balance sheet.",
+             ["Multiple compression from high valuation", "Antitrust scrutiny"],
+             "Azure growth decelerating below 20% on constant currency basis.", "Low",
+             "A diversified technology fund.", ["SRC-UBS-CIO-2026-101", "SRC-UBS-CIO-2026-102"]),
+        ],
+    }
+
     def _build_fake_candidate_ideas(self, user_prompt: str) -> CandidateIdeaSet:
-        # Check if user prompt is requesting selective regeneration for slot 2
-        is_regen_slot_2 = "REGENERATE ONLY SLOT 2" in user_prompt or "Slot 2 Rejected" in user_prompt
+        # A new idea set starts every slot at its first idea; a regeneration request advances only the listed slots.
+        if "Is Regeneration Request: True" in user_prompt:
+            match = re.search(r"Slots to Generate/Regenerate: \[([\d, ]*)\]", user_prompt)
+            for slot in [int(x) for x in match.group(1).split(",") if x.strip()] if match else []:
+                self._slot_attempts[slot] += 1
+        else:
+            self._slot_attempts = {1: 0, 2: 0, 3: 0}
 
-        slot_2_idea = InvestmentIdea(
-            idea_id="IDEA-NESN-02" if not is_regen_slot_2 else "IDEA-AZN-02",
-            slot_number=2,
-            instrument_id="EQ-NESN" if not is_regen_slot_2 else "EQ-AZN",
-            ticker="NESN" if not is_regen_slot_2 else "AZN",
-            name="Nestle S.A." if not is_regen_slot_2 else "AstraZeneca PLC",
-            action="ADD",
-            target_weight_pct=5.0,
-            allocation_range=AllocationRange(min_pct=3.0, max_pct=7.0, target_pct=5.0),
-            funding_source_ticker="BIL",
-            portfolio_role="STABILITY",
-            thesis="Defensive global franchise with steady 3.5% dividend yield and low beta to broader market shocks.",
-            why_now="Provides portfolio stabilization against equity volatility while inflation pressures normalize.",
-            client_fit_rationale="Aligns with capital preservation objective and complements tech exposure.",
-            key_risks=["FX headwind from Swiss Franc appreciation", "Commodity packaging cost swings"],
-            invalidation_trigger="Organic sales growth decelerating below 2.0% for two consecutive quarters.",
-            cited_evidence_ids=["SRC-UBS-CIO-2026-101"]
-        )
-
+        ideas = []
+        for slot, pool in self.IDEA_POOLS.items():
+            (ticker, inst, name, weight, role, thesis, why_now, fit, risks, trigger,
+             conviction, alternative, evidence) = pool[min(self._slot_attempts[slot], len(pool) - 1)]
+            ideas.append(InvestmentIdea(
+                idea_id=f"IDEA-{ticker}-{slot:02d}", slot_number=slot, instrument_id=inst, ticker=ticker, name=name,
+                action="ADD", target_weight_pct=weight,
+                allocation_range=AllocationRange(min_pct=round(weight * 0.5, 1), max_pct=round(weight * 1.5, 1), target_pct=weight),
+                funding_source_ticker="BIL", portfolio_role=role, thesis=thesis, why_now=why_now,
+                client_fit_rationale=fit, key_risks=risks, invalidation_trigger=trigger,
+                cited_evidence_ids=evidence, conviction=conviction, alternative_considered=alternative
+            ))
         return CandidateIdeaSet(
-            ideas=[
-                InvestmentIdea(
-                    idea_id="IDEA-IEF-01",
-                    slot_number=1,
-                    instrument_id="FI-US10Y",
-                    ticker="IEF",
-                    name="iShares 7-10 Year Treasury Bond ETF",
-                    action="ADD",
-                    target_weight_pct=5.0,
-                    allocation_range=AllocationRange(min_pct=3.0, max_pct=8.0, target_pct=5.0),
-                    funding_source_ticker="BIL",
-                    portfolio_role="INCOME",
-                    thesis="Lock in attractive real yields in high-quality intermediate Treasuries to lengthen duration.",
-                    why_now="Monetary policy transition creates asymmetric upside during potential economic slowdown.",
-                    client_fit_rationale="Directly addresses client's underweight duration and income goals.",
-                    key_risks=["Unexpected resurgence in core services inflation", "Duration volatility"],
-                    invalidation_trigger="Fed hawkish surprise re-accelerating terminal rate forecasts above 5.5%.",
-                    cited_evidence_ids=["SRC-UBS-CIO-2026-101", "SRC-FED-MINUTES-2026-09"]
-                ),
-                slot_2_idea,
-                InvestmentIdea(
-                    idea_id="IDEA-MSFT-03",
-                    slot_number=3,
-                    instrument_id="EQ-MSFT",
-                    ticker="MSFT",
-                    name="Microsoft Corporation",
-                    action="BUY",
-                    target_weight_pct=1.5,
-                    allocation_range=AllocationRange(min_pct=1.0, max_pct=2.0, target_pct=1.5),
-                    funding_source_ticker="BIL",
-                    portfolio_role="GROWTH",
-                    thesis="Secular enterprise software leader monetizing generative AI across extensive customer base.",
-                    why_now="Accelerating commercial cloud bookings and operating margin expansion.",
-                    client_fit_rationale="Fulfills long-term growth mandate with high quality balance sheet.",
-                    key_risks=["Multiple compression from high valuation (29.5x forward P/E)", "Antitrust scrutiny"],
-                    invalidation_trigger="Azure growth decelerating below 20% on constant currency basis.",
-                    cited_evidence_ids=["SRC-UBS-CIO-2026-101", "SRC-UBS-CIO-2026-102"]
-                )
-            ],
-            complementarity_thesis="Cohesive 3-asset allocation covering Income (IEF duration), Stability (NESN defensive dividend), and Growth (MSFT digital leader) funded from cash buffer.",
-            generation_round=1 if not is_regen_slot_2 else 2
+            ideas=ideas,
+            complementarity_thesis=f"Income, growth and stability roles across {', '.join(i.ticker for i in ideas)}, funded from the cash buffer.",
+            generation_round=1 + max(self._slot_attempts.values())
         )
 
     def _build_fake_memo(self, user_prompt: str) -> StructuredMemo:

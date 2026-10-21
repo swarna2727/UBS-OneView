@@ -63,7 +63,9 @@ def approved_product_universe_tool(asset_filters: Optional[Dict[str, Any]] = Non
             liquidity_tier=item["liquidity_tier"],
             is_approved=item["is_approved"],
             status=item["status"],
-            esg_rating=item.get("esg_rating")
+            esg_rating=item.get("esg_rating"),
+            sector=item.get("sector", "Diversified"),
+            instrument_type=item.get("instrument_type", "Fund")
         ))
 
     return approved_list

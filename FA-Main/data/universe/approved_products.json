@@ -12,7 +12,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "AA"
+    "esg_rating": "AA",
+    "sector": "Technology",
+    "instrument_type": "Single Stock"
   },
   {
     "instrument_id": "EQ-NVDA",
@@ -27,7 +29,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "A"
+    "esg_rating": "A",
+    "sector": "Technology",
+    "instrument_type": "Single Stock"
   },
   {
     "instrument_id": "EQ-NESN",
@@ -42,7 +46,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "AAA"
+    "esg_rating": "AAA",
+    "sector": "Consumer Staples",
+    "instrument_type": "Single Stock"
   },
   {
     "instrument_id": "EQ-AZN",
@@ -57,7 +63,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "AA"
+    "esg_rating": "AA",
+    "sector": "Healthcare",
+    "instrument_type": "Single Stock"
   },
   {
     "instrument_id": "EQ-TSM",
@@ -72,7 +80,43 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "AA"
+    "esg_rating": "AA",
+    "sector": "Technology",
+    "instrument_type": "Single Stock"
+  },
+  {
+    "instrument_id": "EQ-SPYG",
+    "ticker": "SPYG",
+    "name": "SPDR Portfolio S&P 500 Growth ETF",
+    "asset_class": "Equities",
+    "sub_asset_class": "US Large Cap Growth Fund",
+    "region": "North America",
+    "currency": "USD",
+    "risk_rating": 4,
+    "complexity_rating": 1,
+    "liquidity_tier": "Daily",
+    "is_approved": true,
+    "status": "APPROVED",
+    "esg_rating": "A",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
+  },
+  {
+    "instrument_id": "EQ-VYMI",
+    "ticker": "VYMI",
+    "name": "Vanguard International High Dividend Yield ETF",
+    "asset_class": "Equities",
+    "sub_asset_class": "Global Dividend Equity Fund",
+    "region": "Global",
+    "currency": "USD",
+    "risk_rating": 3,
+    "complexity_rating": 1,
+    "liquidity_tier": "Daily",
+    "is_approved": true,
+    "status": "APPROVED",
+    "esg_rating": "A",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
   },
   {
     "instrument_id": "FI-US10Y",
@@ -87,7 +131,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "A"
+    "esg_rating": "A",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
   },
   {
     "instrument_id": "FI-IGCORP",
@@ -102,7 +148,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "A"
+    "esg_rating": "A",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
   },
   {
     "instrument_id": "FI-HYG",
@@ -117,7 +165,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "BBB"
+    "esg_rating": "BBB",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
   },
   {
     "instrument_id": "FI-EUBOND",
@@ -132,7 +182,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "AA"
+    "esg_rating": "AA",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
   },
   {
     "instrument_id": "ALT-GLD",
@@ -147,7 +199,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "N/A"
+    "esg_rating": "N/A",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
   },
   {
     "instrument_id": "ALT-REAL",
@@ -162,7 +216,9 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "A"
+    "esg_rating": "A",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
   },
   {
     "instrument_id": "CASH-USD",
@@ -177,6 +233,8 @@
     "liquidity_tier": "Daily",
     "is_approved": true,
     "status": "APPROVED",
-    "esg_rating": "AAA"
+    "esg_rating": "AAA",
+    "sector": "Diversified",
+    "instrument_type": "Cash"
   }
 ]

@@ -4,7 +4,7 @@ from src.schemas.tools import (
     ValidationResult, CalculatedRiskTier, Holding, StandardizedHoldings,
     QuantMetrics, SentimentBreakdown, DocumentSnippet, ValidatedSnippets,
     ApprovedInstrument, ExposureDelta, Breach, RiskMetrics, RuleCheckResult,
-    EvidenceStatus
+    RuleResult
 )
 from src.schemas.advisory import (
     ClientAdvisoryProfile, ProfileFlag, ClientConstraints, LiquidityEvent,
@@ -24,7 +24,7 @@ __all__ = [
     "ValidationResult", "CalculatedRiskTier", "Holding", "StandardizedHoldings",
     "QuantMetrics", "SentimentBreakdown", "DocumentSnippet", "ValidatedSnippets",
     "ApprovedInstrument", "ExposureDelta", "Breach", "RiskMetrics", "RuleCheckResult",
-    "EvidenceStatus",
+    "RuleResult",
     "ClientAdvisoryProfile", "ProfileFlag", "ClientConstraints", "LiquidityEvent",
     "ResearchBrief", "ResearchFinding",
     "InvestmentIdea", "CandidateIdeaSet", "AllocationRange",
