@@ -1,0 +1,104 @@
+
+
+### Summary of Completed Deliverables
+
+```
+FMPT-main/
+├── config/
+│   └── suitability_policy.yaml                  # Thresholds: single-stock (20% flag, 30% fail), regional drift (50%/65%), freshness (45d)
+├── data/
+│   ├── universe/approved_products.json          # Approved institutional universe across equities, fixed income, commodities, cash
+│   ├── research/corpus.json                     # Dated, source-ID'd research snippets with freshness timestamps
+│   ├── market/prices/market_data.json           # Deterministic quantitative metrics (volatility, momentum, returns, forward P/E)
+│   └── samples/client_profiles.json             # Test profiles (Balanced, Contradictory, Incomplete)
+├── src/
+│   ├── schemas/
+│   │   ├── advisory.py                          # ClientAdvisoryProfile, ResearchBrief, InvestmentIdea, CandidateIdeaSet, SuitabilityAssessment, StructuredMemo
+│   │   ├── tools.py                             # ValidationResult, QuantMetrics, RiskMetrics, ExposureDelta, Breach, etc.
+│   │   └── workspace.py                         # 3-Panel Advisor Workspace state contract & action schemas
+│   ├── tools/                                   # PURE DETERMINISTIC LAYER (Zero LLM dependencies)
+│   │   ├── profile_tools.py                     # required_field_validator, risk_profile_calculator, portfolio_parser
+│   │   ├── market_tools.py                      # quantitative_analysis_tool, sentiment_analysis_tool
+│   │   ├── retrieval.py                         # retrieval_rag_tool, source_freshness_validator
+│   │   ├── universe.py                          # approved_product_universe_tool
+│   │   ├── exposure.py                          # portfolio_exposure_calculator
+│   │   ├── risk_engine.py                       # portfolio_risk_engine, suitability_rule_engine
+│   │   ├── evidence.py                          # evidence_integrity_check
+│   │   └── memo_tools.py                        # memo_consistency_validator, citation_source_mapper, pdf_memo_renderer (3-page ReportLab)
+│   ├── llm/
+│   │   ├── base.py                              # LLMClientProtocol
+│   │   ├── gemini.py                            # Production google-genai structured output client
+│   │   └── fake.py                              # Scripted, deterministic LLM for offline tests and trajectory validation
+│   ├── agents/                                  # 5 ISOLATED ADVISORY AGENTS
+│   │   ├── base.py                              # BaseAdvisoryAgent with isolated boundaries and tool bindings
+│   │   ├── client_profile.py                    # Agent 1: Client Profile Agent (Slide 14)
+│   │   ├── market_intelligence.py               # Agent 2: Market Intelligence Agent (Slide 15)
+│   │   ├── investment_idea.py                   # Agent 3: Investment Idea Agent (Slide 16)
+│   │   ├── suitability_critic.py                # Agent 4: Suitability Critic Agent (Slide 17)
+│   │   └── memo_formatter.py                    # Agent 5: Memo Formatter Agent (Slide 18)
+│   ├── graph/                                   # LANGGRAPH ORCHESTRATION & HITL
+│   │   ├── state.py                             # AdvisoryState (TypedDict + reducers)
+│   │   ├── routing.py                           # Pure routing functions (PASS, FLAG, FAIL, HITL actions)
+│   │   └── workflow.py                          # StateGraph with conditional edges, interrupts, and selective regeneration
+│   └── api/
+│       ├── app.py                               # FastAPI REST application (/sessions, /actions, /pdf, /audit)
+│       ├── service.py                           # AdvisorySessionService managing state and interrupts
+│       └── views.py                             # 3-Panel workspace projection (Slide 20)
+├── streamlit_app.py                             # Interactive 3-Panel Relationship Manager Workspace (Slide 20)
+├── requirements.txt                             # Updated dependencies (langgraph, pydantic v2, reportlab, fastapi, etc.)
+├── README.md                                    # Architectural specification & execution guide
+└── tests/                                       # VALIDATION TEST SUITE (24/24 Tests Passing)
+    ├── unit/test_schemas.py                     # CandidateIdeaSet exact 3 ideas validation
+    ├── unit/test_risk_engine.py                 # Deterministic single-stock hard limit (>30% FAIL, 20-30% FLAG)
+    ├── unit/test_profile_tools.py               # Risk willingness vs capacity conflict detection
+    ├── unit/test_retrieval_freshness.py         # Freshness validator (>45d discarded)
+    ├── unit/test_memo_consistency.py            # Strict critic-to-memo consistency & ReportLab PDF compiler
+    ├── unit/test_architecture_lint.py           # Asserts tools/ never imports LLM components
+    ├── integration/test_trajectories.py         # FAIL -> regeneration loop (never memo), selective regeneration lock, HITL
+    └── integration/test_api.py                  # FastAPI session and action endpoints round-trip
+```
+
+---
+
+### Core Architectural Features Implemented
+
+1. **Strict Role Boundaries & Deterministic Calculation**:
+   - Arithmetic, concentration weights, and risk limit rules reside exclusively in [risk_engine.py](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/src/tools/risk_engine.py) and [exposure.py](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/src/tools/exposure.py).
+   - [test_architecture_lint.py](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/tests/unit/test_architecture_lint.py) enforces that [tools/](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/src/tools/) contains zero LLM imports.
+
+2. **Evidence Before Recommendation**:
+   - [source_freshness_validator](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/src/tools/retrieval.py) enforces a 45-day freshness ceiling.
+   - [evidence_integrity_check](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/src/tools/evidence.py) validates that every idea cites fresh source IDs from the validated research brief.
+
+3. **Status Gates in Suitability Critic**:
+   - **`PASS`**: Meets all constraints; routes directly to [MemoFormatterAgent](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/src/agents/memo_formatter.py).
+   - **`FLAG`**: Soft guideline breach (e.g., US Equity 50–65%, single stock 20–30%); pauses graph for RM exception override.
+   - **`FAIL`**: Hard breach (single stock > 30%, liquidity coverage < 1.0x, unverified evidence); triggers selective regeneration in [InvestmentIdeaAgent](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/src/agents/investment_idea.py).
+
+4. **Selective Regeneration**:
+   - In [workflow.py](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/src/graph/workflow.py), `node_mark_failed_slots` locks ideas that passed, selectively passing only rejected slots into `regenerate_slots`.
+   - Verified by `test_selective_regeneration_locks_passed_ideas`: when Slot #2 is rejected, Slots #1 and #3 remain locked and byte-for-byte identical.
+
+5. **3-Panel Relationship Manager Workspace**:
+   - Implemented in [streamlit_app.py](file:///c:/Users/User/Downloads/FA-pipeline-main/FA-pipeline-main/FMPT-main/streamlit_app.py) with real-time workflow stage progress (Left), decision space with before/after allocation diffs and breach boxes (Center), and live memo preview highlighting stage-affected sections with PDF export (Right).
+
+---
+
+### Verification & Test Suite Execution
+
+All 24 unit, deterministic, and integration trajectory tests pass:
+```bash
+python -m pytest tests/ -v
+# Output: 24 passed in 0.82s
+```
+
+### Running the System
+
+- **Streamlit 3-Panel Advisor Workspace**:
+  ```bash
+  streamlit run streamlit_app.py
+  ```
+- **FastAPI REST Service**:
+  ```bash
+  uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+  ```

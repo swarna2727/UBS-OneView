@@ -1,0 +1,197 @@
+"""Deterministic tools for Client Profile Agent (Slide 14)."""
+
+from typing import Dict, Any, List
+from src.schemas.tools import ValidationResult, CalculatedRiskTier, StandardizedHoldings, Holding
+
+MANDATORY_FIELDS = [
+    "client_id",
+    "name",
+    "goals",
+    "time_horizon_months",
+    "stated_risk_willingness",
+    "total_wealth",
+    "raw_holdings"
+]
+
+def required_field_validator(profile_dict: Dict[str, Any]) -> ValidationResult:
+    """Validate mandatory fields in raw advisor-entered client profile."""
+    missing = []
+    invalid = {}
+    warnings = []
+
+    for field in MANDATORY_FIELDS:
+        val = profile_dict.get(field)
+        if val is None or val == "" or (isinstance(val, list) and len(val) == 0):
+            missing.append(field)
+
+    # Specific validity checks
+    if "time_horizon_months" in profile_dict:
+        try:
+            th = int(profile_dict["time_horizon_months"])
+            if th <= 0:
+                invalid["time_horizon_months"] = "Time horizon must be greater than 0 months."
+        except (ValueError, TypeError):
+            invalid["time_horizon_months"] = "Time horizon must be an integer."
+
+    if "total_wealth" in profile_dict:
+        try:
+            tw = float(profile_dict["total_wealth"])
+            if tw < 0:
+                invalid["total_wealth"] = "Total wealth cannot be negative."
+        except (ValueError, TypeError):
+            invalid["total_wealth"] = "Total wealth must be a number."
+
+    is_valid = (len(missing) == 0 and len(invalid) == 0)
+    return ValidationResult(
+        is_valid=is_valid,
+        missing_fields=missing,
+        invalid_fields=invalid,
+        warnings=warnings
+    )
+
+def risk_profile_calculator(profile_data: Dict[str, Any]) -> CalculatedRiskTier:
+    """
+    Deterministically calculate risk willingness vs risk capacity.
+    Flag if client is 'high risk willingness' but has a short-term liquidity need (e.g. <= 18 months).
+    """
+    stated_willingness = str(profile_data.get("stated_risk_willingness", "")).lower()
+    horizon_months = int(profile_data.get("time_horizon_months", 36) or 36)
+    total_wealth = float(profile_data.get("total_wealth", 1000000.0) or 1000000.0)
+    liquidity_schedule = profile_data.get("liquidity_schedule", [])
+
+    # 1. Quantify willingness (1 to 5)
+    if "speculative" in stated_willingness:
+        willingness_score = 5.0
+    elif "aggressive" in stated_willingness or "high" in stated_willingness:
+        willingness_score = 4.0
+    elif "balanced" in stated_willingness or "growth" in stated_willingness:
+        willingness_score = 3.0
+    elif "moderate" in stated_willingness:
+        willingness_score = 2.0
+    else:
+        willingness_score = 1.0 # Conservative default
+
+    # 2. Quantify capacity (1 to 5) based on time horizon and near-term liquidity commitments
+    short_term_liquidity_needed = 0.0
+    for event in liquidity_schedule:
+        if isinstance(event, dict) and event.get("due_months", 999) <= 18:
+            short_term_liquidity_needed += float(event.get("amount", 0.0))
+
+    liquidity_drain_ratio = short_term_liquidity_needed / max(total_wealth, 1.0)
+
+    # Base capacity from time horizon
+    if horizon_months >= 84: # 7+ years
+        base_capacity = 5.0
+    elif horizon_months >= 60: # 5 years
+        base_capacity = 4.0
+    elif horizon_months >= 36: # 3 years
+        base_capacity = 3.0
+    elif horizon_months >= 24: # 2 years
+        base_capacity = 2.0
+    else: # < 2 years (e.g. 18 months)
+        base_capacity = 1.5
+
+    # Penalize capacity if heavy liquidity drain is due in <= 18 months
+    if liquidity_drain_ratio >= 0.50:
+        capacity_score = 1.0
+    elif liquidity_drain_ratio >= 0.25:
+        capacity_score = min(base_capacity, 2.0)
+    else:
+        capacity_score = base_capacity
+
+    # Conflict check: willingness is high/very high (>=4.0) but capacity is constrained (<=2.0)
+    has_conflict = False
+    conflict_msg = None
+    if willingness_score >= 4.0 and capacity_score <= 2.0:
+        has_conflict = True
+        conflict_msg = (
+            f"Client stated high risk willingness ({stated_willingness}), but risk capacity is constrained "
+            f"(Score: {capacity_score:.1f}) due to a short horizon of {horizon_months} months and "
+            f"{short_term_liquidity_needed:,.0f} liquidity need ({liquidity_drain_ratio*100:.1f}% of wealth) due within 18 months."
+        )
+
+    # Final calculated tier is the constrained minimum of capacity and willingness
+    final_score = min(willingness_score, capacity_score)
+    tier_number = max(1, min(5, int(round(final_score))))
+
+    tier_names = {
+        1: "Conservative",
+        2: "Moderate",
+        3: "Balanced Growth",
+        4: "Aggressive Growth",
+        5: "Speculative"
+    }
+    recommended_min_horizon = {
+        1: 12,
+        2: 24,
+        3: 36,
+        4: 60,
+        5: 84
+    }
+
+    return CalculatedRiskTier(
+        score=round(final_score, 2),
+        risk_tier=tier_names[tier_number],
+        risk_tier_number=tier_number,
+        capacity_score=round(capacity_score, 2),
+        willingness_score=round(willingness_score, 2),
+        recommended_min_horizon_months=recommended_min_horizon[tier_number],
+        has_capacity_conflict=has_conflict,
+        conflict_rationale=conflict_msg
+    )
+
+def portfolio_parser(raw_holdings: List[Dict[str, Any]]) -> StandardizedHoldings:
+    """
+    Parse, standardize, and sum portfolio holdings.
+    Verify total weights and compute exposures deterministically.
+    """
+    holdings: List[Holding] = []
+    total_weight = 0.0
+    asset_class_weights: Dict[str, float] = {}
+    region_weights: Dict[str, float] = {}
+    currency_weights: Dict[str, float] = {}
+    weighted_risk_sum = 0.0
+
+    for item in raw_holdings:
+        ticker = str(item.get("ticker", "")).strip().upper()
+        name = str(item.get("name", ticker)).strip()
+        asset_class = str(item.get("asset_class", "Equities")).strip()
+        region = str(item.get("region", "Global")).strip()
+        currency = str(item.get("currency", "USD")).strip().upper()
+        weight_pct = float(item.get("weight_pct", 0.0))
+        risk_rating = int(item.get("risk_rating", 3))
+        complexity = int(item.get("complexity_rating", 1))
+        liquidity = str(item.get("liquidity_tier", "Daily"))
+
+        holding = Holding(
+            ticker=ticker,
+            name=name,
+            asset_class=asset_class,
+            region=region,
+            currency=currency,
+            weight_pct=weight_pct,
+            risk_rating=risk_rating,
+            complexity_rating=complexity,
+            liquidity_tier=liquidity
+        )
+        holdings.append(holding)
+
+        total_weight += weight_pct
+        asset_class_weights[asset_class] = asset_class_weights.get(asset_class, 0.0) + weight_pct
+        region_weights[region] = region_weights.get(region, 0.0) + weight_pct
+        currency_weights[currency] = currency_weights.get(currency, 0.0) + weight_pct
+        weighted_risk_sum += (risk_rating * weight_pct)
+
+    # Check balanced sum (allow small float deviation)
+    is_balanced = abs(total_weight - 100.0) <= 0.5
+    weighted_risk_score = round(weighted_risk_sum / max(total_weight, 1.0), 2)
+
+    return StandardizedHoldings(
+        holdings=holdings,
+        total_weight_pct=round(total_weight, 2),
+        asset_class_weights={k: round(v, 2) for k, v in asset_class_weights.items()},
+        region_weights={k: round(v, 2) for k, v in region_weights.items()},
+        currency_weights={k: round(v, 2) for k, v in currency_weights.items()},
+        weighted_risk_score=weighted_risk_score,
+        is_balanced_sum=is_balanced
+    )

@@ -1,0 +1,139 @@
+{
+  "MSFT": {
+    "annualized_return_1y": 0.224,
+    "annualized_return_3y": 0.168,
+    "annualized_volatility": 0.215,
+    "sharpe_ratio": 1.04,
+    "max_drawdown": 0.142,
+    "momentum_12_1": 0.185,
+    "forward_pe": 29.5,
+    "pb_ratio": 11.2,
+    "dividend_yield": 0.008,
+    "beta": 1.12
+  },
+  "NVDA": {
+    "annualized_return_1y": 0.485,
+    "annualized_return_3y": 0.542,
+    "annualized_volatility": 0.385,
+    "sharpe_ratio": 1.26,
+    "max_drawdown": 0.245,
+    "momentum_12_1": 0.420,
+    "forward_pe": 34.0,
+    "pb_ratio": 24.5,
+    "dividend_yield": 0.001,
+    "beta": 1.75
+  },
+  "NESN": {
+    "annualized_return_1y": 0.042,
+    "annualized_return_3y": 0.021,
+    "annualized_volatility": 0.138,
+    "sharpe_ratio": 0.30,
+    "max_drawdown": 0.115,
+    "momentum_12_1": 0.035,
+    "forward_pe": 18.2,
+    "pb_ratio": 4.1,
+    "dividend_yield": 0.035,
+    "beta": 0.65
+  },
+  "AZN": {
+    "annualized_return_1y": 0.125,
+    "annualized_return_3y": 0.110,
+    "annualized_volatility": 0.162,
+    "sharpe_ratio": 0.77,
+    "max_drawdown": 0.128,
+    "momentum_12_1": 0.095,
+    "forward_pe": 16.8,
+    "pb_ratio": 4.8,
+    "dividend_yield": 0.027,
+    "beta": 0.72
+  },
+  "TSM": {
+    "annualized_return_1y": 0.380,
+    "annualized_return_3y": 0.245,
+    "annualized_volatility": 0.310,
+    "sharpe_ratio": 1.22,
+    "max_drawdown": 0.210,
+    "momentum_12_1": 0.330,
+    "forward_pe": 21.5,
+    "pb_ratio": 5.8,
+    "dividend_yield": 0.015,
+    "beta": 1.35
+  },
+  "IEF": {
+    "annualized_return_1y": 0.052,
+    "annualized_return_3y": -0.018,
+    "annualized_volatility": 0.078,
+    "sharpe_ratio": 0.66,
+    "max_drawdown": 0.092,
+    "momentum_12_1": 0.045,
+    "effective_duration": 7.4,
+    "yield_to_maturity": 0.041,
+    "beta": 0.08
+  },
+  "LQD": {
+    "annualized_return_1y": 0.078,
+    "annualized_return_3y": 0.005,
+    "annualized_volatility": 0.085,
+    "sharpe_ratio": 0.91,
+    "max_drawdown": 0.105,
+    "momentum_12_1": 0.068,
+    "effective_duration": 8.1,
+    "yield_to_maturity": 0.051,
+    "credit_spread_bps": 105,
+    "beta": 0.22
+  },
+  "HYG": {
+    "annualized_return_1y": 0.105,
+    "annualized_return_3y": 0.042,
+    "annualized_volatility": 0.098,
+    "sharpe_ratio": 1.07,
+    "max_drawdown": 0.118,
+    "momentum_12_1": 0.085,
+    "effective_duration": 3.8,
+    "yield_to_maturity": 0.072,
+    "credit_spread_bps": 340,
+    "beta": 0.45
+  },
+  "IEAC": {
+    "annualized_return_1y": 0.068,
+    "annualized_return_3y": 0.012,
+    "annualized_volatility": 0.072,
+    "sharpe_ratio": 0.94,
+    "max_drawdown": 0.085,
+    "momentum_12_1": 0.055,
+    "effective_duration": 4.9,
+    "yield_to_maturity": 0.038,
+    "credit_spread_bps": 115,
+    "beta": 0.18
+  },
+  "GLD": {
+    "annualized_return_1y": 0.285,
+    "annualized_return_3y": 0.145,
+    "annualized_volatility": 0.155,
+    "sharpe_ratio": 1.83,
+    "max_drawdown": 0.082,
+    "momentum_12_1": 0.260,
+    "beta": 0.05
+  },
+  "VNQ": {
+    "annualized_return_1y": 0.142,
+    "annualized_return_3y": -0.012,
+    "annualized_volatility": 0.195,
+    "sharpe_ratio": 0.72,
+    "max_drawdown": 0.220,
+    "momentum_12_1": 0.110,
+    "dividend_yield": 0.041,
+    "beta": 0.95
+  },
+  "BIL": {
+    "annualized_return_1y": 0.049,
+    "annualized_return_3y": 0.041,
+    "annualized_volatility": 0.005,
+    "sharpe_ratio": 9.80,
+    "max_drawdown": 0.001,
+    "momentum_12_1": 0.048,
+    "effective_duration": 0.15,
+    "yield_to_maturity": 0.048,
+    "beta": 0.01
+  }
+}

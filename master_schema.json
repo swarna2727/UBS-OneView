@@ -1,0 +1,150 @@
+{
+  "metadata": {
+    "transaction_id": "string",
+    "timestamp": "string",
+    "total_processing_time_ms": 0
+  },
+  "input": {
+    "market_conditions": "string",
+    "investment_themes": ["string"],
+    "constraints": "string",
+    "additional_parameters": {}
+  },
+  "agent_1_output": {
+    "investment_ideas": [
+      {
+        "idea_id": "string",
+        "strategy_name": "string",
+        "description": "string",
+        "signal_hypothesis": "string",
+        "originality_rationale": "string",
+        "time_horizon": "string",
+        "asset_class": "string",
+        "market_inefficiency": "string"
+      }
+    ],
+    "selected_idea_id": "string",
+    "processing_time_ms": 0,
+    "additional_fields": {}
+  },
+  "agent_2_output": {
+    "by_idea": {
+      "idea_id_sample": {
+        "signals": [
+          {
+            "price_condition": "string",
+            "volume_condition": "string",
+            "long_entry": "string",
+            "short_entry": "string",
+            "stop_loss": "string",
+            "take_profit": "string",
+            "holding_period": "string",
+            "trend_filters": "string",
+            "exit": "string"
+          }
+        ],
+        "failure_modes": [
+          {
+            "failure_name": "string",
+            "trigger_conditions": "string",
+            "potential_impact": "string",
+            "severity_level": "string",
+            "mitigation_strategy": "string",
+            "early_warning_indicators": "string"
+          }
+        ]
+      }
+    },
+    "processing_time_ms": 0,
+    "additional_fields": {}
+  },
+  "agent_3_output": {
+    "strategy_rules": {
+      "selection_criteria": {
+        "primary_criteria": "string",
+        "secondary_criteria": "string",
+        "exclusion_criteria": "string"
+      },
+      "weighting_methodology": {
+        "method": "string",
+        "parameters": "string",
+        "rebalancing_frequency": "string"
+      },
+      "position_sizing": {
+        "max_position_size": "string",
+        "min_position_size": "string",
+        "sizing_method": "string"
+      },
+      "execution_guidelines": {
+        "entry_conditions": "string",
+        "exit_conditions": "string",
+        "risk_management": "string"
+      },
+      "rebalancing_framework": {
+        "frequency": "string",
+        "triggers": "string",
+        "methodology": "string"
+      },
+      "risk_controls": {
+        "failure_mode_mitigation": "string",
+        "position_limits": "string",
+        "monitoring_requirements": "string"
+      },
+      "monitoring_framework": {
+        "performance_metrics": "string",
+        "reporting_frequency": "string",
+        "validation_approach": "string"
+      },
+      "heuristic_rules": ["string"]
+    },
+    "processing_time_ms": 0,
+    "additional_fields": {}
+  },
+  "agent_4_output": {
+    "risk_compliance": {
+      "regulatory_requirements": [
+        {
+          "regulation": "string",
+          "requirement": "string",
+          "compliance_action": "string"
+        }
+      ],
+      "position_limits": {
+        "max_single_position": "string",
+        "max_sector_concentration": "string",
+        "max_geographic_concentration": "string"
+      },
+      "liquidity_requirements": {
+        "minimum_liquidity": "string",
+        "liquidity_monitoring": "string",
+        "stress_testing": "string"
+      },
+      "risk_metrics": ["string"],
+      "compliance_procedures": {
+        "monitoring_frequency": "string",
+        "reporting_schedule": "string",
+        "escalation_procedures": "string"
+      },
+      "stress_testing": {
+        "scenarios": ["string"],
+        "frequency": "string",
+        "thresholds": "string"
+      },
+      "escalation_procedures": {
+        "risk_breach_protocol": "string",
+        "regulatory_breach_protocol": "string",
+        "emergency_procedures": "string"
+      }
+    },
+    "processing_time_ms": 0,
+    "additional_fields": {}
+  },
+  "agent_5_output": {
+    "report_text": "string",
+    "report_type": "string",
+    "audience": "string",
+    "processing_time_ms": 0,
+    "additional_fields": {}
+  },
+  "pdf_path": "string"
+}

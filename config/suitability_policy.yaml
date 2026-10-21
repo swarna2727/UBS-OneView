@@ -1,0 +1,29 @@
+# UBS-Aligned Suitability Policy & Risk Limits
+
+limits:
+  single_stock:
+    flag_threshold_pct: 20.0
+    fail_threshold_pct: 30.0
+  asset_class_drift:
+    flag_threshold_pp: 10.0
+    fail_threshold_pp: 20.0
+  regional_concentration:
+    us_equity_flag_pct: 50.0
+    us_equity_fail_pct: 65.0
+  risk_score_drift:
+    flag_threshold: 0.3
+    fail_threshold: 0.6
+  liquidity_coverage:
+    flag_min_coverage_ratio: 1.2
+    fail_min_coverage_ratio: 1.0
+  fx_exposure:
+    unhedged_flag_pct: 25.0
+
+freshness:
+  max_research_age_days: 45
+  require_explicit_source: true
+
+portfolio_rules:
+  exact_ideas_count: 3
+  prohibit_unapproved_instruments: true
+  enforce_complexity_ceiling: true

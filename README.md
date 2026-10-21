@@ -1,232 +1,143 @@
-# AI Investment Strategy Pipeline
+# UBS Human-Led Multi-Agent Financial Advisory System
 
-A production-ready sequential AI agent pipeline for professional investment strategy development using Gemini 2.5 Flash.
+A production-grade, human-in-the-loop multi-agent financial advisory platform built with **LangGraph**, **Pydantic v2**, and **FastAPI / Streamlit**, fully complying with the UBS wealth management advisory and risk governance architecture.
 
-## System Overview
+---
 
-This system consists of 5 specialized AI agents that collaborate in multi-round cycles on a shared JSON schema, culminating in a comprehensive investment memo:
+## 1. Architectural Principles & Governance
 
-1. **Investment Idea Generator** - Creates 3 original investment strategies spanning different asset classes
-2. **Signal Modelling Specialist** - Develops testable signals and identifies failure scenarios for each candidate idea (per-idea evaluation)
-3. **Strategy Definition Engineer** - Converts signals into executable trading rules with concise heuristic rules (no pseudocode) and selects the final idea
-4. **Risk & Compliance Validator** - Identifies regulatory requirements and risk management controls
-5. **Investment Memo Writer** - Creates executive-level investment memo with PDF output
+1. **Clear Role Boundaries**: Every agent owns exactly one type of reasoning. Ideation, market intelligence, suitability critic validation, and memo compilation are strictly isolated into distinct agents with typed schemas.
+2. **Deterministic Control**: Arithmetic, portfolio weights, asset class concentration thresholds, risk scoring, liquidity coverage, and mandatory schema checks are 100% computed by pure Python deterministic tools—never delegated to LLM free-text reasoning. `src/tools/` is architecturally linted to never import LLM code.
+3. **Evidence Before Recommendation**: Every market claim requires an explicit source ID, publication date, and freshness timestamp (older than 45 days is automatically discarded). Ideas without verified fresh citations cannot pass suitability.
+4. **Lowest Effective Level of Automation & Human Accountability**: The Relationship Manager (RM) is the Human Orchestrator. The system introduces HITL interrupt checkpoints for:
+   - **Input Confirmation & Conflict Resolution** (e.g. high risk willingness vs. short-term liquidity need)
+   - **Risk Exception Overrides** (for soft FLAG concentration warnings)
+   - **Recommendation Review & Selective Regeneration** (RM can reject/revise individual ideas)
+   - **Final Advisory Memo Approval & PDF Sign-off**
 
-## Features
+---
 
-- **Flat, Multi-Round Collaboration**: Agents 1–4 collaborate across 1–3 rounds on a shared schema
-- **Per-Idea Evaluation**: Agent 2 evaluates signals/failure modes for each candidate idea, enabling fair comparison
-- **Clear Selection Ownership**: Agent 3 selects (and may reselect) the final idea each round based on comparative evidence
-- **Professional Output**: Generates publication-ready investment memos in PDF format
-- **Comprehensive Validation**: JSON schema validation at each step with error handling
-- **Executive Interface**: Streamlit frontend with preset scenarios and custom inputs
-- **Data Lineage**: Complete transaction tracking with unique IDs and processing times
-- **Risk Management**: Built-in compliance checks and risk metric specifications
+## 2. Multi-Agent Pipeline & State Machine
 
-## Quick Start
-
-### Prerequisites
-
-```bash
-pip install -r requirements.txt
+```mermaid
+flowchart TD
+    START([START]) --> CP[1. Client Profile Agent]
+    CP -->|"Blocking Flags Present"| H1{{"HITL: Resolve Profile Conflict"}}
+    CP -->|"Clean Profile"| MI[2. Market Intelligence Agent]
+    H1 -->|"RM Resolves"| MI
+    MI --> IG[3. Investment Idea Agent]
+    IG --> SC[4. Suitability Critic Agent]
+    SC -->|"PASS"| MF[5. Memo Formatter Agent]
+    SC -->|"FLAG (Mild Breach)"| H2{{"HITL: Risk Exception Review"}}
+    SC -->|"FAIL (Hard Breach, retry < max)"| SEL[Mark Failed Slots / Lock Passed]
+    SC -->|"FAIL (retry >= max)"| H2
+    SEL --> IG
+    H2 -->|"RM Override"| MF
+    H2 -->|"RM Reject/Revise Idea"| SEL
+    H2 -->|"Abort"| END_SESSION([END])
+    MF --> H3{{"HITL: RM Final Memo Approval"}}
+    H3 -->|"RM Accepts"| PDF[Compile 3-Page PDF]
+    H3 -->|"RM Rejects/Revises Idea"| SEL
+    PDF --> END_SESSION
 ```
 
-### Configuration
+---
 
-1. Get a Google API key for Gemini 2.5 Flash from [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Create a `.env` file:
-```bash
-echo "GEMINI_API_KEY=your_api_key_here" > .env
-```
+## 3. The 5 Specialized Advisory Agents
 
-### Running the Application
+### Agent 1: Client Profile Agent (`src/agents/client_profile.py`)
+- **Role**: Ingest, standardize, reconcile, and validate advisor-entered client inputs (goals, horizon, liquidity needs, risk tolerance, current holdings).
+- **Deterministic Tools**:
+  - `required_field_validator(profile_dict) -> ValidationResult`
+  - `risk_profile_calculator(questionnaire_data) -> CalculatedRiskTier`
+  - `portfolio_parser(raw_holdings) -> StandardizedHoldings`
+- **Guardrail**: Compares risk willingness vs risk capacity. If a client states aggressive risk tolerance but has a short-term 18-month liquidity commitment, raises `RISK_CAPACITY_CONFLICT` and triggers an interrupt. Cannot infer missing information.
 
+### Agent 2: Market Intelligence Agent (`src/agents/market_intelligence.py`)
+- **Role**: Transform broad macro research and market data into evidence-backed intelligence filtered for client profile gaps.
+- **Deterministic Tools**:
+  - `quantitative_analysis_tool(ticker) -> QuantMetrics` (1Y/3Y returns, vol, max drawdown, momentum, P/E)
+  - `sentiment_analysis_tool(corpus_docs) -> SentimentBreakdown`
+  - `retrieval_rag_tool(query, asset_universe) -> List[DocumentSnippet]`
+  - `source_freshness_validator(snippets, max_age_days=45) -> ValidatedSnippets`
+- **Guardrail**: Every finding has attached source IDs, publication dates, and freshness tags. Stale evidence (>45 days) is automatically discarded.
+
+### Agent 3: Investment Idea Agent (`src/agents/investment_idea.py`)
+- **Role**: Synthesize profile and research brief into candidate investment opportunities.
+- **Behavior**:
+  - Generates **exactly three** complementary candidate ideas covering distinct portfolio roles (`GROWTH`, `INCOME`, `STABILITY`, `DIVERSIFICATION`).
+  - **Selective Regeneration**: If Idea #2 is rejected by RM or Critic, Ideas #1 and #3 are locked and preserved verbatim. Only Slot #2 is regenerated.
+- **Deterministic Tools**:
+  - `approved_product_universe_tool(asset_filters) -> List[ApprovedInstrument]`
+  - `portfolio_exposure_calculator(current_holdings, proposed_trades) -> ExposureDelta`
+
+### Agent 4: Suitability Critic Agent (`src/agents/suitability_critic.py`)
+- **Role**: Independent risk engine validating candidate ideas against client profile and institutional limits.
+- **Status Gates**:
+  - **`PASS`**: Meets all limits; routes directly to Memo Formatter.
+  - **`FLAG`**: Soft guideline breach (e.g. single stock 20-30%, US equity 50-65%); pauses graph for RM exception review.
+  - **`FAIL`**: Hard breach (single stock > 30%, US equity > 65%, liquidity coverage < 1.0x, missing/stale evidence); routes back to selective regeneration.
+- **Deterministic Tools**:
+  - `portfolio_risk_engine(current_portfolio, candidate_ideas) -> RiskMetrics`
+  - `suitability_rule_engine(client_profile, proposed_portfolio) -> RuleCheckResult`
+  - `evidence_integrity_check(candidate_ideas, research_brief) -> EvidenceStatus`
+
+### Agent 5: Memo Formatter Agent (`src/agents/memo_formatter.py`)
+- **Role**: Compile approved ideas and risk findings into a standardized 3-page audit-ready UBS advisory memo and ReportLab PDF artifact:
+  - **Page 1: Executive Recommendation**: Client snapshot, objective, and recommendations at a glance table.
+  - **Page 2: Investment Idea Details**: Specifications, theses, catalysts, allocation ranges, key risks, invalidation triggers, and citations.
+  - **Page 3: Portfolio View & Disclosures**: Portfolio-level impact, stress test scenario analysis, risk disclosures, and RM signature block.
+- **Deterministic Tools**:
+  - `memo_consistency_validator(critic_output, memo_content) -> bool`
+  - `citation_source_mapper(memo_text, evidence_list) -> List[str]`
+  - `pdf_memo_renderer(structured_memo, output_path) -> str`
+
+---
+
+## 4. 3-Panel Advisor Workspace Frontend (Slide 20)
+
+Launch the Streamlit workspace:
 ```bash
 streamlit run streamlit_app.py
 ```
 
-Navigate to `http://localhost:8501` in your browser.
+The workspace provides:
+1. **Left Panel (Workflow Progress)**: Real-time stage tracking across `[Client Profile, Research, Investment Ideas, Risk Review, Advisor Approval, Memo]` with status badges (`✅ Done`, `🔄 Active`, `⚠️ RM Action`). Includes an Advisor Notes log.
+2. **Center Panel (Decision Space)**: Displays stage output, before-and-after allocation shift tables, risk warning boxes with exact breach metrics, candidate idea cards, and RM command buttons (`Accept`, `Reject(idea_id)`, `Revise(idea_id, notes)`, `Confirm Exception Override`, `Resolve Profile Conflict`).
+3. **Right Panel (Interactive Memo Preview)**: Dynamic preview highlighting the exact paragraph or table affected by the active workflow stage, plus one-click download for the compiled 3-page PDF memo artifact.
 
-## Usage
+---
 
-### Web Interface
+## 5. REST API Endpoints (FastAPI)
 
-1. **Enter API Key**: Provide your Google Gemini API key
-2. **Choose Input Method**: 
-   - Select from preset scenarios (Technology Growth, ESG Sustainable, Value Recovery)
-   - Or create custom input with market conditions, themes, and constraints
-3. **Rounds**: Choose number of collaboration rounds (default 2)
-4. **Run Pipeline**: Execute the collaborative pipeline
-5. **Download Results**: Get PDF investment memo and JSON data files
-
-### Programmatic Usage
-
-```python
-from src.pipeline import InvestmentPipeline
-
-# Initialize pipeline
-pipeline = InvestmentPipeline(api_key="your_api_key")
-
-# Define input data
-input_data = {
-    "market_conditions": "Current bullish market with tech focus",
-    "investment_themes": ["AI", "Cloud Computing", "Cybersecurity"],
-    "constraints": "Large-cap focus, max 5% individual positions"
-}
-
-# Run pipeline (collaboration rounds)
-result = pipeline.run(
-    input_data=input_data,
-    rounds=2
-)
-
-# Access results
-print(f"Transaction ID: {result['transaction_id']}")
-print(f"PDF Path: {result['pdf_path']}")
-print(f"Processing Time: {result['total_processing_time_ms']}ms")
+Run the backend API:
+```bash
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## Architecture
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/sessions` | Start advisory session with client profile input |
+| `GET` | `/sessions/{id}` | Get 3-panel workspace view projection |
+| `POST` | `/sessions/{id}/actions` | Execute RM command (`accept`, `reject`, `revise`, `override_flag`, `resolve_conflict`) |
+| `GET` | `/sessions/{id}/pdf` | Download finalized 3-page UBS advisory memo PDF |
+| `GET` | `/sessions/{id}/audit` | Full audit trail of agent executions and RM decisions |
+| `GET` | `/health` | Service health check |
 
-### Data Flow (High Level)
-```
-User Input → Round 1: [A1 → A2(per idea) → A3 → A4] → Round 2: [A1 → A2(per idea) → A3 → A4] → … → A5 → PDF
-```
+---
 
-### File Structure
-```
-src/
-├── agents/              # AI agent implementations
-│   ├── agent_1_idea_generator.py
-│   ├── agent_2_signal_modelling.py
-│   ├── agent_3_strategy_definition.py
-│   ├── agent_4_risk_compliance.py
-│   └── agent_5_memo_writer.py
-├── schemas/             # JSON validation schemas
-├── utils/               # Utilities (Gemini client, validation, PDF)
-└── pipeline.py          # Main orchestrator
+## 6. Running the Validation Test Suite
+
+Run all unit, deterministic, and integration trajectory tests offline:
+```bash
+python -m pytest tests/ -v
 ```
 
-### Agent Specifications
-
-**Agent 1 - Investment Idea Generator**
-- Input: Market conditions, themes, constraints
-- Output: 3 investment ideas with strategy names, descriptions, hypotheses
-- Validation: Ensures 3 ideas across different asset classes
-
-**Agent 2 - Signal Modelling Specialist**  
-- Input: Each candidate idea from Agent 1 (evaluated per idea)
-- Output: 2-3 quantifiable signals, 3 failure modes, backtesting requirements (per idea)
-- Validation: Specific data sources and numerical thresholds required
-
-**Agent 3 - Strategy Definition Engineer**
-- Input: Per-idea signals and failure modes from Agent 2  
-- Output: Selection criteria, weighting methodology, position sizing, execution guidelines, rebalancing framework, risk controls, monitoring framework, and `heuristic_rules` (concise, word-based). Selects `selected_idea_id` each round.
-- Validation: All rules must be quantifiable and executable
-
-**Agent 4 - Risk & Compliance Validator**
-- Input: Strategy rules from Agent 3
-- Output: Position limits, liquidity constraints, regulatory flags, risk metrics
-- Validation: Institutional-grade risk management standards
-
-**Agent 5 - Investment Memo Writer**
-- Input: All previous agents' outputs
-- Output: Executive memo with summary, risks, approvals, timeline, resources
-- Validation: Professional formatting suitable for executive review
-
-## Output Examples
-
-### Investment Memo Structure
-- **Executive Summary** (2-3 sentences)
-- **Strategy Overview** (1 paragraph) 
-- **Key Risks** (3 risks with severity and mitigation)
-- **Approval Reasons** (3 reasons with supporting data)
-- **Implementation Timeline** (specific milestones)
-- **Resource Requirements** (capital, personnel, technology, data)
-
-### Generated Files
-- `agent{i}_{ClassName}_round{N}_{transaction_id}.json` - Per-agent snapshots
-- `round{N}_{transaction_id}.json` - Per-round snapshot
-- `{transaction_id}_complete.json` - Final JSON
-- `{transaction_id}_final_memo.pdf` - Professional PDF report
-- `schema_final.json` and `schema_final_{transaction_id}.json` - PRD alias and tx-scoped final schema
-- `final_report.txt` and `final_report_{transaction_id}.txt` - PRD alias and tx-scoped committee text
-
-## Performance Targets
-
-- **Complete Pipeline**: Under 3 minutes end-to-end
-- **Individual Agents**: 20-40 seconds each
-- **JSON Validation**: 95%+ schema compliance with fallbacks
-- **Error Recovery**: Automatic retry with intelligent fallbacks
-
-## Production Features
-
-- **Robust Error Handling**: Automatic retry with exponential backoff
-- **Safety Filter Bypass**: Optimized for financial content
-- **Rate Limiting**: Intelligent API call management
-- **Comprehensive Logging**: Full transaction tracking and debugging
-- **Fallback Mechanisms**: Graceful degradation on failures
-- **Selection Control**: Agent 3 owns selection; Agent 2 compares all ideas; optional convergence early-stop
-
-## Customization
-
-### Adding New Agents
-1. Extend `BaseAgent` class
-2. Implement `process()` method
-3. Define output schema
-4. Add to pipeline orchestrator
-
-### Custom Schemas
-Update schemas in `src/schemas/json_schemas.py` for specialized requirements.
-
-### PDF Formatting
-Modify `src/utils/pdf_generator.py` for custom report layouts.
-
-## How It Works
-
-1) Rounds and Shared Schema
-- The pipeline runs 1–3 rounds. In each round, Agents 1–4 operate on a shared JSON schema. The orchestrator merges outputs with metadata (proposed_by, confidence, comments, history).
-
-2) Per-Idea Signals (Agent 2)
-- For each idea produced by Agent 1, Agent 2 is run separately. Outputs are aggregated under `agent_2_output.by_idea[idea_id]` (signals, failure modes, backtesting).
-
-3) Idea Selection (Agent 3)
-- Agent 3 consumes `by_idea` to produce rules and select `selected_idea_id` based on comparative evidence. Heuristic scoring favors breadth by counting signals and penalizing failure modes. Reselection is allowed every round.
-
-4) Synthesis (Agent 5)
-- The final committee agent produces a human-readable report (`report_text`) which is rendered to PDF. PRD-compatible aliases are written for convenience.
-
-5) Observability
-- Per-agent and per-round snapshots are written for auditability, with per-round timing and optional early convergence stop.
-
-## Troubleshooting
-
-**Common Issues:**
-- **API Key Invalid**: Verify Gemini 2.5 Pro access and key format
-- **JSON Validation Fails**: Check agent output formats against schemas
-- **PDF Generation Error**: Ensure reportlab dependencies installed
-- **Processing Timeout**: Increase timeout limits for complex strategies
-
-**Debug Mode:**
-```python
-import logging
-logging.getLogger().setLevel(logging.DEBUG)
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/new-agent`)
-3. Add tests for new functionality
-4. Submit pull request with detailed description
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Support
-
-For issues and questions:
-- Create GitHub issue with detailed error information
-- Include transaction ID and log files
-- Specify Gemini API key status (without sharing the key)
+### Test Coverage Highlights:
+- **`tests/unit/test_schemas.py`**: Asserts `CandidateIdeaSet` strictly validates exactly 3 complementary ideas across slots 1, 2, 3 with distinct instruments.
+- **`tests/unit/test_risk_engine.py`**: Asserts single-stock concentration >30% triggers `FAIL`, 20-30% triggers `FLAG`, and compliant portfolios trigger `PASS`.
+- **`tests/unit/test_profile_tools.py`**: Asserts risk willingness vs capacity contradiction detection (short-term 18-month liquidity need vs aggressive willingness).
+- **`tests/unit/test_retrieval_freshness.py`**: Asserts stale evidence (>45 days) is discarded; fresh evidence kept.
+- **`tests/unit/test_memo_consistency.py`**: Asserts memo validator fails if memo alters tickers or allocations; verifies 3-page ReportLab PDF generation.
+- **`tests/unit/test_architecture_lint.py`**: Asserts `src/tools/` contains zero LLM imports.
+- **`tests/integration/test_trajectories.py`**: Asserts `FAIL` status routes to regeneration and **never reaches memo formatter directly**; asserts selective regeneration locks passed ideas while only regenerating rejected slots; verifies full trajectory to final PDF memo.
