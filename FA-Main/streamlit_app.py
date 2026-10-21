@@ -115,6 +115,42 @@ if "workspace_view" not in st.session_state:
 
 service: AdvisorySessionService = st.session_state.service
 
+def submit_action(session_id: str, **kwargs: Any) -> None:
+    """Send an RM review decision to the graph and refresh the workspace."""
+    try:
+        with st.spinner("Applying advisor decision..."):
+            st.session_state.workspace_view = service.execute_action(session_id, AdvisorActionRequest(**kwargs))
+        st.rerun()
+    except ValueError as e:
+        st.error(str(e))
+
+def split_csv(text: str) -> list:
+    return [t.strip() for t in text.split(",") if t.strip()]
+
+def review_buttons(session_id: str, review, key: str, approve_label: str = "✅ Approve & Continue",
+                   regenerate_label: str = "🔄 Regenerate", edits: Optional[Dict[str, Any]] = None) -> None:
+    """Shared approve / regenerate / reject gate shown under every agent's output."""
+    notes = st.text_area("RM notes / feedback for the agent:", key=f"notes_{key}")
+    cols = st.columns(3)
+    with cols[0]:
+        if "approve" in review.allowed_actions:
+            if st.button(approve_label, type="primary", use_container_width=True, key=f"approve_{key}"):
+                submit_action(session_id, action="approve", notes=notes or None)
+        elif "override_flag" in review.allowed_actions:
+            if st.button("⚠️ Approve with Exception Override", type="primary", use_container_width=True, key=f"override_{key}"):
+                if not notes:
+                    st.error("An exception override needs an RM justification note.")
+                else:
+                    submit_action(session_id, action="override_flag", notes=notes)
+    with cols[1]:
+        if "regenerate" in review.allowed_actions:
+            if st.button(regenerate_label, use_container_width=True, key=f"regen_{key}"):
+                submit_action(session_id, action="regenerate", notes=notes or None, edits=edits)
+    with cols[2]:
+        if "reject" in review.allowed_actions:
+            if st.button("⛔ Reject & End Session", use_container_width=True, key=f"reject_{key}"):
+                submit_action(session_id, action="reject", notes=notes or None)
+
 # Header Banner
 st.markdown("""
 <div class="top-header">
@@ -237,126 +273,182 @@ if view is not None:
         st.markdown(f"**Stage:** `{cp.current_stage.upper()}` &nbsp;|&nbsp; **Active Agent:** `{cp.active_agent_name}`")
         st.write(cp.stage_summary)
 
-        # Risk & Breach Warnings (if any)
-        if cp.risk_warnings:
-            for w in cp.risk_warnings:
-                box_class = "warning-box" if w.severity == "FAIL" else "flag-box"
+        review = view.pending_review
+        stage = review.stage if review else None
+        output = (review.output or {}) if review else {}
+
+        if view.outcome:
+            if view.outcome == "APPROVED":
+                st.success("✅ Advisory session approved and signed off by the Relationship Manager.")
+            else:
+                st.error("⛔ Advisory session was rejected by the Relationship Manager.")
+        elif review:
+            st.warning(f"🛡️ RM REVIEW REQUIRED — {review.agent}: {review.reason}")
+
+        # ---------- Agent 1: Client Profile review ----------
+        if stage == "client_profile":
+            st.markdown("#### 👤 Client Profile Agent Output")
+            for flag in review.unresolved_flags:
+                box_class = "warning-box" if flag.get("severity") == "BLOCKING_INTERRUPT" else "flag-box"
                 st.markdown(f"""
                 <div class="{box_class}">
-                    <b>[{w.severity}] {w.metric_name}</b><br/>
-                    {w.message}<br/>
-                    <small>Threshold: {w.threshold_value}% | After Allocation: {w.after_value}%</small>
+                    <b>[{flag.get('severity')}] {flag.get('code')}</b><br/>
+                    {flag.get('message')}<br/>
+                    <small>Fields: {', '.join(flag.get('affected_fields', []))}</small>
                 </div>
                 """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="pass-box">
-                <b>✅ ALL SUITABILITY RULES PASSED</b><br/>
-                No hard limit breaches or concentration warnings detected.
-            </div>
-            """, unsafe_allow_html=True)
 
-        # Allocation Diff Table
-        if cp.allocation_diffs:
-            st.markdown("#### 📊 Asset Allocation Shift (Before vs. After)")
-            table_rows = []
-            for d in cp.allocation_diffs:
-                delta_str = f"+{d.delta_pct:.1f}%" if d.delta_pct > 0 else f"{d.delta_pct:.1f}%"
-                status_icon = "⚠️" if d.is_breached else "✓"
-                table_rows.append({
-                    "Type": d.category_type,
-                    "Name": d.name,
-                    "Current %": f"{d.before_pct:.1f}%",
-                    "Proposed %": f"{d.after_pct:.1f}%",
-                    "Delta": delta_str,
-                    "Limit": status_icon
-                })
-            st.dataframe(table_rows, use_container_width=True, hide_index=True)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Calculated Risk Tier", f"{output.get('calculated_risk_tier')} ({output.get('risk_tier_number')}/5)")
+            m2.metric("Horizon", f"{output.get('time_horizon_months')} months")
+            m3.metric("Total Wealth", f"${output.get('total_wealth', 0):,.0f}")
+            st.caption(f"Asset class weights: {output.get('current_asset_class_weights')}")
 
-        # Candidate Ideas Display
-        candidate_ideas = cp.data_payload.get("candidate_ideas", [])
-        if candidate_ideas:
-            st.markdown("#### 💡 Candidate Ideas & Actions")
-            for idea in candidate_ideas:
+            st.markdown("##### ✏️ Profile Fields (edit, then Regenerate to re-run the agent)")
+            raw = review.raw_input
+            raw_constraints = raw.get("constraints") or {}
+            f1, f2 = st.columns(2)
+            with f1:
+                name = st.text_input("Client name", value=str(raw.get("name", "")))
+                goals = st.text_input("Goals (comma-separated)", value=", ".join(raw.get("goals") or []))
+                horizon = st.number_input("Time horizon (months)", min_value=0, value=int(raw.get("time_horizon_months") or 0))
+                willingness = st.text_input("Stated risk willingness", value=str(raw.get("stated_risk_willingness", "")))
+            with f2:
+                client_id = st.text_input("Client ID", value=str(raw.get("client_id", "")))
+                wealth = st.number_input("Total wealth", min_value=0.0, value=float(raw.get("total_wealth") or 0.0), step=10000.0)
+                experience = st.text_input("Experience level", value=str(raw.get("experience_level", "")))
+                max_single = st.number_input("Max single stock %", min_value=1.0, max_value=100.0,
+                                             value=float(raw_constraints.get("max_single_stock_pct", 20.0)))
+            excluded = st.text_input("Excluded sectors (comma-separated)", value=", ".join(raw_constraints.get("excluded_sectors", [])))
+            esg = st.checkbox("ESG mandate", value=bool(raw_constraints.get("esg_mandate", False)))
+
+            st.caption("Liquidity schedule")
+            liquidity = st.data_editor(
+                raw.get("liquidity_schedule") or [{"due_months": 12, "amount": 0.0, "purpose": ""}],
+                num_rows="dynamic", use_container_width=True, key="edit_liquidity"
+            )
+            st.caption("Current holdings")
+            holdings = st.data_editor(
+                raw.get("raw_holdings") or [{"ticker": "", "name": "", "asset_class": "", "region": "", "currency": "USD", "weight_pct": 0.0, "risk_rating": 3}],
+                num_rows="dynamic", use_container_width=True, key="edit_holdings"
+            )
+
+            def records(data: Any) -> list:
+                rows = data.to_dict("records") if hasattr(data, "to_dict") else list(data)
+                return [r for r in rows if any(v not in (None, "", 0, 0.0) for v in r.values())]
+
+            edits = {
+                "client_id": client_id, "name": name, "goals": split_csv(goals),
+                "time_horizon_months": int(horizon), "stated_risk_willingness": willingness,
+                "total_wealth": float(wealth), "experience_level": experience,
+                "constraints": {**raw_constraints, "excluded_sectors": split_csv(excluded),
+                                "esg_mandate": esg, "max_single_stock_pct": float(max_single)},
+                "liquidity_schedule": records(liquidity), "raw_holdings": records(holdings)
+            }
+            if "approve" not in review.allowed_actions:
+                st.info("Mandatory fields are missing — complete them above and Regenerate. Approval is disabled.")
+            review_buttons(view.session_id, review, "profile", regenerate_label="🔄 Regenerate with Edits", edits=edits)
+
+        # ---------- Agent 2: Market Intelligence review ----------
+        elif stage == "market_intelligence":
+            st.markdown("#### 🌐 Market Intelligence Agent Output")
+            st.write("**Macro themes:** " + ", ".join(output.get("macro_themes", [])))
+            st.markdown("##### Findings")
+            st.dataframe([{
+                "Rank": f.get("materiality_rank"), "Theme": f.get("theme"), "Claim": f.get("claim"),
+                "Type": f.get("finding_type"), "Sources": ", ".join(f.get("cited_source_ids", [])),
+                "Published": ", ".join(f.get("publication_dates", []))
+            } for f in sorted(output.get("findings", []), key=lambda f: f.get("materiality_rank", 99))],
+                use_container_width=True, hide_index=True)
+            st.markdown("##### Key market risks")
+            for r in output.get("key_market_risks", []):
+                st.write(f"- {r}")
+            with st.expander("Validated evidence sources"):
+                st.dataframe([{
+                    "Source": src.get("source_id"), "Title": src.get("title"), "Publisher": src.get("publisher"),
+                    "Published": src.get("published_at"), "Age (days)": src.get("age_days")
+                } for src in output.get("validated_sources", [])], use_container_width=True, hide_index=True)
+            review_buttons(view.session_id, review, "market")
+
+        # ---------- Agent 3: Investment Ideas review ----------
+        elif stage == "investment_ideas":
+            st.markdown(f"#### 💡 Investment Idea Agent Output (round {output.get('generation_round', 1)})")
+            st.caption(output.get("complementarity_thesis", ""))
+            for idea in output.get("ideas", []):
                 with st.expander(f"Slot {idea.get('slot_number')}: {idea.get('ticker')} - {idea.get('name')} ({idea.get('action')})", expanded=True):
-                    col_i1, col_i2 = st.columns([3, 1])
-                    with col_i1:
-                        st.write(f"**Role:** `{idea.get('portfolio_role')}` &nbsp;|&nbsp; **Target:** `{idea.get('target_weight_pct')}%` (Range: {idea.get('allocation_range', {}).get('min_pct')}% - {idea.get('allocation_range', {}).get('max_pct')}%)")
-                        st.write(f"**Thesis:** {idea.get('thesis')}")
-                        st.write(f"**Why Now:** {idea.get('why_now')}")
-                        st.write(f"**Client Fit:** {idea.get('client_fit_rationale')}")
-                        st.caption(f"Evidence Ref: {', '.join(idea.get('cited_evidence_ids', []))}")
+                    st.write(f"**Role:** `{idea.get('portfolio_role')}` &nbsp;|&nbsp; **Target:** `{idea.get('target_weight_pct')}%` (Range: {idea.get('allocation_range', {}).get('min_pct')}% - {idea.get('allocation_range', {}).get('max_pct')}%)")
+                    st.write(f"**Thesis:** {idea.get('thesis')}")
+                    st.write(f"**Why Now:** {idea.get('why_now')}")
+                    st.write(f"**Client Fit:** {idea.get('client_fit_rationale')}")
+                    st.write(f"**Key Risks:** {', '.join(idea.get('key_risks', []))}")
+                    st.caption(f"Evidence Ref: {', '.join(idea.get('cited_evidence_ids', []))}")
+                    idea_notes = st.text_input("Feedback for this idea:", key=f"idea_notes_{idea.get('idea_id')}")
+                    if st.button("🔄 Regenerate only this idea", key=f"regen_idea_{idea.get('idea_id')}"):
+                        submit_action(view.session_id, action="regenerate", idea_id=idea.get("idea_id"),
+                                      notes=idea_notes or f"RM requested a replacement for {idea.get('ticker')}.")
+            review_buttons(view.session_id, review, "ideas", regenerate_label="🔄 Regenerate All Ideas")
 
-                    with col_i2:
-                        st.markdown("**RM Commands:**")
-                        # Reject Button
-                        if st.button("❌ Reject", key=f"btn_reject_{idea.get('idea_id')}"):
-                            with st.spinner(f"Rejecting {idea.get('ticker')} and triggering selective regeneration..."):
-                                service.execute_action(
-                                    view.session_id,
-                                    AdvisorActionRequest(
-                                        action="reject",
-                                        idea_id=idea.get("idea_id"),
-                                        notes=f"RM rejected {idea.get('ticker')} for slot {idea.get('slot_number')}."
-                                    )
-                                )
-                                st.session_state.workspace_view = service.get_workspace_view(view.session_id)
-                                st.rerun()
+        # ---------- Agent 4: Suitability Critic review ----------
+        elif stage == "suitability_review":
+            status = output.get("overall_status")
+            st.markdown(f"#### ⚖️ Suitability Critic Agent Output — **{status}**")
+            if cp.risk_warnings:
+                for w in cp.risk_warnings:
+                    box_class = "warning-box" if w.severity == "FAIL" else "flag-box"
+                    st.markdown(f"""
+                    <div class="{box_class}">
+                        <b>[{w.severity}] {w.metric_name}</b><br/>
+                        {w.message}<br/>
+                        <small>Threshold: {w.threshold_value}% | After Allocation: {w.after_value}%</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div class="pass-box">
+                    <b>✅ ALL SUITABILITY RULES PASSED</b><br/>
+                    No hard limit breaches or concentration warnings detected.
+                </div>
+                """, unsafe_allow_html=True)
 
-                        # Revise Button
-                        with st.popover("✏️ Revise"):
-                            rev_notes = st.text_input("Revision Notes:", key=f"notes_{idea.get('idea_id')}")
-                            if st.button("Submit Revision", key=f"btn_sub_rev_{idea.get('idea_id')}"):
-                                service.execute_action(
-                                    view.session_id,
-                                    AdvisorActionRequest(
-                                        action="revise",
-                                        idea_id=idea.get("idea_id"),
-                                        notes=rev_notes or "Rebalance to lower risk rating."
-                                    )
-                                )
-                                st.session_state.workspace_view = service.get_workspace_view(view.session_id)
-                                st.rerun()
+            if cp.allocation_diffs:
+                st.markdown("##### 📊 Asset Allocation Shift (Before vs. After)")
+                st.dataframe([{
+                    "Type": d.category_type, "Name": d.name,
+                    "Current %": f"{d.before_pct:.1f}%", "Proposed %": f"{d.after_pct:.1f}%",
+                    "Delta": f"+{d.delta_pct:.1f}%" if d.delta_pct > 0 else f"{d.delta_pct:.1f}%",
+                    "Limit": "⚠️" if d.is_breached else "✓"
+                } for d in cp.allocation_diffs], use_container_width=True, hide_index=True)
 
-        # Human-in-the-Loop Action Gate
-        st.markdown("---")
-        st.markdown("#### 🛡️ Relationship Manager Action Gate")
+            st.markdown("##### Per-idea verdicts")
+            for ie in output.get("idea_evaluations", []):
+                c1, c2 = st.columns([4, 1])
+                c1.write(f"**Slot {ie.get('slot_number')} · {ie.get('ticker')}** — `{ie.get('status')}`: {ie.get('qualitative_notes')}")
+                if c2.button("↩️ Send back", key=f"revise_{ie.get('idea_id')}"):
+                    submit_action(view.session_id, action="revise", idea_id=ie.get("idea_id"),
+                                  notes=f"RM sent {ie.get('ticker')} back after suitability review.")
+            st.caption(f"Critic notes: {output.get('critic_notes')}")
 
-        if cp.requires_human_action:
-            st.warning(f"ACTION REQUIRED: {cp.interrupt_reason or 'Please review and confirm checkpoint.'}")
+            if "revise" in review.allowed_actions and status != "PASS":
+                if st.button("↩️ Send failing/flagged ideas back to Idea Agent", use_container_width=True):
+                    submit_action(view.session_id, action="revise")
+            review_buttons(view.session_id, review, "suitability", regenerate_label="🔄 Re-run Critic")
 
-            col_a1, col_a2, col_a3 = st.columns(3)
-            with col_a1:
-                if "accept" in cp.allowed_actions:
-                    if st.button("✅ Accept & Proceed", type="primary", use_container_width=True):
-                        service.execute_action(view.session_id, AdvisorActionRequest(action="accept"))
-                        st.session_state.workspace_view = service.get_workspace_view(view.session_id)
-                        st.rerun()
-
-            with col_a2:
-                if "override_flag" in cp.allowed_actions:
-                    if st.button("⚠️ Confirm Exception Override", use_container_width=True):
-                        service.execute_action(view.session_id, AdvisorActionRequest(
-                            action="override_flag",
-                            notes="RM certified exception override based on client consultation."
-                        ))
-                        st.session_state.workspace_view = service.get_workspace_view(view.session_id)
-                        st.rerun()
-
-            with col_a3:
-                if "resolve_conflict" in cp.allowed_actions:
-                    if st.button("🔧 Resolve Profile Conflict", use_container_width=True):
-                        service.execute_action(view.session_id, AdvisorActionRequest(
-                            action="resolve_conflict",
-                            conflict_resolution="Align with lower risk capacity due to near-term liquidity commitments."
-                        ))
-                        st.session_state.workspace_view = service.get_workspace_view(view.session_id)
-                        st.rerun()
-        else:
-            if st.button("✅ Approve Recommendation & Render Memo PDF", type="primary", use_container_width=True):
-                service.execute_action(view.session_id, AdvisorActionRequest(action="accept"))
-                st.session_state.workspace_view = service.get_workspace_view(view.session_id)
-                st.rerun()
+        # ---------- Agent 5: Memo review & sign-off ----------
+        elif stage == "advisor_approval":
+            st.markdown("#### 📄 Memo Formatter Agent Output")
+            exec_page = output.get("page_1_executive", {})
+            st.write(f"**Memo ID:** `{output.get('memo_id')}`")
+            st.write(f"**Objective:** {exec_page.get('investment_objective')}")
+            st.write(f"**Client snapshot:** {exec_page.get('client_snapshot')}")
+            st.info("Review the full memo in the preview panel, then sign off, regenerate the memo, or send an idea back.")
+            for g in exec_page.get("ideas_at_a_glance", []):
+                c1, c2 = st.columns([4, 1])
+                c1.write(f"**{g.get('slot_number')}. {g.get('ticker')}** ({g.get('action')} {g.get('target_weight_pct')}%) — {g.get('portfolio_role')}")
+                if c2.button("↩️ Revise idea", key=f"memo_revise_{g.get('idea_id')}"):
+                    submit_action(view.session_id, action="revise", idea_id=g.get("idea_id"),
+                                  notes=f"RM requested revision of {g.get('ticker')} at memo sign-off.")
+            review_buttons(view.session_id, review, "memo", approve_label="✅ Approve & Sign Off Memo",
+                           regenerate_label="🔄 Regenerate Memo")
 
     # ==========================================
     # 3. RIGHT PANEL: INTERACTIVE MEMO PREVIEW

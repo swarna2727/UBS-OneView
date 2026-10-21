@@ -27,7 +27,7 @@ class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchB
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
         super().__init__("MarketIntelligenceAgent", llm_client)
 
-    def execute(self, profile: ClientAdvisoryProfile) -> ResearchBrief:
+    def execute(self, profile: ClientAdvisoryProfile, feedback: Optional[str] = None) -> ResearchBrief:
         # 1. Formulate targeted search queries from portfolio holdings and profile gaps
         tickers = [h.ticker for h in profile.parsed_holdings]
         query = f"Macro {profile.calculated_risk_tier} yield inflation equities fixed income {' '.join(tickers[:5])}"
@@ -69,6 +69,8 @@ DETERMINISTIC SENTIMENT:
 TASK:
 Synthesize a comprehensive ResearchBrief. Ensure every finding explicitly references fresh source IDs and publication dates.
 """
+        if feedback:
+            user_prompt += f"\nRELATIONSHIP MANAGER FEEDBACK ON PREVIOUS BRIEF (address this in the regenerated brief):\n{feedback}\n"
 
         brief: ResearchBrief = self.llm.generate_structured(
             system_prompt=MARKET_INTELLIGENCE_SYSTEM_PROMPT,

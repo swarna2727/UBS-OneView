@@ -9,11 +9,16 @@ A production-grade, human-in-the-loop multi-agent financial advisory platform bu
 1. **Clear Role Boundaries**: Every agent owns exactly one type of reasoning. Ideation, market intelligence, suitability critic validation, and memo compilation are strictly isolated into distinct agents with typed schemas.
 2. **Deterministic Control**: Arithmetic, portfolio weights, asset class concentration thresholds, risk scoring, liquidity coverage, and mandatory schema checks are 100% computed by pure Python deterministic tools—never delegated to LLM free-text reasoning. `src/tools/` is architecturally linted to never import LLM code.
 3. **Evidence Before Recommendation**: Every market claim requires an explicit source ID, publication date, and freshness timestamp (older than 45 days is automatically discarded). Ideas without verified fresh citations cannot pass suitability.
-4. **Lowest Effective Level of Automation & Human Accountability**: The Relationship Manager (RM) is the Human Orchestrator. The system introduces HITL interrupt checkpoints for:
-   - **Input Confirmation & Conflict Resolution** (e.g. high risk willingness vs. short-term liquidity need)
-   - **Risk Exception Overrides** (for soft FLAG concentration warnings)
-   - **Recommendation Review & Selective Regeneration** (RM can reject/revise individual ideas)
-   - **Final Advisory Memo Approval & PDF Sign-off**
+4. **Lowest Effective Level of Automation & Human Accountability**: The Relationship Manager (RM) is the Human Orchestrator. The graph pauses for an RM review **after every agent**. At each checkpoint the RM sees the agent's rendered output and can:
+   - **Approve** — continue to the next agent (flags are marked resolved with the RM's note)
+   - **Regenerate** — re-run the same agent with RM feedback (Client Profile: with edited intake fields)
+   - **Reject** — end the session, recorded in the audit trail as `REJECTED`
+
+   Stage-specific controls:
+   - **Client Profile**: approval is disabled while mandatory fields are missing — the RM must supply them and regenerate.
+   - **Investment Ideas**: regenerate a single idea (other slots stay locked) or the whole set.
+   - **Suitability Critic**: `PASS` can be approved; `FLAG` needs an `override_flag` with a justification note; `FAIL` must be sent back (`revise`) unless regeneration attempts are exhausted.
+   - **Memo**: sign off, regenerate the memo, or `revise` an individual idea.
 
 ---
 
@@ -22,23 +27,25 @@ A production-grade, human-in-the-loop multi-agent financial advisory platform bu
 ```mermaid
 flowchart TD
     START([START]) --> CP[1. Client Profile Agent]
-    CP -->|"Blocking Flags Present"| H1{{"HITL: Resolve Profile Conflict"}}
-    CP -->|"Clean Profile"| MI[2. Market Intelligence Agent]
-    H1 -->|"RM Resolves"| MI
-    MI --> IG[3. Investment Idea Agent]
-    IG --> SC[4. Suitability Critic Agent]
-    SC -->|"PASS"| MF[5. Memo Formatter Agent]
-    SC -->|"FLAG (Mild Breach)"| H2{{"HITL: Risk Exception Review"}}
-    SC -->|"FAIL (Hard Breach, retry < max)"| SEL[Mark Failed Slots / Lock Passed]
-    SC -->|"FAIL (retry >= max)"| H2
+    CP --> R1{{"RM Review: Profile"}}
+    R1 -->|"Regenerate (with edits)"| CP
+    R1 -->|"Approve"| MI[2. Market Intelligence Agent]
+    MI --> R2{{"RM Review: Research Brief"}}
+    R2 -->|"Regenerate (feedback)"| MI
+    R2 -->|"Approve"| IG[3. Investment Idea Agent]
+    IG --> R3{{"RM Review: Candidate Ideas"}}
+    R3 -->|"Regenerate idea / all ideas"| IG
+    R3 -->|"Approve"| SC[4. Suitability Critic Agent]
+    SC --> R4{{"RM Review: Suitability PASS/FLAG/FAIL"}}
+    R4 -->|"Re-run critic"| SC
+    R4 -->|"Revise failing / chosen ideas"| SEL[Mark Failed Slots / Lock Passed]
     SEL --> IG
-    H2 -->|"RM Override"| MF
-    H2 -->|"RM Reject/Revise Idea"| SEL
-    H2 -->|"Abort"| END_SESSION([END])
-    MF --> H3{{"HITL: RM Final Memo Approval"}}
-    H3 -->|"RM Accepts"| PDF[Compile 3-Page PDF]
-    H3 -->|"RM Rejects/Revises Idea"| SEL
-    PDF --> END_SESSION
+    R4 -->|"Approve (PASS) / Override (FLAG)"| MF[5. Memo Formatter Agent]
+    MF --> R5{{"RM Review: Memo Sign-off"}}
+    R5 -->|"Regenerate memo"| MF
+    R5 -->|"Revise idea"| SEL
+    R5 -->|"Approve"| END_SESSION([END: APPROVED])
+    R1 & R2 & R3 & R4 & R5 -->|"Reject"| REJ([END: REJECTED])
 ```
 
 ---
@@ -119,7 +126,7 @@ uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 |---|---|---|
 | `POST` | `/sessions` | Start advisory session with client profile input |
 | `GET` | `/sessions/{id}` | Get 3-panel workspace view projection |
-| `POST` | `/sessions/{id}/actions` | Execute RM command (`accept`, `reject`, `revise`, `override_flag`, `resolve_conflict`) |
+| `POST` | `/sessions/{id}/actions` | Execute RM review decision (`approve`, `regenerate`, `reject`, `revise`, `override_flag`, `add_advisor_note`; optional `idea_id`, `notes`, `edits`). Returns 400 if the action is not allowed at the current checkpoint. The workspace view's `pending_review` shows the agent output under review and its `allowed_actions`. |
 | `GET` | `/sessions/{id}/pdf` | Download finalized 3-page UBS advisory memo PDF |
 | `GET` | `/sessions/{id}/audit` | Full audit trail of agent executions and RM decisions |
 | `GET` | `/health` | Service health check |

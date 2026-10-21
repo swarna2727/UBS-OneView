@@ -44,3 +44,13 @@ def test_get_session_and_action_roundtrip(balanced_client_data):
     audit_resp = client.get(f"/sessions/{sid}/audit")
     assert audit_resp.status_code == 200
     assert len(audit_resp.json()["audit_trail"]) > 0
+
+def test_review_checkpoint_exposed_and_disallowed_action_rejected(incomplete_client_data):
+    create_resp = client.post("/sessions", json=incomplete_client_data)
+    assert create_resp.status_code == 201
+    body = create_resp.json()
+    assert body["pending_review"]["stage"] == "client_profile"
+    assert "approve" not in body["pending_review"]["allowed_actions"]
+
+    action_resp = client.post(f"/sessions/{body['session_id']}/actions", json={"action": "approve"})
+    assert action_resp.status_code == 400

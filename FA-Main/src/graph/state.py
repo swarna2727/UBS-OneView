@@ -31,6 +31,7 @@ class AdvisoryState(TypedDict, total=False):
     idea_feedback: Optional[str]
     regeneration_count: int
     max_regenerations: int
+    market_feedback: Optional[str]
 
     # Governance & Human-In-The-Loop tracking
     advisor_notes: Annotated[List[str], append_list]
@@ -38,5 +39,8 @@ class AdvisoryState(TypedDict, total=False):
     current_stage: str
     requires_human_action: bool
     human_action: Optional[Dict[str, Any]]
+    review_outcome: Optional[str]  # approve | regenerate | regenerate_ideas | reject
+    outcome: Optional[str]  # APPROVED | REJECTED once the session ends
+    rejected_at_stage: Optional[str]
     is_completed: bool
     error_message: Optional[str]
