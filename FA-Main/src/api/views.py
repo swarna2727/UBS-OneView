@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from src.graph.state import AdvisoryState
 from src.schemas.workspace import (
     AdvisorWorkspaceView, WorkflowStage, DecisionSpacePayload,
-    AllocationDiffRow, InteractiveMemoPreview, MemoPreviewSection
+    AllocationDiffRow, InteractiveMemoPreview, MemoPreviewSection, PendingReview
 )
 
 STAGE_CONFIG = [
@@ -12,13 +12,29 @@ STAGE_CONFIG = [
     ("market_intelligence", "Market Intelligence", "Retrieve evidence-backed market data"),
     ("investment_ideas", "Investment Ideas", "Generate complementary candidate ideas"),
     ("suitability_review", "Risk Review", "Independent critic & portfolio risk checks"),
-    ("advisor_approval", "Advisor Approval", "RM review & exception sign-off"),
-    ("final_memo", "Advisory Memo", "Audit-ready 3-page UBS advisory memo")
+    ("final_memo", "Advisory Memo", "Audit-ready 3-page UBS advisory memo"),
+    ("advisor_approval", "Advisor Sign-off", "RM final approval of the memo")
 ]
 
-def build_workspace_view(state: AdvisoryState, session_id: str) -> AdvisorWorkspaceView:
-    """Project internal graph state into the 3-panel Advisor Workspace view."""
-    current_stage_key = state.get("current_stage", "client_profile")
+AGENT_NAMES = {
+    "client_profile": "Client Profile Agent",
+    "market_intelligence": "Market Intelligence Agent",
+    "investment_ideas": "Investment Idea Agent",
+    "suitability_review": "Suitability Critic Agent",
+    "final_memo": "Memo Formatter Agent",
+    "advisor_approval": "Memo Formatter Agent"
+}
+
+def build_workspace_view(
+    state: AdvisoryState,
+    session_id: str,
+    pending_review: Optional[Dict[str, Any]] = None
+) -> AdvisorWorkspaceView:
+    """Project internal graph state (and the review checkpoint it is paused at) into the 3-panel view."""
+    # While paused, the review checkpoint defines the active stage.
+    current_stage_key = pending_review["stage"] if pending_review else state.get("current_stage", "client_profile")
+    outcome = state.get("outcome")
+    rejected_at = state.get("rejected_at_stage")
     profile = state.get("profile")
     assessment = state.get("assessment")
     ideas = state.get("candidate_ideas")
@@ -34,10 +50,17 @@ def build_workspace_view(state: AdvisoryState, session_id: str) -> AdvisorWorksp
     found_current = False
 
     stage_order = [s[0] for s in STAGE_CONFIG]
-    current_idx = stage_order.index(current_stage_key) if current_stage_key in stage_order else 0
+    if outcome == "APPROVED":
+        current_idx = len(stage_order)
+    elif outcome == "REJECTED" and rejected_at in stage_order:
+        current_idx = stage_order.index(rejected_at)
+    else:
+        current_idx = stage_order.index(current_stage_key) if current_stage_key in stage_order else 0
 
     for idx, (s_key, s_name, s_desc) in enumerate(STAGE_CONFIG):
-        if idx < current_idx:
+        if outcome == "REJECTED" and idx == current_idx:
+            status = "FAILED"
+        elif idx < current_idx:
             status = "COMPLETED"
         elif idx == current_idx:
             if state.get("requires_human_action"):
@@ -95,26 +118,31 @@ def build_workspace_view(state: AdvisoryState, session_id: str) -> AdvisorWorksp
             is_breached=any("SINGLE_STOCK" in b.rule_id for b in risk_warnings)
         ))
 
-    allowed_actions = ["accept", "add_advisor_note"]
-    if current_stage_key in ["suitability_review", "advisor_approval"]:
-        allowed_actions.extend(["reject", "revise", "override_flag"])
-    elif current_stage_key == "client_profile":
-        allowed_actions.extend(["resolve_conflict"])
+    allowed_actions = list(pending_review.get("allowed_actions", [])) if pending_review else []
+    allowed_actions.append("add_advisor_note")
+
+    if pending_review:
+        stage_summary = f"{pending_review['agent']} output for {client_name} is awaiting your review."
+    elif outcome:
+        stage_summary = f"Advisory session for {client_name} ended: {outcome}."
+    else:
+        stage_summary = (
+            f"Reviewing recommendations for {client_name}. "
+            f"Suitability Status: {assessment.overall_status if assessment else 'PENDING'}."
+        )
 
     center_panel = DecisionSpacePayload(
         current_stage=current_stage_key,
-        active_agent_name=f"Agent: {current_stage_key.replace('_', ' ').title()}",
-        stage_summary=(
-            f"Reviewing recommendations for {client_name}. "
-            f"Suitability Status: {assessment.overall_status if assessment else 'PENDING'}."
-        ),
+        active_agent_name=AGENT_NAMES.get(current_stage_key, current_stage_key.replace('_', ' ').title()),
+        stage_summary=stage_summary,
         allocation_diffs=allocation_diffs,
         risk_warnings=risk_warnings,
         requires_human_action=state.get("requires_human_action", False),
-        interrupt_reason=state.get("error_message") or (assessment.critic_notes if assessment else None),
+        interrupt_reason=state.get("error_message") or (pending_review["reason"] if pending_review else None),
         allowed_actions=allowed_actions,
         data_payload={
             "risk_tier": profile.calculated_risk_tier if profile else "N/A",
+            "suitability_status": assessment.overall_status if assessment else "PENDING",
             "candidate_ideas": [i.model_dump() for i in ideas.ideas] if ideas else [],
             "critic_notes": assessment.critic_notes if assessment else "Pending review"
         }
@@ -181,5 +209,7 @@ def build_workspace_view(state: AdvisoryState, session_id: str) -> AdvisorWorksp
         workflow_stages=stages,
         center_panel=center_panel,
         right_panel=right_panel,
-        advisor_notes=state.get("advisor_notes") or []
+        advisor_notes=state.get("advisor_notes") or [],
+        pending_review=PendingReview(**pending_review) if pending_review else None,
+        outcome=outcome
     )

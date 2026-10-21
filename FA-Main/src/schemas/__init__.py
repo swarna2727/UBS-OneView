@@ -17,7 +17,7 @@ from src.schemas.advisory import (
 from src.schemas.workspace import (
     WorkflowStage, AllocationDiffRow, DecisionSpacePayload,
     MemoPreviewSection, InteractiveMemoPreview, AdvisorWorkspaceView,
-    AdvisorActionRequest
+    AdvisorActionRequest, PendingReview
 )
 
 __all__ = [
@@ -33,5 +33,6 @@ __all__ = [
     "ExecutiveIdeaGlance",
     "WorkflowStage", "AllocationDiffRow", "DecisionSpacePayload",
     "MemoPreviewSection", "InteractiveMemoPreview", "AdvisorWorkspaceView",
-    "AdvisorActionRequest"
+    "AdvisorActionRequest",
+    "PendingReview"
 ]

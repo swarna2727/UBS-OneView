@@ -10,6 +10,7 @@ from src.graph.workflow import build_advisory_graph
 from src.graph.state import AdvisoryState
 from src.schemas.workspace import AdvisorWorkspaceView, AdvisorActionRequest
 from src.api.views import build_workspace_view
+from src.graph.routing import normalize_action
 from src.llm.base import LLMClientProtocol
 
 logger = logging.getLogger("AdvisorySessionService")
@@ -48,61 +49,73 @@ class AdvisorySessionService:
 
         logger.info(f"Starting advisory session: {sid}")
 
-        # Run graph
         try:
-            result = self.graph.invoke(initial_state, config=config)
-            # Check if interrupted
-            state_snapshot = self.graph.get_state(config)
-            is_interrupted = len(state_snapshot.tasks) > 0 and any(len(t.interrupts) > 0 for t in state_snapshot.tasks)
-            current_state = state_snapshot.values
-            current_state["requires_human_action"] = is_interrupted
-
-            self.active_sessions[sid] = current_state
-            return build_workspace_view(current_state, sid)
+            self.graph.invoke(initial_state, config=config)
+            return self._current_view(sid)
         except Exception as e:
             logger.error(f"Error in session {sid}: {e}")
             raise
 
-    def get_workspace_view(self, session_id: str) -> AdvisorWorkspaceView:
-        """Fetch current 3-panel workspace projection for a session."""
+    def _snapshot(self, session_id: str):
         config = {"configurable": {"thread_id": session_id}}
         state_snapshot = self.graph.get_state(config)
         if not state_snapshot.values:
             raise KeyError(f"Advisory session '{session_id}' not found.")
+        return state_snapshot
 
-        current_state = state_snapshot.values
-        is_interrupted = len(state_snapshot.tasks) > 0 and any(len(t.interrupts) > 0 for t in state_snapshot.tasks)
-        current_state["requires_human_action"] = is_interrupted
-        return build_workspace_view(current_state, session_id)
+    def get_pending_review(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return the interrupt payload of the review checkpoint the graph is paused at, if any."""
+        for task in self._snapshot(session_id).tasks:
+            if task.interrupts:
+                return task.interrupts[0].value
+        return None
+
+    def _current_view(self, session_id: str) -> AdvisorWorkspaceView:
+        current_state = dict(self._snapshot(session_id).values)
+        pending_review = self.get_pending_review(session_id)
+        current_state["requires_human_action"] = pending_review is not None
+        self.active_sessions[session_id] = current_state
+        return build_workspace_view(current_state, session_id, pending_review)
+
+    def get_workspace_view(self, session_id: str) -> AdvisorWorkspaceView:
+        """Fetch current 3-panel workspace projection for a session."""
+        return self._current_view(session_id)
 
     def execute_action(
         self,
         session_id: str,
         action_request: AdvisorActionRequest
     ) -> AdvisorWorkspaceView:
-        """Resume execution from an HITL interrupt with advisor command."""
+        """Resume execution from an HITL review checkpoint with an advisor command."""
         config = {"configurable": {"thread_id": session_id}}
         logger.info(f"Executing advisor action '{action_request.action}' on session: {session_id}")
 
-        action_dict = action_request.model_dump()
+        # Notes are recorded without resuming the graph, so they never act as a review decision.
+        if action_request.action == "add_advisor_note":
+            self._snapshot(session_id)
+            if action_request.notes:
+                was_paused = self.get_pending_review(session_id) is not None
+                self.graph.update_state(config, {"advisor_notes": [action_request.notes]})
+                if was_paused:
+                    # update_state clears the pending interrupt; re-enter the review node to restore it.
+                    self.graph.invoke(None, config=config)
+            return self._current_view(session_id)
+
+        pending_review = self.get_pending_review(session_id)
+        if pending_review is None:
+            raise ValueError(f"Advisory session '{session_id}' is not waiting for an advisor review.")
+
+        stage = pending_review["stage"]
+        action = normalize_action(stage, action_request.action)
+        if action not in pending_review.get("allowed_actions", []):
+            raise ValueError(
+                f"Action '{action_request.action}' is not allowed at the '{stage}' review. "
+                f"Allowed: {pending_review.get('allowed_actions', [])}"
+            )
 
         try:
-            # Resume graph using Command(resume=action_dict)
-            self.graph.invoke(Command(resume=action_dict), config=config)
-
-            state_snapshot = self.graph.get_state(config)
-            is_interrupted = len(state_snapshot.tasks) > 0 and any(len(t.interrupts) > 0 for t in state_snapshot.tasks)
-            current_state = state_snapshot.values
-            current_state["requires_human_action"] = is_interrupted
-
-            # If advisor added a note
-            if action_request.action == "add_advisor_note" and action_request.notes:
-                notes = current_state.get("advisor_notes") or []
-                notes.append(action_request.notes)
-                current_state["advisor_notes"] = notes
-
-            self.active_sessions[session_id] = current_state
-            return build_workspace_view(current_state, session_id)
+            self.graph.invoke(Command(resume=action_request.model_dump()), config=config)
+            return self._current_view(session_id)
         except Exception as e:
             logger.error(f"Error executing action on session {session_id}: {e}")
             raise

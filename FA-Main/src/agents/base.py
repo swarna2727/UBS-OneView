@@ -19,16 +19,16 @@ class BaseAdvisoryAgent(ABC, Generic[InT, OutT]):
         self.llm = llm_client or GeminiAdvisoryLLMClient()
 
     @abstractmethod
-    def execute(self, inputs: InT) -> OutT:
+    def execute(self, inputs: InT, **kwargs: Any) -> OutT:
         """Execute agent's isolated reasoning with deterministic tools and LLM synthesis."""
         pass
 
-    def run(self, inputs: InT) -> OutT:
+    def run(self, inputs: InT, **kwargs: Any) -> OutT:
         """Execution wrapper with logging and timing."""
         start_time = time.time()
         self.logger.info(f"Agent [{self.name}] starting execution.")
         try:
-            result = self.execute(inputs)
+            result = self.execute(inputs, **kwargs)
             duration = round((time.time() - start_time) * 1000, 2)
             self.logger.info(f"Agent [{self.name}] completed in {duration}ms.")
             return result
