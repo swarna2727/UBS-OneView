@@ -1,5 +1,6 @@
 """LangGraph orchestration layer for the human-led multi-agent advisory system (slides 8, 15, 26)."""
 
+import os
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from langgraph.graph import StateGraph, START, END
@@ -26,7 +27,7 @@ from src.schemas.advisory import InvestmentIdea, CandidateIdeaSet
 from src.tools.memo_tools import pdf_memo_renderer
 from src.llm.base import LLMClientProtocol
 
-PDF_DIR = "data/pipeline_data"
+PDF_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "pipeline_data")
 
 def checkpoint_serializer() -> JsonPlusSerializer:
     """Allow-list the advisory Pydantic models that are stored in graph checkpoints."""
