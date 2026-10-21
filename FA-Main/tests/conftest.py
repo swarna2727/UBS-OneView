@@ -2,7 +2,11 @@
 
 import os
 import json
+import tempfile
 import pytest
+
+# Keep audit run logs from tests out of data/runs.
+os.environ.setdefault("RUN_LOG_DIR", tempfile.mkdtemp(prefix="ubs_runlog_"))
 from src.llm.fake import FakeAdvisoryLLMClient
 
 @pytest.fixture

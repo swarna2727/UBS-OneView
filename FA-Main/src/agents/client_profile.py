@@ -8,7 +8,10 @@ from src.schemas.advisory import (
 from src.tools.profile_tools import (
     required_field_validator, risk_profile_calculator, portfolio_parser
 )
+from src.tools.risk_engine import load_policy
 from src.llm.base import LLMClientProtocol
+
+LIQUIDITY_WINDOW_MONTHS = load_policy()["rules"]["L1_liquidity_coverage"]["window_months"]
 
 class ClientProfileAgent(BaseAdvisoryAgent[Dict[str, Any], ClientAdvisoryProfile]):
     """
@@ -45,7 +48,7 @@ class ClientProfileAgent(BaseAdvisoryAgent[Dict[str, Any], ClientAdvisoryProfile
         if calc_risk.has_capacity_conflict:
             flags.append(ProfileFlag(
                 code="RISK_CAPACITY_CONFLICT",
-                severity="BLOCKING_INTERRUPT",
+                severity="WARNING",  # R5: FLAG, lower band applied; the advisor resolves it at profile review
                 message=calc_risk.conflict_rationale or "Risk willingness conflicts with short-term liquidity capacity.",
                 affected_fields=["stated_risk_willingness", "time_horizon_months", "liquidity_schedule"]
             ))
@@ -112,5 +115,10 @@ class ClientProfileAgent(BaseAdvisoryAgent[Dict[str, Any], ClientAdvisoryProfile
             current_asset_class_weights=parsed_holdings_data.asset_class_weights,
             current_region_weights=parsed_holdings_data.region_weights,
             current_currency_weights=parsed_holdings_data.currency_weights,
-            unresolved_flags=flags
+            unresolved_flags=flags,
+            base_currency=str(inputs.get("base_currency", "USD")).upper(),
+            advisor_notes=str(inputs.get("advisor_notes", "")),
+            near_term_liquidity_need=sum(
+                e.amount for e in liquidity_schedule if e.due_months <= LIQUIDITY_WINDOW_MONTHS
+            )
         )

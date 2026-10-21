@@ -1,150 +1,139 @@
 # UBS Human-Led Multi-Agent Financial Advisory System
 
-A production-grade, human-in-the-loop multi-agent financial advisory platform built with **LangGraph**, **Pydantic v2**, and **FastAPI / Streamlit**, fully complying with the UBS wealth management advisory and risk governance architecture.
+A human-led multi-agent investment advisory application for UBS financial advisors (Relationship Managers), built with **LangGraph**, **Pydantic v2**, **OpenRouter**, **FastAPI** and **Streamlit**. It follows the *Personalized Financial Advisory (AAFS v2)* design: the app is the advisor's decision workspace, and the PDF memo is the final advisory artifact.
 
 ---
 
-## 1. Architectural Principles & Governance
+## 1. Design Principles
 
-1. **Clear Role Boundaries**: Every agent owns exactly one type of reasoning. Ideation, market intelligence, suitability critic validation, and memo compilation are strictly isolated into distinct agents with typed schemas.
-2. **Deterministic Control**: Arithmetic, portfolio weights, asset class concentration thresholds, risk scoring, liquidity coverage, and mandatory schema checks are 100% computed by pure Python deterministic tools—never delegated to LLM free-text reasoning. `src/tools/` is architecturally linted to never import LLM code.
-3. **Evidence Before Recommendation**: Every market claim requires an explicit source ID, publication date, and freshness timestamp (older than 45 days is automatically discarded). Ideas without verified fresh citations cannot pass suitability.
-4. **Lowest Effective Level of Automation & Human Accountability**: The Relationship Manager (RM) is the Human Orchestrator. The graph pauses for an RM review **after every agent**. At each checkpoint the RM sees the agent's rendered output and can:
-   - **Approve** — continue to the next agent (flags are marked resolved with the RM's note)
-   - **Regenerate** — re-run the same agent with RM feedback (Client Profile: with edited intake fields)
-   - **Reject** — end the session, recorded in the audit trail as `REJECTED`
-
-   Stage-specific controls:
-   - **Client Profile**: approval is disabled while mandatory fields are missing — the RM must supply them and regenerate.
-   - **Investment Ideas**: regenerate a single idea (other slots stay locked) or the whole set.
-   - **Suitability Critic**: `PASS` can be approved; `FLAG` needs an `override_flag` with a justification note; `FAIL` must be sent back (`revise`) unless regeneration attempts are exhausted.
-   - **Memo**: sign off, regenerate the memo, or `revise` an individual idea.
+1. **Clear role boundaries**: five agents, each owning one kind of reasoning, hand off typed Pydantic objects.
+2. **Human accountability by design**: the advisor confirms inputs, reviews research, decides on recommendations and approves the memo. No PDF exists before advisor sign-off.
+3. **Evidence before recommendation**: every market claim carries a source and publication date; sources older than 30 days are excluded (R8).
+4. **Deterministic control where possible**: risk scores, exposures, allocation totals and every suitability rule run in pure Python (`src/tools/`, linted to never import LLM code). Models handle language, relevance and synthesis.
+5. **Lowest effective level of automation**: research and drafting are automated; client understanding, exceptions and final approval stay with the advisor.
 
 ---
 
-## 2. Multi-Agent Pipeline & State Machine
+## 2. Workflow and Advisor Checkpoints
 
 ```mermaid
 flowchart TD
-    START([START]) --> CP[1. Client Profile Agent]
-    CP --> R1{{"RM Review: Profile"}}
-    R1 -->|"Regenerate (with edits)"| CP
+    START([Advisor enters client]) --> CP[1. Client Profile Agent]
+    CP --> R1{{"Advisor: confirm inputs / resolve conflicts"}}
+    R1 -->|"Regenerate with edited fields"| CP
     R1 -->|"Approve"| MI[2. Market Intelligence Agent]
-    MI --> R2{{"RM Review: Research Brief"}}
-    R2 -->|"Regenerate (feedback)"| MI
+    MI --> R2{{"Advisor: inspect research and sources"}}
+    R2 -->|"Regenerate with feedback"| MI
     R2 -->|"Approve"| IG[3. Investment Idea Agent]
-    IG --> R3{{"RM Review: Candidate Ideas"}}
-    R3 -->|"Regenerate idea / all ideas"| IG
-    R3 -->|"Approve"| SC[4. Suitability Critic Agent]
-    SC --> R4{{"RM Review: Suitability PASS/FLAG/FAIL"}}
-    R4 -->|"Re-run critic"| SC
-    R4 -->|"Revise failing / chosen ideas"| SEL[Mark Failed Slots / Lock Passed]
+    IG --> SC[4. Suitability Critic + rule engine]
+    SC -->|"FAIL, retries left (R10)"| SEL[Lock passing ideas, regenerate failed ones]
     SEL --> IG
-    R4 -->|"Approve (PASS) / Override (FLAG)"| MF[5. Memo Formatter Agent]
-    MF --> R5{{"RM Review: Memo Sign-off"}}
-    R5 -->|"Regenerate memo"| MF
-    R5 -->|"Revise idea"| SEL
-    R5 -->|"Approve"| END_SESSION([END: APPROVED])
-    R1 & R2 & R3 & R4 & R5 -->|"Reject"| REJ([END: REJECTED])
+    SC -->|"PASS / FLAG / FAIL escalated"| R3{{"Advisor: recommendation review"}}
+    R3 -->|"Revise idea / regenerate all"| IG
+    R3 -->|"Edit allocation"| SC
+    R3 -->|"Accept (PASS) / documented exception (FLAG)"| MF[5. Memo Formatter Agent]
+    MF --> R4{{"Advisor: final approval"}}
+    R4 -->|"Regenerate memo"| MF
+    R4 -->|"Revise idea"| IG
+    R4 -->|"Edit allocation"| SC
+    R4 -->|"Approve"| PDF[Generate PDF] --> DONE([APPROVED])
+    R1 & R2 & R3 & R4 -->|"Reject"| REJ([REJECTED])
 ```
 
----
+| Checkpoint | Advisor actions | Notes |
+|---|---|---|
+| Client profile | `approve`, `regenerate` (with `edits` to the intake fields), `reject` | Approve is unavailable while mandatory fields are missing (R1). Approving resolves flags such as R5 with the advisor's note. |
+| Research brief | `approve`, `regenerate` (notes become feedback), `reject` | Advisor can inspect every source and its date. |
+| Recommendations | `approve` (PASS only), `override_flag` (FLAG, note required), `revise` (one idea via `idea_id`, others locked), `edit_allocation`, `regenerate` (all ideas), `reject` | A FAIL can never be approved. FAILed ideas are regenerated automatically up to 2 times per idea before reaching the advisor (R10). An edited allocation is re-validated and returned to the advisor, never auto-regenerated. |
+| Final approval | `approve` (generates the PDF), `regenerate`, `revise`, `edit_allocation`, `reject` | Approve is unavailable if the memo fails R9 wording or the consistency check. |
 
-## 3. The 5 Specialized Advisory Agents
-
-### Agent 1: Client Profile Agent (`src/agents/client_profile.py`)
-- **Role**: Ingest, standardize, reconcile, and validate advisor-entered client inputs (goals, horizon, liquidity needs, risk tolerance, current holdings).
-- **Deterministic Tools**:
-  - `required_field_validator(profile_dict) -> ValidationResult`
-  - `risk_profile_calculator(questionnaire_data) -> CalculatedRiskTier`
-  - `portfolio_parser(raw_holdings) -> StandardizedHoldings`
-- **Guardrail**: Compares risk willingness vs risk capacity. If a client states aggressive risk tolerance but has a short-term 18-month liquidity commitment, raises `RISK_CAPACITY_CONFLICT` and triggers an interrupt. Cannot infer missing information.
-
-### Agent 2: Market Intelligence Agent (`src/agents/market_intelligence.py`)
-- **Role**: Transform broad macro research and market data into evidence-backed intelligence filtered for client profile gaps.
-- **Deterministic Tools**:
-  - `quantitative_analysis_tool(ticker) -> QuantMetrics` (1Y/3Y returns, vol, max drawdown, momentum, P/E)
-  - `sentiment_analysis_tool(corpus_docs) -> SentimentBreakdown`
-  - `retrieval_rag_tool(query, asset_universe) -> List[DocumentSnippet]`
-  - `source_freshness_validator(snippets, max_age_days=45) -> ValidatedSnippets`
-- **Guardrail**: Every finding has attached source IDs, publication dates, and freshness tags. Stale evidence (>45 days) is automatically discarded.
-
-### Agent 3: Investment Idea Agent (`src/agents/investment_idea.py`)
-- **Role**: Synthesize profile and research brief into candidate investment opportunities.
-- **Behavior**:
-  - Generates **exactly three** complementary candidate ideas covering distinct portfolio roles (`GROWTH`, `INCOME`, `STABILITY`, `DIVERSIFICATION`).
-  - **Selective Regeneration**: If Idea #2 is rejected by RM or Critic, Ideas #1 and #3 are locked and preserved verbatim. Only Slot #2 is regenerated.
-- **Deterministic Tools**:
-  - `approved_product_universe_tool(asset_filters) -> List[ApprovedInstrument]`
-  - `portfolio_exposure_calculator(current_holdings, proposed_trades) -> ExposureDelta`
-
-### Agent 4: Suitability Critic Agent (`src/agents/suitability_critic.py`)
-- **Role**: Independent risk engine validating candidate ideas against client profile and institutional limits.
-- **Status Gates**:
-  - **`PASS`**: Meets all limits; routes directly to Memo Formatter.
-  - **`FLAG`**: Soft guideline breach (e.g. single stock 20-30%, US equity 50-65%); pauses graph for RM exception review.
-  - **`FAIL`**: Hard breach (single stock > 30%, US equity > 65%, liquidity coverage < 1.0x, missing/stale evidence); routes back to selective regeneration.
-- **Deterministic Tools**:
-  - `portfolio_risk_engine(current_portfolio, candidate_ideas) -> RiskMetrics`
-  - `suitability_rule_engine(client_profile, proposed_portfolio) -> RuleCheckResult`
-  - `evidence_integrity_check(candidate_ideas, research_brief) -> EvidenceStatus`
-
-### Agent 5: Memo Formatter Agent (`src/agents/memo_formatter.py`)
-- **Role**: Compile approved ideas and risk findings into a standardized 3-page audit-ready UBS advisory memo and ReportLab PDF artifact:
-  - **Page 1: Executive Recommendation**: Client snapshot, objective, and recommendations at a glance table.
-  - **Page 2: Investment Idea Details**: Specifications, theses, catalysts, allocation ranges, key risks, invalidation triggers, and citations.
-  - **Page 3: Portfolio View & Disclosures**: Portfolio-level impact, stress test scenario analysis, risk disclosures, and RM signature block.
-- **Deterministic Tools**:
-  - `memo_consistency_validator(critic_output, memo_content) -> bool`
-  - `citation_source_mapper(memo_text, evidence_list) -> List[str]`
-  - `pdf_memo_renderer(structured_memo, output_path) -> str`
+`add_advisor_note` can be sent at any time; it is logged but never acts as a review decision. Advisor notes and feedback are passed to models as quoted data, not instructions.
 
 ---
 
-## 4. 3-Panel Advisor Workspace Frontend (Slide 20)
+## 3. Suitability Rule Engine (`src/tools/risk_engine.py`, `config/suitability_policy.yaml`)
 
-Launch the Streamlit workspace:
+| # | Check | Default | Outcome |
+|---|---|---|---|
+| R1 | Mandatory fields: objective, horizon, risk profile, liquidity need, investable amount | any missing | BLOCK |
+| R2 | Instrument in the approved universe file | not found | FAIL |
+| R3 | Post-trade allocations sum to 100% (purchases are funded) | ±0.01 pt | FAIL |
+| R4 | Proposed portfolio risk score within the client's band | band ceiling | FAIL (FLAG if an existing breach is not worsened) |
+| R5 | Risk willingness above risk capacity | any gap | FLAG, lower band applied |
+| R6 | Growth-asset share when the horizon is 3 years or less | cap 30% | FAIL (FLAG if existing, not worsened) |
+| R7 | Single market, sector or instrument share after the change | 30% (instrument: client limit if lower) | FLAG existing, FAIL if new or worsened |
+| R8 | Every cited source retrieved and within the freshness limit | 30 days | FAIL missing, FLAG stale |
+| R9 | Prohibited wording ("guaranteed", "risk-free"); negated uses allowed | any match | FAIL |
+| R10 | Automatic regenerations of the same idea | max 2 | Escalate to advisor |
+| L1 | Liquid assets cover liquidity needs due within 24 months | 1.0x | FAIL (FLAG if existing, not worsened) |
+
+Thresholds are illustrative defaults held in configuration and must be calibrated against UBS suitability policy before any pilot. A portfolio-level FAIL is attributed to the smallest set of ideas whose removal fixes it, so only those slots are regenerated.
+
+---
+
+## 4. The Five Agents
+
+| Agent | Role | Deterministic tools |
+|---|---|---|
+| Client Profile (`client_profile.py`) | Standardise advisor inputs, compute risk band (lower of willingness and capacity), flag gaps and conflicts | `required_field_validator`, `risk_profile_calculator`, `portfolio_parser` |
+| Market Intelligence (`market_intelligence.py`) | Retrieve and synthesise client-relevant research with sources and dates | `retrieval_rag_tool`, `source_freshness_validator`, `quantitative_analysis_tool`, `sentiment_analysis_tool` |
+| Investment Idea (`investment_idea.py`) | Three complementary ideas from the approved universe, each with role, conviction, risks, invalidation trigger and alternative considered | `approved_product_universe_tool`, `portfolio_exposure_calculator` |
+| Suitability Critic (`suitability_critic.py`) | PASS / FLAG / FAIL per idea and overall from the rule engine | `suitability_rule_engine` |
+| Memo Formatter (`memo_formatter.py`) | 3-page memo: executive recommendation, idea details, portfolio view; restates guarantee requests as targets; R9 and consistency checks | `memo_consistency_validator`, `citation_source_mapper`, `pdf_memo_renderer` |
+
+---
+
+## 5. Models (OpenRouter)
+
+Set an OpenRouter key to use hosted models; without it the app runs in a deterministic **offline mode** (canned agent outputs, useful for demos and tests).
+
 ```bash
-streamlit run streamlit_app.py
+export OPENROUTER_API_KEY=...
+export OPENROUTER_MODEL=anthropic/claude-sonnet-4.5             # default model for every agent
+export OPENROUTER_MODEL_INVESTMENTIDEAAGENT=openai/gpt-4.1      # optional per-agent override
 ```
 
-The workspace provides:
-1. **Left Panel (Workflow Progress)**: Real-time stage tracking across `[Client Profile, Research, Investment Ideas, Risk Review, Advisor Approval, Memo]` with status badges (`✅ Done`, `🔄 Active`, `⚠️ RM Action`). Includes an Advisor Notes log.
-2. **Center Panel (Decision Space)**: Displays stage output, before-and-after allocation shift tables, risk warning boxes with exact breach metrics, candidate idea cards, and RM command buttons (`Accept`, `Reject(idea_id)`, `Revise(idea_id, notes)`, `Confirm Exception Override`, `Resolve Profile Conflict`).
-3. **Right Panel (Interactive Memo Preview)**: Dynamic preview highlighting the exact paragraph or table affected by the active workflow stage, plus one-click download for the compiled 3-page PDF memo artifact.
+Agent outputs are validated against their Pydantic schema; invalid output is retried once with the validation errors, then the agent raises `LLMUnavailableError` ("data unavailable") instead of guessing. The model and prompt version of every agent call are written to the run log.
 
 ---
 
-## 5. REST API Endpoints (FastAPI)
+## 6. Audit Run Log
 
-Run the backend API:
+Each session is one run ID. `data/runs/<session_id>.jsonl` (override with `RUN_LOG_DIR`) records the client inputs, policy version, every agent output with model and prompt version, rule results, automatic regenerations, advisor decisions and notes, PDF generation and the final outcome. `GET /sessions/{id}/audit` returns it.
+
+---
+
+## 7. Running
+
 ```bash
-uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+pip install -r requirements.txt
+streamlit run streamlit_app.py                                   # advisor workspace
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload      # REST API
+python -m pytest tests/ -v                                       # offline test suite
 ```
+
+### Demo clients (`data/samples/client_profiles.json`)
+
+| Client | Profile | Control shown |
+|---|---|---|
+| Sarah, 38 | S$750k, moderate, 7-year property goal, 42% US equities, wants income | US growth idea fails R4/R7 and is regenerated automatically; existing US concentration is a FLAG the advisor documents |
+| Daniel, 29 | S$220k, "comfortable with high risk", S$180k deposit in 15 months | R5 willingness vs capacity: band lowered to Conservative; growth capped (R6) |
+| Mdm Lim, 62 | S$1.2M, low-moderate risk, retiring in 3 years, wants a "guaranteed 6%" | Memo restates the request as a target and states returns cannot be guaranteed (R9) |
+| Aaron, 45 | S$400k, moderate, no horizon given | R1 blocks the workflow until the horizon is supplied |
+
+### REST API
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/sessions` | Start advisory session with client profile input |
-| `GET` | `/sessions/{id}` | Get 3-panel workspace view projection |
-| `POST` | `/sessions/{id}/actions` | Execute RM review decision (`approve`, `regenerate`, `reject`, `revise`, `override_flag`, `add_advisor_note`; optional `idea_id`, `notes`, `edits`). Returns 400 if the action is not allowed at the current checkpoint. The workspace view's `pending_review` shows the agent output under review and its `allowed_actions`. |
-| `GET` | `/sessions/{id}/pdf` | Download finalized 3-page UBS advisory memo PDF |
-| `GET` | `/sessions/{id}/audit` | Full audit trail of agent executions and RM decisions |
-| `GET` | `/health` | Service health check |
+| `POST` | `/sessions` | Start a session with the client intake; runs to the first advisor checkpoint |
+| `GET` | `/sessions/{id}` | Workspace view, including `pending_review` (agent output, `allowed_actions`) |
+| `POST` | `/sessions/{id}/actions` | Advisor decision: `approve`, `regenerate`, `reject`, `revise`, `override_flag`, `edit_allocation`, `add_advisor_note` (optional `idea_id`, `notes`, `edits`). 400 if not allowed at the current checkpoint |
+| `GET` | `/sessions/{id}/pdf` | Approved memo PDF (exists only after final approval) |
+| `GET` | `/sessions/{id}/audit` | Audit trail and full run log |
+| `GET` | `/health` | Health check |
 
----
+### Tests
 
-## 6. Running the Validation Test Suite
-
-Run all unit, deterministic, and integration trajectory tests offline:
-```bash
-python -m pytest tests/ -v
-```
-
-### Test Coverage Highlights:
-- **`tests/unit/test_schemas.py`**: Asserts `CandidateIdeaSet` strictly validates exactly 3 complementary ideas across slots 1, 2, 3 with distinct instruments.
-- **`tests/unit/test_risk_engine.py`**: Asserts single-stock concentration >30% triggers `FAIL`, 20-30% triggers `FLAG`, and compliant portfolios trigger `PASS`.
-- **`tests/unit/test_profile_tools.py`**: Asserts risk willingness vs capacity contradiction detection (short-term 18-month liquidity need vs aggressive willingness).
-- **`tests/unit/test_retrieval_freshness.py`**: Asserts stale evidence (>45 days) is discarded; fresh evidence kept.
-- **`tests/unit/test_memo_consistency.py`**: Asserts memo validator fails if memo alters tickers or allocations; verifies 3-page ReportLab PDF generation.
-- **`tests/unit/test_architecture_lint.py`**: Asserts `src/tools/` contains zero LLM imports.
-- **`tests/integration/test_trajectories.py`**: Asserts `FAIL` status routes to regeneration and **never reaches memo formatter directly**; asserts selective regeneration locks passed ideas while only regenerating rejected slots; verifies full trajectory to final PDF memo.
+- `tests/unit/test_risk_engine.py`: every rule R1-R10 and L1, existing-vs-worsened outcomes, idea attribution.
+- `tests/unit/test_openrouter_client.py`: schema validation, retry on invalid output, fail-safe error, per-agent models.
+- `tests/integration/test_trajectories.py`: full trajectory with PDF only after approval; automatic regeneration then R10 escalation; a FAIL never reaches the memo; selective revision locks other ideas; allocation edits re-validated; FLAG needs a documented exception; demo-client controls; audit log contents.

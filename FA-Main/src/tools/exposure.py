@@ -10,7 +10,7 @@ DATA_UNIVERSE_PATH = os.path.join(
     "data", "universe", "approved_products.json"
 )
 
-def _get_instrument_metadata(ticker: str) -> Dict[str, Any]:
+def get_instrument_metadata(ticker: str) -> Dict[str, Any]:
     if os.path.exists(DATA_UNIVERSE_PATH):
         with open(DATA_UNIVERSE_PATH, "r", encoding="utf-8") as f:
             products = json.load(f)
@@ -24,8 +24,15 @@ def _get_instrument_metadata(ticker: str) -> Dict[str, Any]:
         "currency": "USD",
         "risk_rating": 3,
         "complexity_rating": 1,
-        "liquidity_tier": "Daily"
+        "liquidity_tier": "Daily",
+        "sector": "Diversified",
+        "instrument_type": "Single Stock"
     }
+
+_HOLDING_FIELDS = [
+    "name", "asset_class", "region", "currency", "risk_rating",
+    "complexity_rating", "liquidity_tier", "sector", "instrument_type"
+]
 
 def portfolio_exposure_calculator(
     current_holdings: List[Holding],
@@ -39,16 +46,7 @@ def portfolio_exposure_calculator(
     # Build dictionary of current weights
     holdings_dict: Dict[str, Dict[str, Any]] = {}
     for h in current_holdings:
-        holdings_dict[h.ticker.upper()] = {
-            "name": h.name,
-            "asset_class": h.asset_class,
-            "region": h.region,
-            "currency": h.currency,
-            "weight_pct": h.weight_pct,
-            "risk_rating": h.risk_rating,
-            "complexity_rating": h.complexity_rating,
-            "liquidity_tier": h.liquidity_tier
-        }
+        holdings_dict[h.ticker.upper()] = {**{f: getattr(h, f) for f in _HOLDING_FIELDS}, "weight_pct": h.weight_pct}
 
     # Apply proposed trades
     for trade in proposed_trades:
@@ -57,7 +55,7 @@ def portfolio_exposure_calculator(
         target_pct = float(trade.get("target_weight_pct", 0.0))
         funding_source = str(trade.get("funding_source_ticker", "BIL")).strip().upper()
 
-        meta = _get_instrument_metadata(ticker)
+        meta = get_instrument_metadata(ticker)
 
         if action in ["BUY", "ADD"]:
             current_weight = holdings_dict.get(ticker, {}).get("weight_pct", 0.0)
@@ -75,7 +73,9 @@ def portfolio_exposure_calculator(
                     "weight_pct": delta,
                     "risk_rating": meta.get("risk_rating", 3),
                     "complexity_rating": meta.get("complexity_rating", 1),
-                    "liquidity_tier": meta.get("liquidity_tier", "Daily")
+                    "liquidity_tier": meta.get("liquidity_tier", "Daily"),
+                    "sector": meta.get("sector", "Diversified"),
+                    "instrument_type": meta.get("instrument_type", "Fund")
                 }
 
             # Deduct delta from funding source (e.g. BIL or CASH)
@@ -108,7 +108,9 @@ def portfolio_exposure_calculator(
                         "weight_pct": delta,
                         "risk_rating": 1,
                         "complexity_rating": 1,
-                        "liquidity_tier": "Daily"
+                        "liquidity_tier": "Daily",
+                        "sector": "Diversified",
+                        "instrument_type": "Cash"
                     }
 
     # Normalize weights if there's minor floating drift
@@ -119,14 +121,8 @@ def portfolio_exposure_calculator(
             norm_wt = (item["weight_pct"] / total_post_weight) * 100.0 if total_post_weight > 0 else 0.0
             after_holdings.append(Holding(
                 ticker=tkr,
-                name=item["name"],
-                asset_class=item["asset_class"],
-                region=item["region"],
-                currency=item["currency"],
-                weight_pct=round(norm_wt, 2),
-                risk_rating=item["risk_rating"],
-                complexity_rating=item["complexity_rating"],
-                liquidity_tier=item["liquidity_tier"]
+                **{f: item[f] for f in _HOLDING_FIELDS},
+                weight_pct=round(norm_wt, 2)
             ))
 
     # Calculate Deltas
@@ -158,5 +154,6 @@ def portfolio_exposure_calculator(
         single_stock_weights=single_stock_weights,
         top_concentration_ticker=top_ticker,
         top_concentration_weight=top_weight,
-        total_after_weight=round(sum(h.weight_pct for h in after_holdings), 2)
+        total_after_weight=round(sum(h.weight_pct for h in after_holdings), 2),
+        unnormalized_after_weight=round(total_post_weight, 4)
     )

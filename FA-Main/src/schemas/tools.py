@@ -32,6 +32,8 @@ class Holding(BaseModel):
     risk_rating: int = Field(default=3, ge=1, le=7)
     complexity_rating: int = Field(default=1, ge=1, le=5)
     liquidity_tier: str = Field(default="Daily")
+    sector: str = Field(default="Diversified")  # e.g. "Technology"; funds are "Diversified"
+    instrument_type: Literal["Single Stock", "Fund", "Cash"] = "Fund"
 
 class StandardizedHoldings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -103,6 +105,8 @@ class ApprovedInstrument(BaseModel):
     is_approved: bool
     status: str
     esg_rating: Optional[str] = None
+    sector: str = "Diversified"
+    instrument_type: str = "Fund"
 
 class ExposureDelta(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -115,6 +119,7 @@ class ExposureDelta(BaseModel):
     top_concentration_ticker: str
     top_concentration_weight: float
     total_after_weight: float
+    unnormalized_after_weight: float = 100.0  # trade-set total before re-normalisation (R3 funding check)
 
 class Breach(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -136,17 +141,17 @@ class RiskMetrics(BaseModel):
     us_equity_pct: float
     liquidity_coverage_ratio: float
     unhedged_foreign_currency_pct: float
+    growth_asset_pct: float = 0.0
 
-class RuleCheckResult(BaseModel):
+class RuleResult(BaseModel):
+    """Outcome of one suitability rule (R1-R10, L1) for the portfolio or a single idea."""
     model_config = ConfigDict(extra="forbid")
-    overall_status: Literal["PASS", "FLAG", "FAIL"]
-    breaches: List[Breach] = Field(default_factory=list)
-    passed_rules: List[str] = Field(default_factory=list)
-
-class EvidenceStatus(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    all_evidence_valid: bool
-    valid_source_ids: List[str]
-    missing_source_ids: List[str] = Field(default_factory=list)
-    stale_source_ids: List[str] = Field(default_factory=list)
-    unsupported_ideas: List[str] = Field(default_factory=list)
+    rule_id: str
+    name: str
+    outcome: Literal["PASS", "FLAG", "FAIL", "BLOCK"]
+    message: str
+    idea_id: Optional[str] = None
+    metric: Optional[str] = None
+    before_value: Optional[float] = None
+    after_value: Optional[float] = None
+    threshold_value: Optional[float] = None

@@ -64,7 +64,8 @@ def execute_advisor_action(session_id: str, action_req: AdvisorActionRequest):
     - 'accept': Approve recommendations or final advisory memo
     - 'reject': Reject specific candidate idea (triggers selective regeneration)
     - 'revise': Request revisions with specific notes (triggers selective regeneration)
-    - 'override_flag': Confirm exception override for mild concentration or drift flag
+    - 'override_flag': Document an exception for a FLAG (notes required)
+    - 'edit_allocation': Change one idea's target weight (idea_id + edits.target_weight_pct); the critic re-validates
     - 'add_advisor_note': Append commentary to advisory audit record
     - 'resolve_conflict': Resolve questionnaire/liquidity profile contradictions
     """
@@ -106,7 +107,8 @@ def get_session_audit_trail(session_id: str):
             "current_stage": state.get("current_stage"),
             "regeneration_count": state.get("regeneration_count", 0),
             "advisor_notes": state.get("advisor_notes", []),
-            "audit_trail": state.get("audit_trail", [])
+            "audit_trail": state.get("audit_trail", []),
+            "run_log": service.get_run_log(session_id)
         }
     except KeyError:
         raise HTTPException(

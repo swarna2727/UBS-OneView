@@ -1,29 +1,47 @@
-# UBS-Aligned Suitability Policy & Risk Limits
+# Suitability rule engine (slide 27). Thresholds are illustrative defaults held in
+# configuration; calibrate them against UBS suitability policy before any pilot.
+#
+# Outcomes: BLOCK stops the workflow, FAIL blocks the idea (it is regenerated and can
+# never reach the memo), FLAG needs a documented advisor decision, PASS proceeds.
 
-limits:
-  single_stock:
-    flag_threshold_pct: 20.0
-    fail_threshold_pct: 30.0
-  asset_class_drift:
-    flag_threshold_pp: 10.0
-    fail_threshold_pp: 20.0
-  regional_concentration:
-    us_equity_flag_pct: 50.0
-    us_equity_fail_pct: 65.0
-  risk_score_drift:
-    flag_threshold: 0.3
-    fail_threshold: 0.6
-  liquidity_coverage:
-    flag_min_coverage_ratio: 1.2
-    fail_min_coverage_ratio: 1.0
-  fx_exposure:
-    unhedged_flag_pct: 25.0
+rules:
+  R1_mandatory_fields:
+    # Missing objective, horizon, risk profile, liquidity need or investable amount -> BLOCK
+    fields: [goals, time_horizon_months, stated_risk_willingness, liquidity_schedule, total_wealth]
 
-freshness:
-  max_research_age_days: 45
-  require_explicit_source: true
+  R2_approved_universe: {}            # instrument not in data/universe/approved_products.json -> FAIL
 
-portfolio_rules:
-  exact_ideas_count: 3
-  prohibit_unapproved_instruments: true
-  enforce_complexity_ceiling: true
+  R3_allocations_sum:
+    tolerance_pp: 0.01                # post-trade weights must sum to 100% +/- 0.01 pt -> else FAIL
+
+  R4_risk_band: {}                    # proposed risk score above the client's band -> FAIL
+
+  R5_willingness_vs_capacity: {}      # any gap -> FLAG, lower band applied
+
+  R6_short_horizon_growth:
+    max_horizon_months: 36            # goals of 3 years or less
+    max_growth_pct: 30.0
+    growth_asset_classes: [Equities, Real Estate, Commodities]
+
+  R7_concentration:
+    limit_pct: 30.0                   # single market, sector or instrument share after the change
+    diversified_regions: [Global]     # not counted as a single market
+    diversified_sectors: [Diversified]
+
+  R8_evidence_freshness:
+    max_age_days: 30                  # missing source -> FAIL, stale source -> FLAG
+
+  R9_prohibited_wording:
+    # Matches are ignored when negated ("not guaranteed", "cannot be guaranteed", "no guarantee").
+    patterns: ['\bguarantee[sd]?\b', '\brisk[- ]free\b', '\bno risk\b', '\bcannot lose\b']
+
+  R10_max_regenerations_per_idea: 2   # then escalate to the advisor
+
+  L1_liquidity_coverage:              # slide 19: liquidity violation -> flag/fail
+    window_months: 24
+    min_coverage_ratio: 1.0
+
+# R4, R6, R7 and L1 compare the portfolio before and after the proposed trades:
+# a breach that already existed and is not made worse is a FLAG; a new or worsened breach is a FAIL.
+existing_breach_outcome: FLAG
+worsened_breach_outcome: FAIL

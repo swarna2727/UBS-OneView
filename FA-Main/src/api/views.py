@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any, Optional
 from src.graph.state import AdvisoryState
+from src.tools.risk_engine import NO_LIQUIDITY_NEED_RATIO
 from src.schemas.workspace import (
     AdvisorWorkspaceView, WorkflowStage, DecisionSpacePayload,
     AllocationDiffRow, InteractiveMemoPreview, MemoPreviewSection, PendingReview
@@ -77,46 +78,24 @@ def build_workspace_view(
             description=s_desc
         ))
 
-    # 2. Center Panel: Decision Space with Allocation Diffs & Warnings
+    # 2. Center Panel: before/after metrics straight from the rule engine's results
     allocation_diffs: List[AllocationDiffRow] = []
     risk_warnings = assessment.detected_breaches if assessment else []
-
-    if profile and assessment:
-        # Compare asset class weights before vs after
-        before_holdings = assessment.before_metrics
-        after_holdings = assessment.after_metrics
-
-        # Generate asset class diff rows
-        current_ac = profile.current_asset_class_weights
-        for ac, b_wt in current_ac.items():
-            # Estimate after weight or diff
-            a_wt = b_wt
-            if ideas:
-                for idea in ideas.ideas:
-                    if (ac == "Equities" and idea.portfolio_role in ["GROWTH", "STABILITY"]) or (ac == "Fixed Income" and idea.portfolio_role == "INCOME"):
-                        a_wt += (idea.target_weight_pct * 0.5)
-                    elif ac == "Cash Equivalents":
-                        a_wt -= (idea.target_weight_pct * 0.5)
-
-            delta = round(a_wt - b_wt, 2)
+    if assessment:
+        for r in assessment.rule_results:
+            if r.before_value is None or r.after_value is None or r.rule_id == "R3":
+                continue
+            if r.metric == "liquidity_ratio" and r.after_value >= NO_LIQUIDITY_NEED_RATIO:
+                continue  # client has no near-term liquidity need
             allocation_diffs.append(AllocationDiffRow(
-                category_type="Asset Class",
-                name=ac,
-                before_pct=round(b_wt, 1),
-                after_pct=round(max(0.0, a_wt), 1),
-                delta_pct=delta,
-                is_breached=any(ac.lower() in b.message.lower() for b in risk_warnings)
+                category_type=f"{r.rule_id} {r.name}",
+                name=(r.metric or r.name).replace(":", ": ").replace("_", " "),
+                before_pct=round(r.before_value, 2),
+                after_pct=round(r.after_value, 2),
+                delta_pct=round(r.after_value - r.before_value, 2),
+                is_breached=r.outcome != "PASS",
+                limit_value=r.threshold_value
             ))
-
-        # Top single stock row
-        allocation_diffs.append(AllocationDiffRow(
-            category_type="Single Stock",
-            name=after_holdings.max_single_stock_ticker,
-            before_pct=round(before_holdings.max_single_stock_pct, 1),
-            after_pct=round(after_holdings.max_single_stock_pct, 1),
-            delta_pct=round(after_holdings.max_single_stock_pct - before_holdings.max_single_stock_pct, 1),
-            is_breached=any("SINGLE_STOCK" in b.rule_id for b in risk_warnings)
-        ))
 
     allowed_actions = list(pending_review.get("allowed_actions", [])) if pending_review else []
     allowed_actions.append("add_advisor_note")

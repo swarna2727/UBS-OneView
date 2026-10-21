@@ -187,12 +187,13 @@ def pdf_memo_renderer(structured_memo: StructuredMemo, output_path: str) -> str:
 
     for detail in structured_memo.page_2_details:
         story.append(Paragraph(f"Idea #{detail.slot_number}: {detail.ticker} - {detail.name} ({detail.action} @ {detail.allocation_range_str})", section_style))
-        story.append(Paragraph(f"<b>Portfolio Role:</b> {detail.portfolio_role} &nbsp;|&nbsp; <b>Target Weight:</b> {detail.target_weight_pct:.1f}%", bold_body))
+        story.append(Paragraph(f"<b>Portfolio Role:</b> {detail.portfolio_role} &nbsp;|&nbsp; <b>Target Weight:</b> {detail.target_weight_pct:.1f}% &nbsp;|&nbsp; <b>Conviction:</b> {detail.conviction}", bold_body))
         story.append(Paragraph(f"<b>Core Thesis:</b> {detail.thesis}", body_style))
         story.append(Paragraph(f"<b>Why Now / Catalyst:</b> {detail.why_now}", body_style))
         story.append(Paragraph(f"<b>Client Suitability Fit:</b> {detail.client_fit_rationale}", body_style))
         story.append(Paragraph(f"<b>Key Risks & Mitigations:</b> {'; '.join(detail.key_risks)}", body_style))
-        story.append(Paragraph(f"<b>Invalidation Trigger:</b> {detail.what_changes_view}", body_style))
+        story.append(Paragraph(f"<b>What Would Change Our View:</b> {detail.what_changes_view}", body_style))
+        story.append(Paragraph(f"<b>Alternative Considered:</b> {detail.alternative_considered}", body_style))
         story.append(Paragraph(f"<b>Attributed Evidence Sources:</b> {', '.join(detail.cited_sources_formatted)}", body_style))
         story.append(Spacer(1, 8))
 

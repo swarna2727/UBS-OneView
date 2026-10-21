@@ -2,16 +2,22 @@
 
 from typing import Dict, Any, List
 from src.schemas.tools import ValidationResult, CalculatedRiskTier, StandardizedHoldings, Holding
+from src.tools.exposure import get_instrument_metadata
 
+# R1: objective (goals), horizon, risk profile, liquidity need and investable amount must be present.
 MANDATORY_FIELDS = [
     "client_id",
     "name",
     "goals",
     "time_horizon_months",
     "stated_risk_willingness",
+    "liquidity_schedule",
     "total_wealth",
     "raw_holdings"
 ]
+
+# An explicitly empty list is a valid answer for these ("no near-term liquidity needs").
+EMPTY_LIST_ALLOWED = {"liquidity_schedule"}
 
 def required_field_validator(profile_dict: Dict[str, Any]) -> ValidationResult:
     """Validate mandatory fields in raw advisor-entered client profile."""
@@ -21,7 +27,8 @@ def required_field_validator(profile_dict: Dict[str, Any]) -> ValidationResult:
 
     for field in MANDATORY_FIELDS:
         val = profile_dict.get(field)
-        if val is None or val == "" or (isinstance(val, list) and len(val) == 0):
+        empty_list = isinstance(val, list) and len(val) == 0 and field not in EMPTY_LIST_ALLOWED
+        if val is None or val == "" or empty_list:
             missing.append(field)
 
     # Specific validity checks
@@ -99,15 +106,16 @@ def risk_profile_calculator(profile_data: Dict[str, Any]) -> CalculatedRiskTier:
     else:
         capacity_score = base_capacity
 
-    # Conflict check: willingness is high/very high (>=4.0) but capacity is constrained (<=2.0)
+    # R5: any gap where willingness exceeds capacity is flagged; the lower band is applied below.
     has_conflict = False
     conflict_msg = None
-    if willingness_score >= 4.0 and capacity_score <= 2.0:
+    if willingness_score > capacity_score:
         has_conflict = True
         conflict_msg = (
-            f"Client stated high risk willingness ({stated_willingness}), but risk capacity is constrained "
-            f"(Score: {capacity_score:.1f}) due to a short horizon of {horizon_months} months and "
-            f"{short_term_liquidity_needed:,.0f} liquidity need ({liquidity_drain_ratio*100:.1f}% of wealth) due within 18 months."
+            f"Risk willingness ({stated_willingness}, score {willingness_score:.1f}) exceeds risk capacity "
+            f"(score {capacity_score:.1f}) given a {horizon_months}-month horizon and "
+            f"{short_term_liquidity_needed:,.0f} liquidity need ({liquidity_drain_ratio*100:.1f}% of wealth) due within 18 months. "
+            f"The lower (capacity) band is applied."
         )
 
     # Final calculated tier is the constrained minimum of capacity and willingness
@@ -162,6 +170,16 @@ def portfolio_parser(raw_holdings: List[Dict[str, Any]]) -> StandardizedHoldings
         risk_rating = int(item.get("risk_rating", 3))
         complexity = int(item.get("complexity_rating", 1))
         liquidity = str(item.get("liquidity_tier", "Daily"))
+        # Sector / instrument type from the input, else from the approved universe, else inferred.
+        meta = get_instrument_metadata(ticker)
+        if asset_class == "Cash Equivalents":
+            default_type = "Cash"
+        elif "ticker" in meta:  # known instrument
+            default_type = meta.get("instrument_type", "Fund")
+        else:
+            default_type = "Single Stock" if asset_class == "Equities" else "Fund"
+        sector = str(item.get("sector") or meta.get("sector", "Diversified"))
+        instrument_type = str(item.get("instrument_type") or default_type)
 
         holding = Holding(
             ticker=ticker,
@@ -172,7 +190,9 @@ def portfolio_parser(raw_holdings: List[Dict[str, Any]]) -> StandardizedHoldings
             weight_pct=weight_pct,
             risk_rating=risk_rating,
             complexity_rating=complexity,
-            liquidity_tier=liquidity
+            liquidity_tier=liquidity,
+            sector=sector,
+            instrument_type=instrument_type
         )
         holdings.append(holding)
 

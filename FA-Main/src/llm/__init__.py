@@ -2,6 +2,6 @@
 
 from src.llm.base import LLMClientProtocol
 from src.llm.fake import FakeAdvisoryLLMClient
-from src.llm.gemini import GeminiAdvisoryLLMClient
+from src.llm.openrouter import OpenRouterLLMClient, LLMUnavailableError, default_llm_client
 
-__all__ = ["LLMClientProtocol", "FakeAdvisoryLLMClient", "GeminiAdvisoryLLMClient"]
+__all__ = ["LLMClientProtocol", "FakeAdvisoryLLMClient", "OpenRouterLLMClient", "LLMUnavailableError", "default_llm_client"]
