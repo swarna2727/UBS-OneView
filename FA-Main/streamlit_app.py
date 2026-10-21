@@ -298,10 +298,11 @@ if view is not None:
                 </div>
                 """, unsafe_allow_html=True)
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Calculated Risk Tier", f"{output.get('calculated_risk_tier')} ({output.get('risk_tier_number')}/5)")
-            m2.metric("Horizon", f"{output.get('time_horizon_months')} months")
-            m3.metric("Total Wealth", f"${output.get('total_wealth', 0):,.0f}")
+            st.markdown(
+                f"**Calculated Risk Tier:** `{output.get('calculated_risk_tier')} ({output.get('risk_tier_number')}/5)` &nbsp;|&nbsp; "
+                f"**Horizon:** `{output.get('time_horizon_months')} months` &nbsp;|&nbsp; "
+                f"**Total Wealth:** `${output.get('total_wealth', 0):,.0f}`"
+            )
             st.caption(f"Asset class weights: {output.get('current_asset_class_weights')}")
 
             st.markdown("##### ✏️ Profile Fields (edit, then Regenerate to re-run the agent)")
