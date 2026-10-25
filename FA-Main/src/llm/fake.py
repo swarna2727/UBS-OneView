@@ -247,13 +247,48 @@ class FakeAdvisoryLLMClient:
         else:
             self._slot_attempts = {1: 0, 2: 0, 3: 0}
 
+        # Sarah's sample portfolio starts above its Moderate risk ceiling. The generic mock
+        # slate only adds risk assets from cash, so every retry worsened R4 and could never
+        # reach advisor sign-off. Give this offline demo a deterministic rebalance that trims
+        # existing positions and moves the proceeds to BIL; the Suitability Critic still
+        # evaluates the proposed trades and remains the authority on whether they can proceed.
+        sarah_rebalance = "Client: Sarah Tan (CL-DEMO-001)" in user_prompt
+        sarah_trims = {
+            1: ("SPYG", "EQ-SPYG", "SPDR Portfolio S&P 500 Growth ETF", 35.0, "GROWTH",
+                "Trim the existing US growth allocation from 45% to 35% and hold the proceeds in cash.",
+                "Rebalance the existing portfolio toward Sarah's Moderate risk ceiling.",
+                "Reduces the portfolio's risk score while retaining a measured long-term growth allocation.",
+                ["Equity drawdown", "Growth valuation compression"],
+                "Reassess if the client's risk profile or long-term goal changes.", "Medium",
+                "Maintain the current allocation after confirming risk capacity.", ["SRC-UBS-CIO-2026-102"]),
+            2: ("LQD", "FI-USIG", "iShares iBoxx $ Investment Grade Corporate Bond ETF", 20.0, "STABILITY",
+                "Trim the existing investment-grade bond allocation from 30% to 20% and hold the proceeds in cash.",
+                "Reduce portfolio risk while preserving a meaningful fixed-income allocation.",
+                "Moves the existing portfolio risk score closer to Sarah's documented Moderate band.",
+                ["Credit spread widening", "Duration volatility"],
+                "Reassess if credit quality or the client's income objective changes.", "Medium",
+                "Retain the current bond allocation after confirming risk capacity.", ["SRC-UBS-CIO-2026-101"]),
+            3: ("GLD", "CM-GOLD", "SPDR Gold Shares", 7.5, "DIVERSIFICATION",
+                "Trim the existing gold allocation from 10% to 7.5% and hold the proceeds in cash.",
+                "Make a small rebalancing adjustment alongside the equity and bond trims.",
+                "Lowers overall portfolio risk without removing the portfolio's diversifying assets.",
+                ["Price volatility", "No income"],
+                "Reassess if diversification needs or the client's risk profile changes.", "Low",
+                "Keep the existing allocation and monitor its portfolio role.", ["SRC-UBS-CIO-2026-101"]),
+        }
+
         ideas = []
         for slot, pool in self.IDEA_POOLS.items():
             (ticker, inst, name, weight, role, thesis, why_now, fit, risks, trigger,
              conviction, alternative, evidence) = pool[min(self._slot_attempts[slot], len(pool) - 1)]
+            action = "ADD"
+            if sarah_rebalance:
+                (ticker, inst, name, weight, role, thesis, why_now, fit, risks, trigger,
+                 conviction, alternative, evidence) = sarah_trims[slot]
+                action = "TRIM"
             ideas.append(InvestmentIdea(
                 idea_id=f"IDEA-{ticker}-{slot:02d}", slot_number=slot, instrument_id=inst, ticker=ticker, name=name,
-                action="ADD", target_weight_pct=weight,
+                action=action, target_weight_pct=weight,
                 allocation_range=AllocationRange(min_pct=round(weight * 0.5, 1), max_pct=round(weight * 1.5, 1), target_pct=weight),
                 funding_source_ticker="BIL", portfolio_role=role, thesis=thesis, why_now=why_now,
                 client_fit_rationale=fit, key_risks=risks, invalidation_trigger=trigger,

@@ -85,7 +85,7 @@ Thresholds are illustrative defaults held in configuration and must be calibrate
 
 ## 5. Models (OpenRouter)
 
-Set an OpenRouter key to use hosted models; without it the app runs in a deterministic **offline mode** (canned agent outputs, useful for demos and tests).
+The Streamlit prototype always uses `FakeAdvisoryLLMClient` so all three demo workflows run locally without a key or external model calls. The REST API can use OpenRouter when configured; otherwise it falls back to deterministic offline outputs.
 
 ```bash
 export OPENROUTER_API_KEY=...
@@ -107,16 +107,18 @@ Each session is one run ID. `data/runs/<session_id>.jsonl` (override with `RUN_L
 
 ```bash
 pip install -r requirements.txt
-streamlit run streamlit_app.py                                   # advisor workspace
+streamlit run streamlit_app.py                                   # offline advisor prototype
 uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload      # REST API
 python -m pytest tests/ -v                                       # offline test suite
 ```
+
+The Streamlit workspace opens with a mode selector. **Offline clients** opens the sample client directory and its single advisor journey: meeting preparation, investment suitability review, and market-event response. **Online mode** lets the advisor start a session with one of the sample clients or enter a new client profile. The API must be running with `OPENROUTER_API_KEY` set in its environment; starting a review sends client details to the configured model provider and may consume credits. New-client intake requires objectives, client-confirmed wealth and holdings, with portfolio weights totaling 100%. After intake, the API returns the session and first advisor checkpoint; the remaining online workflow can be continued through the REST API endpoints or `/docs`.
 
 ### Demo clients (`data/samples/client_profiles.json`)
 
 | Client | Profile | Control shown |
 |---|---|---|
-| Sarah, 38 | S$750k, moderate, 7-year property goal, 42% US equities, wants income | US growth idea fails R4/R7 and is regenerated automatically; existing US concentration is a FLAG the advisor documents |
+| Sarah Tan, 35 | Illustrative S$800k portfolio, moderate, S$300k home down-payment goal in 8 years; 45% global equities, 30% investment-grade bonds, 15% cash/MMF, 10% other; S$120k available to invest | Prototype profile and portfolio review; the app surfaces any risk-band conflict for advisor resolution |
 | Daniel, 29 | S$220k, "comfortable with high risk", S$180k deposit in 15 months | R5 willingness vs capacity: band lowered to Conservative; growth capped (R6) |
 | Mdm Lim, 62 | S$1.2M, low-moderate risk, retiring in 3 years, wants a "guaranteed 6%" | Memo restates the request as a target and states returns cannot be guaranteed (R9) |
 | Aaron, 45 | S$400k, moderate, no horizon given | R1 blocks the workflow until the horizon is supplied |

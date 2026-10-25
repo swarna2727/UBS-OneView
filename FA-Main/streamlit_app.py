@@ -1,525 +1,1100 @@
-"""UBS Advisor Workspace - 3-Panel Human-Led Multi-Agent Advisory System (Slide 20)."""
+"""UBS Prism offline advisory prototype."""
 
-import os
+from __future__ import annotations
+
 import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import httpx
+import pandas as pd
 import streamlit as st
-from typing import Dict, Any, Optional
 
+from src.agents.client_profile import ClientProfileAgent
+from src.agents.market_intelligence import MarketIntelligenceAgent
 from src.api.service import AdvisorySessionService
-from src.schemas.workspace import AdvisorActionRequest, AdvisorWorkspaceView
+from src.llm.fake import FakeAdvisoryLLMClient
+from src.schemas.workspace import AdvisorActionRequest
 
-# Page Configuration
-st.set_page_config(
-    page_title="UBS Advisory Workspace | Human-Led Multi-Agent System",
-    page_icon="🏛️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
-# Custom Styling for Institutional Wealth Management aesthetics
-st.markdown("""
+ROOT = Path(__file__).parent
+SAMPLE_PATH = ROOT / "data" / "samples" / "client_profiles.json"
+SAMPLE_PROFILES = json.loads(SAMPLE_PATH.read_text(encoding="utf-8"))
+CASE_LABELS = {
+    "meeting": "Client meeting preparation",
+    "investment": "Investment review",
+    "market": "Market event response",
+}
+VISIBLE_CLIENT_KEYS = ("demo_sarah", "demo_daniel", "demo_mdm_lim", "demo_aaron")
+CLIENT_CARD_SUMMARIES = {
+    "demo_sarah": "Home down payment · 8 years",
+    "demo_daniel": "S$180k property deposit · 18 months",
+    "demo_mdm_lim": "Retirement reserve · 3 years",
+    "demo_aaron": "Long-term growth · horizon not recorded",
+}
+SCREENS = [
+    "Overview",
+    "Client profile",
+    "Portfolio",
+    "Research",
+    "Recommendations",
+    "Advisor review",
+    "Brief",
+]
+
+
+st.set_page_config(page_title="UBS Prism | Advisory workspace", page_icon=None, layout="wide")
+
+st.html("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-    }
-    .top-header {
-        background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
-        border-bottom: 3px solid #E60000;
-        padding: 1.2rem 2rem;
-        border-radius: 8px;
-        color: white;
-        margin-bottom: 1.5rem;
-    }
-    .panel-card {
-        background: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        border-radius: 8px;
-        padding: 1.2rem;
-        margin-bottom: 1rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .stage-item {
-        padding: 0.6rem 0.8rem;
-        margin-bottom: 0.5rem;
-        border-radius: 6px;
-        font-size: 0.9rem;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-    .stage-completed { background: #ECFDF5; border-left: 4px solid #10B981; color: #065F46; }
-    .stage-active { background: #EFF6FF; border-left: 4px solid #3B82F6; color: #1E40AF; font-weight: 600; }
-    .stage-waiting { background: #FEF3C7; border-left: 4px solid #F59E0B; color: #92400E; font-weight: 600; }
-    .stage-pending { background: #F8FAFC; border-left: 4px solid #CBD5E1; color: #64748B; }
-
-    .warning-box {
-        background: #FEF2F2;
-        border: 1px solid #F87171;
-        border-left: 5px solid #EF4444;
-        border-radius: 6px;
-        padding: 0.8rem;
-        margin: 0.8rem 0;
-        color: #991B1B;
-    }
-    .flag-box {
-        background: #FFFBEB;
-        border: 1px solid #FCD34D;
-        border-left: 5px solid #F59E0B;
-        border-radius: 6px;
-        padding: 0.8rem;
-        margin: 0.8rem 0;
-        color: #92400E;
-    }
-    .pass-box {
-        background: #F0FDF4;
-        border: 1px solid #86EFAC;
-        border-left: 5px solid #22C55E;
-        border-radius: 6px;
-        padding: 0.8rem;
-        margin: 0.8rem 0;
-        color: #166534;
-    }
-    .memo-highlight {
-        background-color: #FEF08A;
-        border-left: 4px solid #EAB308;
-        padding: 0.6rem;
-        border-radius: 4px;
-        margin-bottom: 0.6rem;
-    }
-    .memo-normal {
-        background-color: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        padding: 0.6rem;
-        border-radius: 4px;
-        margin-bottom: 0.6rem;
-    }
+    :root { --prism-red: #c8102e; }
+    .block-container { max-width: 1440px; padding-top: 2.1rem; padding-bottom: 4rem; }
+    h1, h2, h3 { letter-spacing: -0.035em; }
+    h1 { font-size: clamp(2rem, 3vw, 2.65rem); font-weight: 620; }
+    h2 { font-size: 1.42rem; font-weight: 610; margin-top: .25rem; }
+    h3 { font-size: 1.05rem; font-weight: 620; }
+    [data-testid="stMetric"] { background: var(--secondary-background-color); border: 1px solid color-mix(in srgb, var(--text-color) 12%, transparent); border-radius: 12px; padding: 1rem 1.1rem; min-height: 112px; }
+    [data-testid="stMetricLabel"] { color: color-mix(in srgb, var(--text-color) 70%, transparent); }
+    [data-testid="stMetricValue"] { font-size: 1.55rem; }
+    div[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 14px; }
+    div[data-testid="stSegmentedControl"] { margin: .6rem 0 1.3rem; }
+    div[data-testid="stSegmentedControl"] button { min-height: 2.7rem; }
+    .eyebrow { color: var(--prism-red); font-size: .75rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    .subtle { color: color-mix(in srgb, var(--text-color) 68%, transparent); }
+    .card-title { font-size: 1.02rem; font-weight: 650; margin: 0 0 .35rem; }
+    .checkpoint { border-left: 2px solid color-mix(in srgb, var(--text-color) 17%, transparent); padding: .1rem 0 .8rem 1rem; margin-left: .38rem; }
+    .checkpoint.active { border-left: 2px solid var(--prism-red); }
+    .checkpoint-card { border: 1px solid color-mix(in srgb, var(--text-color) 15%, transparent); border-radius: 12px; padding: .9rem 1rem; min-height: 92px; }
+    .checkpoint-card.complete { border-color: color-mix(in srgb, #16834a 52%, transparent); background: color-mix(in srgb, #16834a 9%, var(--secondary-background-color)); }
+    .checkpoint-card.complete .checkpoint-status { color: color-mix(in srgb, #16834a 62%, var(--text-color)); }
+    .checkpoint-card.active { border-color: color-mix(in srgb, var(--prism-red) 48%, transparent); }
+    .checkpoint-status { font-weight: 650; margin-top: .35rem; }
+    .status { display: inline-block; border: 1px solid color-mix(in srgb, var(--text-color) 18%, transparent); border-radius: 99px; padding: .2rem .55rem; font-size: .76rem; }
+    .callout { padding: 1rem 1.15rem; border: 1px solid color-mix(in srgb, var(--text-color) 15%, transparent); border-radius: 12px; background: var(--secondary-background-color); }
+    .stButton button { border-radius: 8px; min-height: 2.6rem; }
+    @media (prefers-color-scheme: dark) { .eyebrow { color: #ff8091; } }
 </style>
-""", unsafe_allow_html=True)
+""")
 
-# Helper to load sample profiles
-def load_sample_profiles() -> Dict[str, Any]:
-    sample_path = os.path.join(os.path.dirname(__file__), "data", "samples", "client_profiles.json")
-    if os.path.exists(sample_path):
-        with open(sample_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
 
-# Initialize Session State
-if "service" not in st.session_state:
-    st.session_state.service = AdvisorySessionService()
-if "current_session_id" not in st.session_state:
-    st.session_state.current_session_id = None
-if "workspace_view" not in st.session_state:
-    st.session_state.workspace_view = None
+def offline_service() -> AdvisorySessionService:
+    return AdvisorySessionService(llm_client=FakeAdvisoryLLMClient())
 
-service: AdvisorySessionService = st.session_state.service
 
-def submit_action(session_id: str, **kwargs: Any) -> None:
-    """Send an RM review decision to the graph and refresh the workspace."""
-    try:
-        with st.spinner("Applying advisor decision..."):
-            st.session_state.workspace_view = service.execute_action(session_id, AdvisorActionRequest(**kwargs))
-        st.rerun()
-    except ValueError as e:
-        st.error(str(e))
+def profile_agent() -> ClientProfileAgent:
+    return ClientProfileAgent(llm_client=FakeAdvisoryLLMClient())
 
-def split_csv(text: str) -> list:
-    return [t.strip() for t in text.split(",") if t.strip()]
 
-def review_buttons(session_id: str, review, key: str, approve_label: str = "✅ Approve & Continue",
-                   regenerate_label: str = "🔄 Regenerate", edits: Optional[Dict[str, Any]] = None) -> None:
-    """Shared approve / regenerate / reject gate shown under every agent's output."""
-    notes = st.text_area("RM notes / feedback for the agent:", key=f"notes_{key}")
-    cols = st.columns(3)
-    with cols[0]:
-        if "approve" in review.allowed_actions:
-            if st.button(approve_label, type="primary", use_container_width=True, key=f"approve_{key}"):
-                submit_action(session_id, action="approve", notes=notes or None)
-        elif "override_flag" in review.allowed_actions:
-            if st.button("⚠️ Approve with Exception Override", type="primary", use_container_width=True, key=f"override_{key}"):
-                if not notes:
-                    st.error("An exception override needs an RM justification note.")
-                else:
-                    submit_action(session_id, action="override_flag", notes=notes)
-        else:
-            st.caption("⛔ Failing ideas cannot be approved: revise, edit or reject them.")
-    with cols[1]:
-        if "regenerate" in review.allowed_actions:
-            if st.button(regenerate_label, use_container_width=True, key=f"regen_{key}"):
-                submit_action(session_id, action="regenerate", notes=notes or None, edits=edits)
-    with cols[2]:
-        if "reject" in review.allowed_actions:
-            if st.button("⛔ Reject & End Session", use_container_width=True, key=f"reject_{key}"):
-                submit_action(session_id, action="reject", notes=notes or None)
+def research_agent() -> MarketIntelligenceAgent:
+    return MarketIntelligenceAgent(llm_client=FakeAdvisoryLLMClient())
 
-# Header Banner
-st.markdown("""
-<div class="top-header">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-        <div>
-            <h2 style="margin:0; font-size:1.6rem; letter-spacing:-0.5px;">UBS Advisory Workspace</h2>
-            <p style="margin:4px 0 0 0; opacity:0.85; font-size:0.9rem;">Human-Led Multi-Agent Investment Advisory Architecture & Portfolio Risk Governance</p>
-        </div>
-        <div style="text-align:right;">
-            <span style="background:#E60000; padding:4px 10px; border-radius:4px; font-weight:bold; font-size:0.8rem;">RELATIONSHIP MANAGER WORKSPACE</span>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
-# Sidebar: Client Selection & Session Controls
-with st.sidebar:
-    st.header("👤 Client Session Intake")
+def fmt_money(amount: float, currency: str = "SGD") -> str:
+    symbol = "S$" if currency == "SGD" else f"{currency} "
+    return f"{symbol}{amount:,.0f}"
 
-    sample_profiles = load_sample_profiles()
-    profile_options = list(sample_profiles.keys()) if sample_profiles else ["Custom Intake"]
 
-    selected_profile_key = st.selectbox(
-        "Select Client Profile:",
-        options=profile_options,
-        format_func=lambda x: {
-            "demo_sarah": "Sarah, 38 (Demo: concentration FLAG + selective regeneration)",
-            "demo_daniel": "Daniel, 29 (Demo: willingness vs capacity, R5/R6)",
-            "demo_mdm_lim": "Mdm Lim, 62 (Demo: 'guaranteed 6%' request, R9)",
-            "demo_aaron": "Aaron, 45 (Demo: missing horizon blocks, R1)",
-            "balanced_client": "Dr. Elena Rostova (Balanced Growth 5Y)",
-            "contradictory_client": "Marcus Vance (Contradiction: Aggressive vs 18M Need)",
-            "incomplete_client": "Anonymous (Missing Fields Test)"
-        }.get(x, x)
-    )
+def fmt_horizon(months: int | None) -> str:
+    if not months:
+        return "Not recorded"
+    if months % 12 == 0:
+        return f"{months // 12} years"
+    return f"{months} months"
 
-    client_payload = sample_profiles.get(selected_profile_key, {})
 
-    if st.button("🚀 Initialize Advisory Pipeline", type="primary", use_container_width=True):
-        with st.spinner("Executing multi-agent advisory graph..."):
-            session_id = f"sess_{selected_profile_key[:8]}_{os.urandom(2).hex()}"
-            view = service.start_session(raw_input=client_payload, session_id=session_id)
-            st.session_state.current_session_id = session_id
-            st.session_state.workspace_view = view
-            st.rerun()
-
-    st.markdown("---")
-    st.subheader("📋 Session Context")
-    if st.session_state.current_session_id:
-        st.write(f"**Session ID:** `{st.session_state.current_session_id}`")
-        if st.session_state.workspace_view:
-            wv = st.session_state.workspace_view
-            st.write(f"**Client:** {wv.client_name}")
-            st.write(f"**ID:** {wv.client_id}")
+def start_case(case: str) -> None:
+    client_key = st.session_state.get("client_key", VISIBLE_CLIENT_KEYS[0])
+    raw = dict(SAMPLE_PROFILES[client_key])
+    raw["raw_holdings"] = [dict(item) for item in raw["raw_holdings"]]
+    raw["liquidity_schedule"] = [dict(item) for item in raw["liquidity_schedule"]]
+    raw["constraints"] = dict(raw["constraints"])
+    if case == "investment":
+        raw.setdefault("new_capital_amount", 120000.0)
+    st.session_state.case = case
+    st.session_state.screen = "Overview"
+    st.session_state.raw_profile = raw
+    st.session_state.profile = None
+    st.session_state.research = None
+    st.session_state.meeting_brief_approved = False
+    st.session_state.custom_stage = "profile"
+    st.session_state.advisor_note = ""
+    st.session_state.completed_custom = set()
+    st.session_state.service = None
+    st.session_state.workspace = None
+    st.session_state.error = None
+    if case == "investment":
+        try:
+            service = offline_service()
+            view = service.start_session(raw)
+            st.session_state.service = service
+            st.session_state.workspace = view
+        except Exception as exc:  # surfaced to advisor, rather than leaving a blank screen
+            st.session_state.error = str(exc)
     else:
-        st.info("No active advisory session. Click 'Initialize Advisory Pipeline' to begin.")
+        try:
+            st.session_state.profile = profile_agent().execute(raw)
+        except Exception as exc:
+            st.session_state.error = str(exc)
 
-# Main 3-Panel Layout
-view: Optional[AdvisorWorkspaceView] = st.session_state.workspace_view
 
-if view is not None:
-    col_left, col_center, col_right = st.columns([1, 2, 1.4], gap="medium")
+def select_client(client_key: str) -> None:
+    """Open a client workspace without starting the advisory process yet."""
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.session_state.client_key = client_key
+    st.session_state.raw_profile = dict(SAMPLE_PROFILES[client_key])
+    st.session_state.raw_profile["raw_holdings"] = [dict(item) for item in st.session_state.raw_profile.get("raw_holdings", [])]
+    st.session_state.raw_profile["liquidity_schedule"] = [dict(item) for item in st.session_state.raw_profile.get("liquidity_schedule", [])]
+    st.session_state.raw_profile["constraints"] = dict(st.session_state.raw_profile.get("constraints", {}))
+    st.session_state.profile = profile_agent().execute(st.session_state.raw_profile)
+    st.session_state.screen = "Overview"
+    st.session_state.event_decision = None
+    st.session_state.market_revision_pending = False
 
-    # ==========================================
-    # 1. LEFT PANEL: WORKFLOW PROGRESS
-    # ==========================================
-    with col_left:
-        st.markdown("### 📌 1. Workflow Progress")
-        st.caption("Agent Orchestration & HITL Checkpoints")
 
-        for stage in view.workflow_stages:
-            status_badge = {
-                "COMPLETED": "✅ Done",
-                "IN_PROGRESS": "🔄 Active",
-                "WAITING_HUMAN": "⚠️ RM Action",
-                "PENDING": "⏳ Pending",
-                "FAILED": "❌ Failed"
-            }.get(stage.status, stage.status)
+def advisor_review_required() -> bool:
+    """Whether the Advisor review screen currently has an action to complete."""
+    case = st.session_state.get("case")
+    if case == "investment":
+        view = st.session_state.get("workspace")
+        if st.session_state.get("market_revision_pending") and view and view.outcome:
+            return True
+        return bool(view and view.pending_review and not view.outcome)
+    if case in {"meeting", "market"}:
+        return st.session_state.get("custom_stage") != "complete"
+    return False
 
-            css_class = {
-                "COMPLETED": "stage-completed",
-                "IN_PROGRESS": "stage-active",
-                "WAITING_HUMAN": "stage-waiting",
-                "PENDING": "stage-pending",
-                "FAILED": "warning-box"
-            }.get(stage.status, "stage-pending")
 
-            st.markdown(f"""
-            <div class="stage-item {css_class}">
-                <div>
-                    <b>{stage.display_name}</b><br/>
-                    <small style="opacity:0.85;">{stage.description}</small>
-                </div>
-                <span>{status_badge}</span>
-            </div>
-            """, unsafe_allow_html=True)
+def finish_market_response() -> None:
+    """Complete a revised market response from a Streamlit button callback."""
+    st.session_state.market_revision_pending = False
+    st.session_state.case = "market"
+    st.session_state.custom_stage = "complete"
+    st.session_state.screen = "Advisor review"
 
-        st.markdown("---")
-        st.subheader("📝 Advisor Notes Log")
-        if view.advisor_notes:
-            for note in view.advisor_notes:
-                st.info(note)
+
+def record_market_decision() -> None:
+    """Persist the advisor's market decision before Streamlit rebuilds widgets."""
+    choice = st.session_state.get("event_choice", "Maintain current advice")
+    reason = st.session_state.get("event_rationale", "").strip()
+    follow_up = st.session_state.get("event_followup", "").strip()
+    st.session_state.event_decision = {"choice": choice, "reason": reason, "follow_up": follow_up}
+    st.session_state.completed_custom.add("decision")
+    if choice.startswith("Revise"):
+        st.session_state.market_revision_pending = True
+        raw = dict(st.session_state.raw_profile)
+        raw["advisor_notes"] += " Market event context: interest-rate expectations shifted; reassess existing bond exposure."
+        try:
+            service = offline_service()
+            st.session_state.workspace = service.start_session(raw)
+            st.session_state.service = service
+            st.session_state.case = "investment"
+            st.session_state.screen = "Advisor review"
+        except Exception as exc:
+            st.session_state.error = str(exc)
+    else:
+        st.session_state.custom_stage = "complete"
+
+
+def current_stage() -> str:
+    if st.session_state.get("case") == "investment":
+        view = st.session_state.get("workspace")
+        if view and view.pending_review:
+            return view.pending_review.stage
+        return view.center_panel.current_stage if view else "client_profile"
+    return st.session_state.get("custom_stage", "profile")
+
+
+def workflow_items() -> list[tuple[str, str]]:
+    if st.session_state.get("case") == "investment":
+        view = st.session_state.get("workspace")
+        if view:
+            labels = {
+                "COMPLETED": "Completed",
+                "WAITING_HUMAN": "In review",
+                "IN_PROGRESS": "In progress",
+                "PENDING": "Not started",
+                "FAILED": "Needs attention",
+            }
+            return [(stage.display_name, labels.get(stage.status, stage.status.title())) for stage in view.workflow_stages]
+    case = st.session_state.get("case")
+    if case == "meeting":
+        keys = [("Client profile", "profile"), ("Market research", "research"), ("Meeting brief", "brief")]
+    else:
+        keys = [("Client profile", "profile"), ("Market research", "research"), ("Advisor decision", "decision")]
+    items = []
+    active = st.session_state.get("custom_stage", "profile")
+    done = st.session_state.get("completed_custom", set())
+    for label, key in keys:
+        status = "Completed" if key in done else ("In review" if key == active else "Not started")
+        items.append((label, status))
+    return items
+
+
+def show_workflow() -> None:
+    st.markdown("<div class='eyebrow'>Workflow checkpoints</div>", unsafe_allow_html=True)
+    items = workflow_items()
+    rows = [items] if len(items) <= 3 else [items[:3], items[3:]]
+    for row in rows:
+        cols = st.columns(3)
+        for col, (label, status) in zip(cols, row):
+            with col, st.container(border=True, height=104):
+                st.caption(label)
+                if status == "Completed":
+                    st.badge(status, icon=":material/check_circle:", color="green")
+                elif status in ("In review", "In progress"):
+                    st.badge(status, icon=":material/schedule:", color="orange")
+                elif status == "Needs attention":
+                    st.badge(status, icon=":material/warning:", color="red")
+                else:
+                    st.badge(status, color="gray")
+
+
+def render_profile(profile: Any, raw: dict[str, Any]) -> None:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Client", profile.name)
+    c2.metric("Investment horizon", f"{profile.time_horizon_months // 12} years")
+    c3.metric("Risk profile", profile.calculated_risk_tier)
+    c4.metric("Base currency", profile.base_currency)
+    st.subheader("Client goals and context")
+    left, right = st.columns([1.2, 1])
+    with left:
+        st.markdown("<div class='callout'>", unsafe_allow_html=True)
+        st.markdown("**Primary goal**")
+        st.write("\n".join(f"- {goal}" for goal in profile.goals))
+        st.markdown("**Investment experience**")
+        st.write(profile.experience_level)
+        st.markdown("**Advisor context**")
+        st.text(profile.advisor_notes)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with right:
+        st.markdown("<div class='callout'>", unsafe_allow_html=True)
+        st.markdown("**Liquidity plan**")
+        if profile.liquidity_schedule:
+            for event in profile.liquidity_schedule:
+                st.write(f"{event.purpose}: {fmt_money(event.amount, profile.base_currency)} in {event.due_months // 12} years")
         else:
-            st.caption("No notes recorded yet.")
+            st.write("No scheduled liquidity event recorded.")
+        st.markdown("**Risk range**")
+        st.write(f"{profile.risk_score_range[0]:.1f}–{profile.risk_score_range[1]:.1f} / 5")
+        st.markdown("</div>", unsafe_allow_html=True)
+    wealth = raw.get("total_wealth")
+    st.caption(f"Prototype data: total portfolio value {fmt_money(wealth, profile.base_currency)} is an illustrative assumption; the assignment specifies the allocation mix and S$120,000 new capital, but not total wealth.".replace("$", r"\$"))
+    weights_total = sum(h.weight_pct for h in profile.parsed_holdings) or 1
+    portfolio_risk = sum(h.risk_rating * h.weight_pct for h in profile.parsed_holdings) / weights_total
+    if portfolio_risk > profile.risk_score_range[1]:
+        st.warning(
+            f"The rule model estimates current portfolio risk at {portfolio_risk:.2f}, above this "
+            f"{profile.calculated_risk_tier} profile’s {profile.risk_score_range[1]:.2f} ceiling. "
+            "Review the client’s confirmed risk tolerance and current mix before approving new ideas."
+        )
+    if profile.unresolved_flags:
+        st.subheader("Profile flags")
+        for flag in profile.unresolved_flags:
+            st.warning(flag.message)
 
-        # Quick Add Advisor Note
-        with st.expander("➕ Add Advisor Note"):
-            note_text = st.text_input("Note:", key="input_new_advisor_note")
-            if st.button("Save Note"):
-                if note_text:
-                    service.execute_action(
-                        view.session_id,
-                        AdvisorActionRequest(action="add_advisor_note", notes=note_text)
-                    )
-                    st.session_state.workspace_view = service.get_workspace_view(view.session_id)
+
+def render_portfolio(profile: Any, raw: dict[str, Any]) -> None:
+    holdings = profile.parsed_holdings
+    rows = [{"Holding": h.name, "Ticker": h.ticker, "Asset class": h.asset_class, "Region": h.region, "Currency": h.currency, "Weight": h.weight_pct} for h in holdings]
+    total = sum(row["Weight"] for row in rows)
+    st.subheader("Current portfolio")
+    st.caption("Holdings and portfolio mix from the client profile")
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", column_config={"Weight": st.column_config.ProgressColumn("Weight", min_value=0, max_value=100, format="%.1f%%")})
+    a, b, c = st.columns(3)
+    a.metric("Portfolio value", fmt_money(raw["total_wealth"], profile.base_currency))
+    b.metric("Allocation total", f"{total:.0f}%", "Balanced" if abs(total - 100) < 0.01 else "Needs review")
+    c.metric("Available new capital", fmt_money(raw.get("new_capital_amount", 0), profile.base_currency))
+    st.markdown("**Allocation by asset class**")
+    groups: dict[str, float] = {}
+    for holding in holdings:
+        groups[holding.asset_class] = groups.get(holding.asset_class, 0) + holding.weight_pct
+    st.dataframe(pd.DataFrame([{"Asset class": key, "Portfolio weight": value} for key, value in groups.items()]), hide_index=True, width="stretch")
+
+
+def render_research(brief: Any) -> None:
+    if brief is None:
+        st.info("Research appears here after the client profile checkpoint is approved.")
+        return
+    st.subheader("Evidence-backed market brief")
+    st.caption("Each finding shows its verified source and publication date.")
+    for finding in brief.findings:
+        with st.container(border=True):
+            st.markdown(f"**{finding.theme}** · {finding.finding_type.replace('_', ' ').title()}")
+            st.write(finding.claim)
+            st.caption(f"Client relevance: {finding.relevance_to_client}")
+            st.caption("Evidence: " + ", ".join(f"{sid} ({date})" for sid, date in zip(finding.cited_source_ids, finding.publication_dates)))
+    if brief.key_market_risks:
+        st.markdown("**Key risks to keep in view**")
+        for risk in brief.key_market_risks:
+            st.write(f"- {risk}")
+    with st.expander("Sources reviewed"):
+        for source in brief.validated_sources:
+            st.write(f"**{source.source_id}** · {source.title} · {source.published_at}")
+            st.caption(source.text)
+
+
+def render_ideas(view: Any) -> None:
+    if not view:
+        st.info("Recommendations appear after the profile and research checkpoints.")
+        return
+    state = st.session_state.service.get_state(view.session_id)
+    ideas = state.get("candidate_ideas")
+    assessment = state.get("assessment")
+    if not ideas:
+        st.info("The investment idea checkpoint has not been reached yet.")
+        return
+    st.caption(ideas.complementarity_thesis)
+    grid = st.columns(3)
+    statuses = {item.idea_id: item for item in assessment.idea_evaluations} if assessment else {}
+    for col, idea in zip(grid, ideas.ideas):
+        with col:
+            with st.container(border=True):
+                st.markdown(f"<div class='eyebrow'>Idea {idea.slot_number} · {idea.portfolio_role.title()}</div>", unsafe_allow_html=True)
+                st.markdown(f"### {idea.ticker}")
+                st.markdown(f"**{idea.name}**")
+                st.metric("Target allocation", f"{idea.target_weight_pct:.1f}%", f"{idea.action.title()} · {idea.conviction} conviction")
+                st.write(idea.thesis)
+                st.caption(f"Why now: {idea.why_now}")
+                st.caption(f"Client fit: {idea.client_fit_rationale}")
+                st.caption(f"Main risk: {'; '.join(idea.key_risks)}")
+                status = statuses.get(idea.idea_id)
+                if status:
+                    if status.status == "PASS": st.success("Suitability check passed")
+                    elif status.status == "FLAG": st.warning("Advisor review required")
+                    else: st.error("Suitability check failed")
+    if assessment:
+        st.markdown("### Portfolio-level suitability")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Overall status", assessment.overall_status)
+        c2.metric("Hard breaches", "Yes" if assessment.has_blocking_hard_breach else "None")
+        c3.metric("Required actions", str(len(assessment.required_actions)))
+        if assessment.detected_breaches:
+            for breach in assessment.detected_breaches:
+                st.warning(f"{breach.rule_id} · {breach.message} (observed {breach.after_value:.1f}; limit {breach.threshold_value:.1f})")
+        else:
+            st.success("No portfolio-level rule breaches were detected.")
+        with st.expander("Review rule checks"):
+            checks = [{"Rule": r.rule_id, "Check": r.name, "Result": r.outcome, "Observed": r.after_value, "Limit": r.threshold_value} for r in assessment.rule_results]
+            st.dataframe(pd.DataFrame(checks), hide_index=True, width="stretch")
+
+
+def submit_action(action: str, notes: str = "", **kwargs: Any) -> None:
+    service = st.session_state.service
+    view = st.session_state.workspace
+    try:
+        request = AdvisorActionRequest(action=action, notes=notes or None, **kwargs)
+        st.session_state.workspace = service.execute_action(view.session_id, request)
+        st.session_state.error = None
+    except Exception as exc:
+        st.session_state.error = str(exc)
+    st.rerun()
+
+
+def render_allocation_editor(view: Any) -> None:
+    state = st.session_state.service.get_state(view.session_id)
+    ideas = state.get("candidate_ideas")
+    if not ideas:
+        return
+    suffix = view.session_id
+    with st.expander("Edit an idea allocation"):
+        selected = st.selectbox(
+            "Idea to edit",
+            ideas.ideas,
+            format_func=lambda idea: f"Idea {idea.slot_number} · {idea.ticker} · {idea.name}",
+            key=f"allocation_idea_{suffix}",
+        )
+        weight = st.number_input(
+            "New target allocation (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(selected.target_weight_pct),
+            step=0.5,
+            key=f"allocation_weight_{suffix}_{selected.idea_id}",
+        )
+        note = st.text_input(
+            "Reason for the allocation change",
+            key=f"allocation_note_{suffix}",
+            placeholder="Record why this change fits the client and portfolio.",
+        )
+        if st.button("Recheck suitability", key=f"recheck_{suffix}", disabled=not note.strip(), type="primary", width="stretch"):
+            submit_action("edit_allocation", note, idea_id=selected.idea_id, edits={"target_weight_pct": weight})
+
+
+def approve_custom_profile() -> None:
+    st.session_state.completed_custom.add("profile")
+    st.session_state.custom_stage = "research"
+    try:
+        st.session_state.research = research_agent().execute(st.session_state.profile)
+    except Exception as exc:
+        st.session_state.error = str(exc)
+
+
+def approve_custom_research() -> None:
+    st.session_state.completed_custom.add("research")
+    if st.session_state.case == "meeting":
+        st.session_state.custom_stage = "brief"
+    else:
+        st.session_state.custom_stage = "decision"
+
+
+def render_advisor_review() -> None:
+    case = st.session_state.case
+    st.subheader("Advisor checkpoint")
+    st.write("Review the evidence and client impact, record your rationale, then choose the next step.")
+    if st.session_state.error:
+        st.error(st.session_state.error)
+    if case == "investment":
+        view = st.session_state.workspace
+        if not view:
+            st.error("The advisory workflow could not start. Restart the review to try again.")
+            return
+        pending = view.pending_review
+        stage = pending.stage if pending else view.center_panel.current_stage
+        st.markdown(f"**Current checkpoint:** {pending.agent if pending else stage.replace('_', ' ').title()}")
+        if pending:
+            st.markdown(f"<div class='callout'>{pending.reason}</div>", unsafe_allow_html=True)
+        st.text_area("Advisor rationale or review note", key="advisor_note", placeholder="Record the evidence, suitability reasoning, or follow-up needed.")
+        if stage == "client_profile":
+            st.caption("Confirm the profile and portfolio details before research begins.")
+            current_risk = st.session_state.raw_profile.get("stated_risk_willingness", "Moderate")
+            risk_options = ["Conservative", "Moderate", "Balanced Growth", "Aggressive Growth"]
+            selected_risk = st.selectbox(
+                "Client-confirmed risk tolerance",
+                risk_options,
+                index=risk_options.index(current_risk) if current_risk in risk_options else 1,
+                key=f"confirmed_risk_{view.session_id}",
+            )
+            st.caption("Change this only when the advisor has confirmed a correction with the client.")
+            if selected_risk != current_risk:
+                if st.button("Save confirmed profile correction", type="primary", width="stretch", disabled=not st.session_state.advisor_note.strip()):
+                    st.session_state.raw_profile["stated_risk_willingness"] = selected_risk
+                    submit_action("regenerate", st.session_state.advisor_note, edits={"stated_risk_willingness": selected_risk})
+            elif st.button("Confirm client profile", type="primary", width="stretch"):
+                submit_action("approve", st.session_state.advisor_note)
+        elif stage == "market_intelligence":
+            st.caption("Check source dates and client relevance on the Research screen.")
+            if st.button("Approve research brief", type="primary", width="stretch"):
+                submit_action("approve", st.session_state.advisor_note)
+        elif stage == "suitability_review":
+            assessment = st.session_state.service.get_state(view.session_id).get("assessment")
+            if assessment:
+                st.markdown(f"**Suitability result:** {assessment.overall_status}")
+                rule_issues = [rule for rule in assessment.rule_results if rule.outcome in {"FLAG", "FAIL", "BLOCK"}]
+                for issue in rule_issues:
+                    message = f"{issue.rule_id} · {issue.message}"
+                    if issue.outcome in {"FAIL", "BLOCK"}:
+                        st.error(message)
+                    else:
+                        st.warning(message)
+            st.caption("Review recommendations and rule results on the Recommendations screen.")
+            if pending and "override_flag" in pending.allowed_actions:
+                st.warning("An exception requires a documented advisor rationale.")
+                if st.button("Approve with documented exception", type="primary", width="stretch", disabled=not st.session_state.advisor_note.strip()):
+                    submit_action("override_flag", st.session_state.advisor_note)
+            elif pending and "approve" in pending.allowed_actions:
+                if st.button("Approve suitability review", type="primary", width="stretch"):
+                    submit_action("approve", st.session_state.advisor_note)
+            if pending and "revise" in pending.allowed_actions:
+                if st.button("Revise ideas using this rationale", type="primary", width="stretch", disabled=not st.session_state.advisor_note.strip()):
+                    submit_action("revise", st.session_state.advisor_note)
+            if pending and "regenerate" in pending.allowed_actions:
+                if st.button("Regenerate ideas", width="stretch", disabled=not st.session_state.advisor_note.strip()):
+                    submit_action("regenerate", st.session_state.advisor_note)
+            if pending and "edit_allocation" in pending.allowed_actions:
+                render_allocation_editor(view)
+            if pending and "reject" in pending.allowed_actions:
+                if st.button("Reject this recommendation set", width="stretch"):
+                    submit_action("reject", st.session_state.advisor_note)
+        elif stage in {"advisor_approval", "final_memo"}:
+            st.caption("Read the completed memo on the Brief screen before recording final sign-off.")
+            if pending and "approve" in pending.allowed_actions:
+                if st.button("Approve final memo", type="primary", width="stretch"):
+                    submit_action("approve", st.session_state.advisor_note)
+            elif pending and "reject" in pending.allowed_actions:
+                if st.button("Return memo for revision", width="stretch"):
+                    submit_action("reject", st.session_state.advisor_note)
+            if pending and "revise" in pending.allowed_actions:
+                if st.button("Revise recommendations", type="primary", width="stretch", disabled=not st.session_state.advisor_note.strip()):
+                    submit_action("revise", st.session_state.advisor_note)
+            if pending and "regenerate" in pending.allowed_actions:
+                if st.button("Regenerate memo", width="stretch", disabled=not st.session_state.advisor_note.strip()):
+                    submit_action("regenerate", st.session_state.advisor_note)
+            if pending and "edit_allocation" in pending.allowed_actions:
+                render_allocation_editor(view)
+        else:
+            st.info("The workflow is complete or is not paused at a review checkpoint.")
+        if view.outcome:
+            st.success(f"Workflow outcome: {view.outcome}")
+            if view.outcome == "APPROVED":
+                render_approved_memo_download(view)
+            if view.outcome == "APPROVED" and st.session_state.get("market_revision_pending"):
+                st.button("Finish market response", type="primary", width="stretch", on_click=finish_market_response)
+    elif case == "meeting":
+        stage = st.session_state.custom_stage
+        client_name = st.session_state.raw_profile.get("name", "the client")
+        if stage == "profile":
+            st.caption(f"Verify {client_name}’s stated goal, investment horizon, risk profile, and portfolio.")
+            if st.button("Confirm client profile", type="primary", width="stretch"):
+                approve_custom_profile(); st.rerun()
+        elif stage == "research":
+            st.caption("Review evidence and citations on the Research screen.")
+            if st.button("Approve research and prepare brief", type="primary", width="stretch"):
+                approve_custom_research(); st.rerun()
+        elif stage == "brief":
+            st.caption("Review the meeting brief on the Brief screen, then approve it.")
+            if st.button("Approve meeting brief", type="primary", width="stretch"):
+                st.session_state.completed_custom.add("brief")
+                st.session_state.custom_stage = "complete"
+                st.rerun()
+        else:
+            st.success("Meeting preparation is approved and ready to use.")
+            st.subheader("Choose the next review")
+            st.caption("Your client and meeting preparation is complete. Choose either review; the investment review is not required to respond to a market event.")
+            investment_col, market_col = st.columns(2)
+            with investment_col:
+                st.markdown("**Investment review**")
+                st.caption("Assess investment ideas, portfolio suitability, and the advisory memo.")
+                st.button(
+                    "Review investments",
+                    type="primary",
+                    width="stretch",
+                    key="choose_investment_review",
+                    on_click=start_case,
+                    args=("investment",),
+                )
+            with market_col:
+                st.markdown("**Market-event response**")
+                st.caption("Assess an event’s relevance, record your decision, and document follow-up.")
+                st.button(
+                    "Respond to a market event",
+                    width="stretch",
+                    key="choose_market_response",
+                    on_click=start_case,
+                    args=("market",),
+                )
+    else:
+        stage = st.session_state.custom_stage
+        if stage == "profile":
+            st.caption("Verify client data and portfolio exposures before assessing the event.")
+            if st.button("Confirm client profile", type="primary", width="stretch"):
+                approve_custom_profile(); st.rerun()
+        elif stage == "research":
+            st.caption("Review the event context and evidence on the Research screen.")
+            if st.button("Approve event research", type="primary", width="stretch"):
+                approve_custom_research(); st.rerun()
+        elif stage == "decision":
+            st.markdown("**Event:** Interest-rate expectations have shifted. Existing bond exposures may respond differently as expectations change.")
+            choice = st.radio("Advisor decision", ["Maintain current advice", "Monitor and follow up", "Revise the advice"], key="event_choice")
+            goal = (st.session_state.profile.goals[0] if st.session_state.get("profile") and st.session_state.profile.goals else "the client’s stated objectives")
+            reason = st.text_area("Decision rationale", key="event_rationale", placeholder=f"Explain how the evidence and {goal} inform this decision.")
+            follow_up = st.text_input("Monitoring trigger or follow-up date", key="event_followup", placeholder="Required when monitoring")
+            st.button(
+                "Record advisor decision",
+                type="primary",
+                width="stretch",
+                disabled=not reason.strip() or (choice.startswith("Monitor") and not follow_up.strip()),
+                on_click=record_market_decision,
+            )
+        elif stage == "complete":
+            st.success("The market response is recorded. No trade was placed.")
+            if st.session_state.event_decision:
+                st.write(f"**Decision:** {st.session_state.event_decision['choice']}")
+                st.write(f"**Rationale:** {st.session_state.event_decision['reason']}")
+                if st.session_state.event_decision["follow_up"]:
+                    st.write(f"**Follow-up:** {st.session_state.event_decision['follow_up']}")
+
+
+def render_approved_memo_download(view: Any) -> None:
+    """Show the finalized memo download at sign-off and on the Brief screen."""
+    pdf_path = st.session_state.service.get_pdf_path(view.session_id)
+    pdf_file = Path(pdf_path) if pdf_path else None
+    if pdf_file and not pdf_file.is_absolute():
+        pdf_file = ROOT / pdf_file
+    if pdf_file and pdf_file.is_file():
+        st.success("Final advisor-approved memo is ready to download.")
+        st.download_button(
+            "Download approved memo PDF",
+            pdf_file.read_bytes(),
+            file_name=pdf_file.name,
+            mime="application/pdf",
+            type="primary",
+            width="stretch",
+            key="approved_memo_pdf_download",
+        )
+    else:
+        st.warning("The review is approved, but its PDF file is not available at the expected path.")
+
+
+def render_brief() -> None:
+    case = st.session_state.case
+    if case == "investment":
+        view = st.session_state.workspace
+        if not view:
+            st.info("The advisory brief is available after the workflow starts.")
+            return
+        state = st.session_state.service.get_state(view.session_id)
+        memo = state.get("memo")
+        if not memo:
+            st.info("The memo is prepared after the suitability checkpoint is complete.")
+            return
+        page = memo.page_1_executive
+        st.subheader("Advisory memo preview")
+        st.markdown(f"### {page.client_name} · {page.date}")
+        st.text(page.investment_objective)
+        st.markdown("**Client snapshot**")
+        st.text(page.client_snapshot)
+        st.markdown("**Portfolio snapshot**")
+        st.text(page.portfolio_snapshot)
+        st.markdown("**Recommendations at a glance**")
+        st.dataframe(pd.DataFrame([{"Idea": row.slot_number, "Instrument": row.ticker, "Action": row.action, "Target": f"{row.target_weight_pct:.1f}%", "Role": row.portfolio_role, "Fit": row.why_it_fits} for row in page.ideas_at_a_glance]), hide_index=True, width="stretch")
+        for idea in memo.page_2_details:
+            with st.expander(f"Idea {idea.slot_number}: {idea.ticker} — {idea.name}"):
+                st.write(idea.thesis)
+                st.write(f"**Why now:** {idea.why_now}")
+                st.write(f"**Key risks:** {'; '.join(idea.key_risks)}")
+                st.write(f"**Evidence:** {'; '.join(idea.cited_sources_formatted)}")
+        st.markdown("**Portfolio impact and governance**")
+        st.write(memo.page_3_portfolio_view.portfolio_level_impact_narrative)
+        for disclosure in memo.page_3_portfolio_view.risk_disclosures:
+            st.caption(disclosure)
+        approved = view.outcome == "APPROVED"
+        if approved:
+            render_approved_memo_download(view)
+        else:
+            st.info("The PDF download becomes available after the advisor approves the final memo.")
+    elif case == "meeting":
+        profile = st.session_state.get("profile")
+        research = st.session_state.get("research")
+        if not profile or "profile" not in st.session_state.completed_custom:
+            st.info("The meeting brief is prepared once the client profile has been confirmed.")
+            return
+        st.subheader(f"Meeting brief · {profile.name}")
+        st.markdown("**Purpose**")
+        goal_text = "; ".join(profile.goals) if profile.goals else "Confirm the client’s investment objectives"
+        st.write(f"Review {profile.name}’s objectives ({goal_text}) and decide whether the current portfolio and liquidity plan remain aligned.")
+        st.markdown("**Client snapshot**")
+        st.write(f"{profile.calculated_risk_tier} risk profile · {profile.experience_level} · {profile.time_horizon_months // 12}-year horizon")
+        st.markdown("**Discussion points**")
+        mix = ", ".join(f"{weight:.0f}% {asset.lower()}" for asset, weight in profile.current_asset_class_weights.items())
+        discussion_points = [
+            f"Confirm the goal, timing, and expected cash requirement: {goal_text}.",
+            f"Review the current asset mix: {mix or 'not available'}.",
+            "Confirm near-term liquidity needs and any amount available to invest.",
+            "Review currency exposure and comfort with market volatility.",
+        ]
+        st.write("\n".join(f"{index}. {point}" for index, point in enumerate(discussion_points, start=1)))
+        st.markdown("**Research to discuss**")
+        if research:
+            for finding in research.findings[:3]:
+                st.write(f"- {finding.theme}: {finding.claim} ({', '.join(finding.cited_source_ids)})")
+        st.caption("Advisor-prepared discussion guide. Recommendations and client facts require RM confirmation.")
+    else:
+        st.subheader("Market-event decision record")
+        decision = st.session_state.get("event_decision")
+        if decision:
+            st.write(f"**Decision:** {decision['choice']}")
+            st.write(f"**Rationale:** {decision['reason']}")
+            if decision["follow_up"]:
+                st.write(f"**Follow-up:** {decision['follow_up']}")
+            st.caption("The advisor records the decision here; no trade is placed from this workspace.")
+        else:
+            st.info("The decision record is available after research review.")
+
+
+def render_overview() -> None:
+    case = st.session_state.get("case")
+    label = CASE_LABELS.get(case, "Client overview")
+    st.markdown(f"<div class='eyebrow'>{label}</div>", unsafe_allow_html=True)
+    st.title("Advisory workspace")
+    st.markdown("Prepare a client conversation with evidence, suitability checks, and clear advisor sign-off.")
+    st.write("")
+    profile = st.session_state.get("profile")
+    view = st.session_state.get("workspace")
+    if st.session_state.error:
+        st.error(st.session_state.error)
+    if profile or view:
+        if view:
+            name = view.client_name
+            stage = view.pending_review.stage if view.pending_review else view.center_panel.current_stage
+        else:
+            name = profile.name
+            stage = st.session_state.custom_stage
+        a, b, c = st.columns(3)
+        a.metric("Client", name)
+        b.metric("Active checkpoint", stage.replace("_", " ").title())
+        c.metric("Review status", "In progress")
+        st.markdown("#### Workspace screens")
+        st.write("Open a labeled screen to inspect the client, portfolio, research, recommendations, advisor decisions, or brief.")
+    else:
+        st.info("The client workspace is loading. Restart the review if details do not appear.")
+
+
+def reset_to_client_list() -> None:
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+
+
+def start_online_session(api_url: str, raw_input: dict[str, Any]) -> None:
+    try:
+        response = httpx.post(f"{api_url}/sessions", json=raw_input, timeout=120.0)
+        response.raise_for_status()
+        st.session_state.online_workspace = response.json()
+        st.session_state.online_error = None
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:1200]
+        st.session_state.online_error = f"The API rejected the intake ({exc.response.status_code}): {detail}"
+        st.session_state.online_workspace = None
+    except httpx.RequestError as exc:
+        st.session_state.online_error = f"Could not reach {api_url}. Start the REST API and try again. ({exc})"
+        st.session_state.online_workspace = None
+    st.rerun()
+
+
+def render_online_result(api_url: str) -> None:
+    if st.session_state.get("online_error"):
+        st.error(st.session_state.online_error)
+    online_workspace = st.session_state.get("online_workspace")
+    if online_workspace:
+        st.success(f"Online review started for {online_workspace.get('client_name', 'the client')}.")
+        st.write(f"**Session:** `{online_workspace.get('session_id', 'unknown')}`")
+        st.write(f"**Current stage:** {online_workspace.get('center_panel', {}).get('current_stage', 'Profile review')}")
+        pending = online_workspace.get("pending_review") or {}
+        if pending:
+            st.write(f"**Advisor checkpoint:** {pending.get('stage', 'Profile review')} · {pending.get('agent', 'Advisory team')}")
+            st.write(pending.get("reason", "Review the client profile and confirm the information."))
+        st.link_button("Open API workspace", f"{api_url}/docs")
+
+
+def render_online_existing_clients(api_url: str) -> None:
+    st.title("Existing clients")
+    st.markdown("Choose a sample client to start an online review with the configured model provider.")
+    for row_start in range(0, len(VISIBLE_CLIENT_KEYS), 2):
+        cards = st.columns(2)
+        for col, client_key in zip(cards, VISIBLE_CLIENT_KEYS[row_start:row_start + 2]):
+            raw = SAMPLE_PROFILES[client_key]
+            with col, st.container(border=True):
+                st.markdown(f"<div class='eyebrow'>{raw['client_id']}</div>", unsafe_allow_html=True)
+                st.markdown(f"#### {raw['name']}")
+                st.write(CLIENT_CARD_SUMMARIES.get(client_key, raw.get("goals", ["Objectives not provided"])[0]))
+                risk = raw.get("stated_risk_willingness", "Not recorded")
+                risk_label = risk if "risk" in risk.lower() else f"{risk} risk"
+                st.caption(f"{risk_label} · {fmt_horizon(raw.get('time_horizon_months'))}")
+                if st.button("Start online review", key=f"online_{client_key}", type="primary", width="stretch"):
+                    start_online_session(api_url, json.loads(json.dumps(raw)))
+
+
+def render_online_intake(api_url: str) -> None:
+    st.title("New client")
+    st.markdown("Enter client-confirmed details to start an online advisory session.")
+    with st.form("online_client_intake"):
+        st.markdown("#### Client details")
+        id_col, name_col, currency_col = st.columns([1, 2, 1])
+        with id_col:
+            client_id = st.text_input(
+                "Client ID",
+                value=st.session_state.get("online_default_client_id", f"CL-{uuid4().hex[:8].upper()}"),
+            )
+        with name_col:
+            name = st.text_input("Client name")
+        with currency_col:
+            currency = st.selectbox("Base currency", ["SGD", "USD", "EUR", "GBP", "HKD"])
+
+        goal_text = st.text_area("Investment objectives", placeholder="Enter one objective per line")
+        horizon_col, risk_col, wealth_col, experience_col = st.columns(4)
+        with horizon_col:
+            horizon_months = st.number_input("Time horizon (months)", min_value=1, value=60, step=1)
+        with risk_col:
+            risk_willingness = st.selectbox(
+                "Risk willingness", ["Conservative", "Low to moderate", "Moderate", "Balanced growth", "Aggressive growth", "High risk"]
+            )
+        with wealth_col:
+            total_wealth = st.number_input("Total wealth", min_value=0.0, value=0.0, step=10000.0)
+        with experience_col:
+            experience = st.selectbox("Investment experience", ["New investor", "ETF investor", "Experienced investor", "Professional investor"])
+
+        st.markdown("#### Current portfolio")
+        st.caption("Enter the client-confirmed holdings. Weights must total 100%.")
+        holdings_seed = pd.DataFrame([{
+            "ticker": "", "name": "", "asset_class": "Equities", "region": "Global",
+            "currency": currency, "weight_pct": 0.0, "risk_rating": 3,
+        }])
+        holdings_frame = st.data_editor(
+            holdings_seed,
+            num_rows="dynamic",
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker", required=True),
+                "name": st.column_config.TextColumn("Holding name", required=True),
+                "asset_class": st.column_config.TextColumn("Asset class", required=True),
+                "region": st.column_config.TextColumn("Region", required=True),
+                "currency": st.column_config.TextColumn("Currency", required=True),
+                "weight_pct": st.column_config.NumberColumn("Weight %", min_value=0.0, max_value=100.0, step=0.1),
+                "risk_rating": st.column_config.NumberColumn("Risk 1–5", min_value=1, max_value=5, step=1),
+            },
+        )
+
+        st.markdown("#### Liquidity needs")
+        st.caption("Add planned cash needs, or leave the table empty if the client has none to record.")
+        liquidity_frame = st.data_editor(
+            pd.DataFrame(columns=["due_months", "amount", "purpose"]),
+            num_rows="dynamic",
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "due_months": st.column_config.NumberColumn("Due in months", min_value=1, step=1),
+                "amount": st.column_config.NumberColumn("Amount", min_value=0.0, step=1000.0),
+                "purpose": st.column_config.TextColumn("Purpose"),
+            },
+        )
+        advisor_notes = st.text_area("Advisor context", placeholder="Optional notes for the review")
+        submitted = st.form_submit_button("Start online review", type="primary", width="stretch")
+
+    if not submitted:
+        return
+
+    goals = [line.strip() for line in goal_text.splitlines() if line.strip()]
+    holdings = holdings_frame.replace({pd.NA: None}).to_dict(orient="records")
+    holdings = [row for row in holdings if str(row.get("ticker") or "").strip()]
+    try:
+        total_weight = sum(float(row.get("weight_pct") or 0) for row in holdings)
+    except (TypeError, ValueError):
+        total_weight = -1
+    if not name.strip() or not client_id.strip() or not goals:
+        st.error("Enter a client ID, client name, and at least one investment objective.")
+        return
+    if total_wealth <= 0:
+        st.error("Enter the client-confirmed total wealth.")
+        return
+    if not holdings or abs(total_weight - 100.0) > 0.1:
+        st.error(f"Enter at least one client holding and make the weights total 100% (currently {total_weight:.1f}%).")
+        return
+
+    liquidity_schedule = []
+    for row in liquidity_frame.to_dict(orient="records"):
+        if not row.get("purpose") and row.get("amount") is None and row.get("due_months") is None:
+            continue
+        if not row.get("purpose") or row.get("amount") is None or row.get("due_months") is None:
+            st.error("Complete all fields for each liquidity need, or remove the unfinished row.")
+            return
+        liquidity_schedule.append({
+            "due_months": int(row["due_months"]),
+            "amount": float(row["amount"]),
+            "purpose": str(row["purpose"]).strip(),
+        })
+
+    raw_input = {
+        "client_id": client_id.strip(),
+        "name": name.strip(),
+        "base_currency": currency,
+        "goals": goals,
+        "time_horizon_months": int(horizon_months),
+        "stated_risk_willingness": risk_willingness,
+        "liquidity_schedule": liquidity_schedule,
+        "total_wealth": float(total_wealth),
+        "experience_level": experience,
+        "raw_holdings": holdings,
+        "constraints": {"excluded_sectors": [], "excluded_countries": [], "esg_mandate": False, "max_single_stock_pct": 20.0},
+        "advisor_notes": advisor_notes.strip(),
+    }
+    start_online_session(api_url, raw_input)
+
+
+def render_online_mode() -> None:
+    st.title("Online advisory")
+    st.markdown("Use a sample client or enter a new client profile.")
+    st.info("Starting a review sends client details to the configured OpenRouter model provider. Model usage may consume credits.")
+    api_url = st.text_input(
+        "Advisory API address",
+        value=st.session_state.get("online_api_url", "http://127.0.0.1:8000"),
+        help="The REST API must be running with an OpenRouter key configured.",
+    ).strip().rstrip("/")
+    st.session_state.online_api_url = api_url
+    source = st.segmented_control(
+        "Client source",
+        ["Existing clients", "New client"],
+        default="Existing clients",
+        key="online_client_source",
+        selection_mode="single",
+        label_visibility="collapsed",
+        width="content",
+    )
+    if source == "New client":
+        render_online_intake(api_url)
+    else:
+        render_online_existing_clients(api_url)
+    render_online_result(api_url)
+
+
+def render_client_picker() -> None:
+    st.title("Clients")
+    st.markdown("Select a client to open their advisory workspace.")
+    for row_start in range(0, len(VISIBLE_CLIENT_KEYS), 2):
+        cards = st.columns(2)
+        for col, client_key in zip(cards, VISIBLE_CLIENT_KEYS[row_start:row_start + 2]):
+            raw = SAMPLE_PROFILES[client_key]
+            with col, st.container(border=True):
+                st.markdown(f"<div class='eyebrow'>{raw['client_id']}</div>", unsafe_allow_html=True)
+                st.markdown(f"#### {raw['name']}")
+                st.write(CLIENT_CARD_SUMMARIES.get(client_key, raw.get("goals", ["Objectives not provided"])[0]))
+                risk = raw.get("stated_risk_willingness", "Not recorded")
+                risk_label = risk if "risk" in risk.lower() else f"{risk} risk"
+                st.caption(f"{risk_label} · {fmt_horizon(raw.get('time_horizon_months'))}")
+                if st.button("Open client", key=f"open_{client_key}", type="primary", width="stretch"):
+                    select_client(client_key)
                     st.rerun()
 
-    # ==========================================
-    # 2. CENTER PANEL: DECISION SPACE
-    # ==========================================
-    with col_center:
-        st.markdown("### ⚖️ 2. Decision Space & Risk Controls")
-        cp = view.center_panel
-        st.markdown(f"**Stage:** `{cp.current_stage.upper()}` &nbsp;|&nbsp; **Active Agent:** `{cp.active_agent_name}`")
-        st.write(cp.stage_summary)
 
-        review = view.pending_review
-        stage = review.stage if review else None
-        output = (review.output or {}) if review else {}
+def render_client_home() -> None:
+    profile = st.session_state.profile
+    raw = st.session_state.raw_profile
+    top_a, top_b = st.columns([4, 1])
+    with top_a:
+        st.title(profile.name)
+        st.markdown("Client relationship overview")
+    with top_b:
+        if st.button("All clients", width="stretch"):
+            reset_to_client_list()
+            st.rerun()
+    a, b, c = st.columns(3)
+    a.metric("Client ID", profile.client_id)
+    b.metric("Risk profile", profile.calculated_risk_tier)
+    c.metric("Portfolio value", fmt_money(raw.get("total_wealth", 0), profile.base_currency))
+    st.markdown("### Objectives")
+    st.write(" · ".join(profile.goals) if profile.goals else "Objectives need advisor confirmation.")
+    missing = [field for flag in profile.unresolved_flags if flag.code == "MISSING_MANDATORY_FIELD" for field in flag.affected_fields]
+    if missing:
+        st.warning("Client information needs confirmation: " + ", ".join(sorted(set(missing))) + ". Suitability checks will stop until the required information is recorded.")
+    st.markdown("### Advisory process")
+    st.write("Client and meeting preparation → Choose an investment review or a market-event response")
+    if st.button("Start client review", key=f"start_review_{st.session_state.client_key}", type="primary", width="stretch"):
+        start_case("meeting")
+        st.rerun()
 
-        if view.outcome:
-            if view.outcome == "APPROVED":
-                st.success("✅ Advisory session approved and signed off by the Relationship Manager.")
-            else:
-                st.error("⛔ Advisory session was rejected by the Relationship Manager.")
-        elif review:
-            st.warning(f"🛡️ RM REVIEW REQUIRED — {review.agent}: {review.reason}")
 
-        # ---------- Agent 1: Client Profile review ----------
-        if stage == "client_profile":
-            st.markdown("#### 👤 Client Profile Agent Output")
-            for flag in review.unresolved_flags:
-                box_class = "warning-box" if flag.get("severity") == "BLOCKING_INTERRUPT" else "flag-box"
-                st.markdown(f"""
-                <div class="{box_class}">
-                    <b>[{flag.get('severity')}] {flag.get('code')}</b><br/>
-                    {flag.get('message')}<br/>
-                    <small>Fields: {', '.join(flag.get('affected_fields', []))}</small>
-                </div>
-                """, unsafe_allow_html=True)
-
-            st.markdown(
-                f"**Calculated Risk Tier:** `{output.get('calculated_risk_tier')} ({output.get('risk_tier_number')}/5)` &nbsp;|&nbsp; "
-                f"**Horizon:** `{output.get('time_horizon_months')} months` &nbsp;|&nbsp; "
-                f"**Total Wealth:** `${output.get('total_wealth', 0):,.0f}`"
-            )
-            st.caption(f"Asset class weights: {output.get('current_asset_class_weights')}")
-
-            st.markdown("##### ✏️ Profile Fields (edit, then Regenerate to re-run the agent)")
-            raw = review.raw_input
-            raw_constraints = raw.get("constraints") or {}
-            f1, f2 = st.columns(2)
-            with f1:
-                name = st.text_input("Client name", value=str(raw.get("name", "")))
-                goals = st.text_input("Goals (comma-separated)", value=", ".join(raw.get("goals") or []))
-                horizon = st.number_input("Time horizon (months)", min_value=0, value=int(raw.get("time_horizon_months") or 0))
-                willingness = st.text_input("Stated risk willingness", value=str(raw.get("stated_risk_willingness", "")))
-            with f2:
-                client_id = st.text_input("Client ID", value=str(raw.get("client_id", "")))
-                wealth = st.number_input("Total wealth", min_value=0.0, value=float(raw.get("total_wealth") or 0.0), step=10000.0)
-                experience = st.text_input("Experience level", value=str(raw.get("experience_level", "")))
-                max_single = st.number_input("Max single stock %", min_value=1.0, max_value=100.0,
-                                             value=float(raw_constraints.get("max_single_stock_pct", 20.0)))
-            excluded = st.text_input("Excluded sectors (comma-separated)", value=", ".join(raw_constraints.get("excluded_sectors", [])))
-            advisor_context = st.text_area("Advisor notes (context for the agents; treated as data)", value=str(raw.get("advisor_notes", "")))
-            esg = st.checkbox("ESG mandate", value=bool(raw_constraints.get("esg_mandate", False)))
-
-            st.caption("Liquidity schedule")
-            liquidity = st.data_editor(
-                raw.get("liquidity_schedule") or [{"due_months": 12, "amount": 0.0, "purpose": ""}],
-                num_rows="dynamic", use_container_width=True, key="edit_liquidity"
-            )
-            st.caption("Current holdings")
-            holdings = st.data_editor(
-                raw.get("raw_holdings") or [{"ticker": "", "name": "", "asset_class": "", "region": "", "currency": "USD", "weight_pct": 0.0, "risk_rating": 3}],
-                num_rows="dynamic", use_container_width=True, key="edit_holdings"
-            )
-
-            def records(data: Any) -> list:
-                rows = data.to_dict("records") if hasattr(data, "to_dict") else list(data)
-                return [r for r in rows if any(v not in (None, "", 0, 0.0) for v in r.values())]
-
-            edits = {
-                "client_id": client_id, "name": name, "goals": split_csv(goals),
-                "time_horizon_months": int(horizon), "stated_risk_willingness": willingness,
-                "total_wealth": float(wealth), "experience_level": experience,
-                "constraints": {**raw_constraints, "excluded_sectors": split_csv(excluded),
-                                "esg_mandate": esg, "max_single_stock_pct": float(max_single)},
-                "liquidity_schedule": records(liquidity), "raw_holdings": records(holdings),
-                "advisor_notes": advisor_context
-            }
-            if "approve" not in review.allowed_actions:
-                st.info("Mandatory fields are missing — complete them above and Regenerate. Approval is disabled.")
-            review_buttons(view.session_id, review, "profile", regenerate_label="🔄 Regenerate with Edits", edits=edits)
-
-        # ---------- Agent 2: Market Intelligence review ----------
-        elif stage == "market_intelligence":
-            st.markdown("#### 🌐 Market Intelligence Agent Output")
-            st.write("**Macro themes:** " + ", ".join(output.get("macro_themes", [])))
-            st.markdown("##### Findings")
-            st.dataframe([{
-                "Rank": f.get("materiality_rank"), "Theme": f.get("theme"), "Claim": f.get("claim"),
-                "Type": f.get("finding_type"), "Sources": ", ".join(f.get("cited_source_ids", [])),
-                "Published": ", ".join(f.get("publication_dates", []))
-            } for f in sorted(output.get("findings", []), key=lambda f: f.get("materiality_rank", 99))],
-                use_container_width=True, hide_index=True)
-            st.markdown("##### Key market risks")
-            for r in output.get("key_market_risks", []):
-                st.write(f"- {r}")
-            with st.expander("Validated evidence sources"):
-                st.dataframe([{
-                    "Source": src.get("source_id"), "Title": src.get("title"), "Publisher": src.get("publisher"),
-                    "Published": src.get("published_at"), "Age (days)": src.get("age_days")
-                } for src in output.get("validated_sources", [])], use_container_width=True, hide_index=True)
-            review_buttons(view.session_id, review, "market")
-
-        # ---------- Agents 3 + 4: validated recommendations review ----------
-        elif stage == "suitability_review":
-            status = output.get("overall_status")
-            verdicts = {ie["idea_id"]: ie for ie in output.get("idea_evaluations", [])}
-            st.markdown(f"#### 💡 Recommendations after Suitability Review — **{status}**")
-            if review.escalated:
-                st.error("R10 escalation: an idea still fails after 2 automatic regenerations. Revise it with guidance, edit it, or reject it.")
-            st.caption(output.get("critic_notes", ""))
-            if review.regeneration_history:
-                with st.expander(f"🔁 Ideas replaced automatically in this session ({len(review.regeneration_history)})"):
-                    for h in review.regeneration_history:
-                        st.markdown(f"- Slot {h['slot']}: **{h['ticker']}** failed {', '.join(h['rules'])} "
-                                    f"(attempt {h['attempt']}) — {h['reason']}")
-
-            portfolio_issues = [r for r in output.get("rule_results", []) if r["outcome"] != "PASS"]
-            for r in portfolio_issues:
-                box_class = "warning-box" if r["outcome"] in ("FAIL", "BLOCK") else "flag-box"
-                st.markdown(f'<div class="{box_class}"><b>[{r["outcome"]}] {r["rule_id"]} {r["name"]}</b><br/>{r["message"]}</div>',
-                            unsafe_allow_html=True)
-            if not portfolio_issues and status == "PASS":
-                st.markdown('<div class="pass-box"><b>✅ ALL SUITABILITY RULES PASSED</b><br/>R1-R10 and liquidity coverage pass for the proposed portfolio.</div>',
-                            unsafe_allow_html=True)
-
-            if cp.allocation_diffs:
-                st.markdown("##### 📊 Before vs. After (rule engine)")
-                def fmt(metric_name: str, v: Optional[float]) -> str:
-                    if v is None:
-                        return "—"
-                    return f"{v:.2f}" if ("risk score" in metric_name or "liquidity" in metric_name) else f"{v:.1f}%"
-                st.dataframe([{
-                    "Rule": d.category_type, "Metric": d.name,
-                    "Before": fmt(d.name, d.before_pct), "After": fmt(d.name, d.after_pct),
-                    "Limit": fmt(d.name, d.limit_value), "Status": "⚠️" if d.is_breached else "✓"
-                } for d in cp.allocation_diffs], use_container_width=True, hide_index=True)
-
-            for idea in review.candidate_ideas:
-                verdict = verdicts.get(idea["idea_id"], {})
-                badge = {"PASS": "✅ PASS", "FLAG": "⚠️ FLAG", "FAIL": "⛔ FAIL"}.get(verdict.get("status"), "")
-                with st.expander(f"{badge} · Slot {idea['slot_number']}: {idea['ticker']} - {idea['name']} ({idea['action']} {idea['target_weight_pct']}%)", expanded=True):
-                    st.write(f"**Role:** `{idea['portfolio_role']}` · **Conviction:** `{idea.get('conviction', 'Medium')}` · "
-                             f"**Range:** {idea['allocation_range']['min_pct']}% - {idea['allocation_range']['max_pct']}%")
-                    st.write(f"**Thesis:** {idea['thesis']}")
-                    st.write(f"**Why now:** {idea['why_now']}")
-                    st.write(f"**Why it suits the client:** {idea['client_fit_rationale']}")
-                    st.write(f"**Key risks:** {', '.join(idea['key_risks'])} · **What would change our view:** {idea['invalidation_trigger']}")
-                    st.write(f"**Alternative considered:** {idea.get('alternative_considered') or '—'}")
-                    st.caption(f"Evidence: {', '.join(idea['cited_evidence_ids'])}")
-                    issues = [r for r in verdict.get("rule_results", []) if r["outcome"] != "PASS"]
-                    for r in issues:
-                        st.markdown(f"- **{r['rule_id']} {r['outcome']}**: {r['message']}")
-
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        idea_notes = st.text_input("Revision guidance:", key=f"idea_notes_{idea['idea_id']}")
-                        if st.button("↩️ Revise this idea", key=f"revise_{idea['idea_id']}", use_container_width=True):
-                            submit_action(view.session_id, action="revise", idea_id=idea["idea_id"],
-                                          notes=idea_notes or f"Replace {idea['ticker']} with a better-suited idea.")
-                    with c2:
-                        new_weight = st.number_input("Allocation %", min_value=0.0, max_value=100.0, step=0.5,
-                                                     value=float(idea["target_weight_pct"]), key=f"weight_{idea['idea_id']}")
-                        if st.button("✏️ Edit & re-validate", key=f"edit_{idea['idea_id']}", use_container_width=True):
-                            submit_action(view.session_id, action="edit_allocation", idea_id=idea["idea_id"],
-                                          edits={"target_weight_pct": new_weight})
-
-            review_buttons(view.session_id, review, "recommendations", approve_label="✅ Accept & Draft Memo",
-                           regenerate_label="🔄 Regenerate All Ideas")
-
-        # ---------- Agent 5: Memo review & sign-off ----------
-        elif stage == "advisor_approval":
-            st.markdown("#### 📄 Memo Formatter Agent Output")
-            exec_page = output.get("page_1_executive", {})
-            st.write(f"**Memo ID:** `{output.get('memo_id')}`")
-            st.write(f"**Objective:** {exec_page.get('investment_objective')}")
-            st.write(f"**Client snapshot:** {exec_page.get('client_snapshot')}")
-            st.info("Review the full memo in the preview panel, then sign off, regenerate the memo, or send an idea back.")
-            for g in exec_page.get("ideas_at_a_glance", []):
-                c1, c2 = st.columns([4, 1])
-                c1.write(f"**{g.get('slot_number')}. {g.get('ticker')}** ({g.get('action')} {g.get('target_weight_pct')}%) — {g.get('portfolio_role')}")
-                if c2.button("↩️ Revise idea", key=f"memo_revise_{g.get('idea_id')}"):
-                    submit_action(view.session_id, action="revise", idea_id=g.get("idea_id"),
-                                  notes=f"RM requested revision of {g.get('ticker')} at memo sign-off.")
-            for check in output.get("compliance_checks", []):
-                icon = "✓" if check["outcome"] == "PASS" else "⛔"
-                st.write(f"{icon} **{check['rule_id']} {check['name']}:** {check['message']}")
-            st.caption("The PDF is generated only after you approve.")
-            review_buttons(view.session_id, review, "memo", approve_label="✅ Approve, Sign Off & Generate PDF",
-                           regenerate_label="🔄 Regenerate Memo")
-
-    # ==========================================
-    # 3. RIGHT PANEL: INTERACTIVE MEMO PREVIEW
-    # ==========================================
-    with col_right:
-        st.markdown("### 📄 3. Interactive Memo Preview")
-        st.caption("Live Preview Highlighting Stage-Affected Content")
-
-        if view.right_panel.pdf_download_url:
-            pdf_path = service.get_pdf_path(view.session_id)
-            if pdf_path and os.path.exists(pdf_path):
-                with open(pdf_path, "rb") as f:
-                    pdf_bytes = f.read()
-                st.download_button(
-                    "📥 Download Final UBS Advisory Memo PDF",
-                    data=pdf_bytes,
-                    file_name=f"UBS_Advisory_Memo_{view.session_id}.pdf",
-                    mime="application/pdf",
-                    type="primary",
-                    use_container_width=True
-                )
-
-        if view.right_panel.sections:
-            for sec in view.right_panel.sections:
-                with st.container(border=True):
-                    st.caption(f"{sec.title} (Page {sec.page_number})")
-                    if sec.is_highlighted:
-                        st.markdown(":orange[**Affected by the current stage**]")
-                    st.markdown(sec.content_html_or_md)
+def main() -> None:
+    st.markdown("<div class='eyebrow'>UBS Prism</div>", unsafe_allow_html=True)
+    if not st.session_state.get("client_key"):
+        mode = st.segmented_control(
+            "Advisory mode",
+            ["Offline clients", "Online mode"],
+            default="Offline clients",
+            key="landing_mode",
+            selection_mode="single",
+            label_visibility="collapsed",
+            width="content",
+        )
+        if mode == "Online mode":
+            render_online_mode()
         else:
-            st.info("Advisory memo sections will appear dynamically as ideas and risk reviews are finalized.")
+            render_client_picker()
+        return
+    if not st.session_state.get("case"):
+        render_client_home()
+        return
 
-else:
-    # Welcome view when no session is active
-    st.info("👋 Welcome to the UBS Multi-Agent Advisory System. Please select a client profile from the sidebar and click 'Initialize Advisory Pipeline'.")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("""
-        **1. Client Profile Agent**
-        - Ingests goals, liquidity, and holdings.
-        - Compares willingness vs. capacity.
-        - Flags missing or contradictory inputs.
-        """)
-    with col2:
-        st.markdown("""
-        **2. Market Intelligence & Idea Agents**
-        - Retrieves fresh macro research & quant metrics.
-        - Generates exactly 3 complementary ideas.
-        - Supports selective regeneration.
-        """)
-    with col3:
-        st.markdown("""
-        **3. Critic & Memo Formatter Agents**
-        - Deterministic portfolio risk calculations.
-        - PASS, FLAG, and FAIL status gates.
-        - Standardized 3-page UBS Advisory Memo PDF.
-        """)
+    case = st.session_state.case
+    client_name = st.session_state.raw_profile.get("name", "Client")
+    top_a, top_b = st.columns([4, 1])
+    with top_a:
+        st.title("Advisory workspace")
+        st.markdown(f"<span class='subtle'>{client_name} · {CASE_LABELS[case]}</span>", unsafe_allow_html=True)
+    with top_b:
+        if st.button("All clients", width="stretch"):
+            reset_to_client_list()
+            st.rerun()
+    show_workflow()
+    action_needed = advisor_review_required()
+    review_label = "Advisor review · Needed" if action_needed else "Advisor review"
+    screen_options = [review_label if item == "Advisor review" else item for item in SCREENS]
+    previous_screen = st.session_state.get(
+        "screen", st.session_state.get("workspace_screen", "Overview")
+    )
+    selected_screen = previous_screen if previous_screen in screen_options else (
+        review_label if str(previous_screen).startswith("Advisor review") else "Overview"
+    )
+    st.session_state.screen = selected_screen
+    if action_needed:
+        st.badge("Advisor review needed", color="orange")
+        if selected_screen != review_label:
+            st.html("""
+            <style>
+                .st-key-screen [role="radiogroup"] > button:nth-child(6)[aria-checked="false"],
+                .st-key-screen [role="radiogroup"] > label:nth-child(6):has(input:not(:checked)),
+                .st-key-screen [role="radiogroup"] [role="radio"]:nth-child(6):not([aria-checked="true"]) {
+                    background-color: #3a2a1d !important;
+                    border-color: #8b5e2a !important;
+                    color: #ee9e32 !important;
+                    box-shadow: none !important;
+                }
+                .st-key-screen [role="radiogroup"] > button:nth-child(6)[aria-checked="false"]:hover,
+                .st-key-screen [role="radiogroup"] > label:nth-child(6):has(input:not(:checked)):hover,
+                .st-key-screen [role="radiogroup"] [role="radio"]:nth-child(6):not([aria-checked="true"]):hover {
+                    background-color: #493522 !important;
+                    border-color: #ad7730 !important;
+                    color: #f5b24f !important;
+                }
+            </style>
+            """)
+    selected_screen = st.segmented_control(
+        "Workspace screen",
+        screen_options,
+        key="screen",
+        selection_mode="single",
+        label_visibility="collapsed",
+        width="stretch",
+    )
+    screen = (
+        "Advisor review"
+        if selected_screen and selected_screen.startswith("Advisor review")
+        else selected_screen
+    )
+    if action_needed and screen != "Advisor review":
+        st.warning("Advisor review is waiting for your action. Open the highlighted tab to continue.")
+    if screen == "Overview":
+        render_overview()
+    elif screen == "Client profile":
+        profile = st.session_state.get("profile")
+        if profile is None and st.session_state.get("workspace"):
+            state = st.session_state.service.get_state(st.session_state.workspace.session_id)
+            profile = state.get("profile")
+        if profile:
+            render_profile(profile, st.session_state.raw_profile)
+        else:
+            st.info("Client profile details will appear when the workflow starts.")
+    elif screen == "Portfolio":
+        profile = st.session_state.get("profile")
+        if profile is None and st.session_state.get("workspace"):
+            profile = st.session_state.service.get_state(st.session_state.workspace.session_id).get("profile")
+        if profile:
+            render_portfolio(profile, st.session_state.raw_profile)
+        else:
+            st.info("Portfolio details will appear when the workflow starts.")
+    elif screen == "Research":
+        research = st.session_state.get("research")
+        if research is None and st.session_state.get("workspace"):
+            research = st.session_state.service.get_state(st.session_state.workspace.session_id).get("research_brief")
+        render_research(research)
+        if case == "market":
+            st.markdown("### Event context")
+            profile = st.session_state.get("profile")
+            goal = profile.goals[0] if profile and profile.goals else "the client’s stated objectives"
+            st.write(f"Interest-rate expectations shifted. Review existing fixed-income exposure and its effect on {goal.lower()}.")
+            st.caption("Illustrative rate scenario; live market data is not connected.")
+    elif screen == "Recommendations":
+        render_ideas(st.session_state.get("workspace"))
+        if case in {"meeting", "market"}:
+            st.info("This workflow does not generate a new trade recommendation unless the advisor selects Revise in the market-event decision.")
+    elif screen == "Advisor review":
+        render_advisor_review()
+    elif screen == "Brief":
+        render_brief()
+
+    st.divider()
+    st.caption("Advisor approval required · no orders are placed")
+
+if __name__ == "__main__":
+    main()

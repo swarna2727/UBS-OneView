@@ -1,23 +1,22 @@
 {
   "demo_sarah": {
     "client_id": "CL-DEMO-001",
-    "name": "Sarah Chen",
+    "name": "Sarah Tan",
     "base_currency": "SGD",
     "goals": [
-      "Property purchase in 7 years",
-      "More income from the portfolio"
+      "Home down payment of S$300,000 in 8 years"
     ],
-    "time_horizon_months": 84,
+    "time_horizon_months": 96,
     "stated_risk_willingness": "Moderate",
     "liquidity_schedule": [
       {
-        "due_months": 84,
+        "due_months": 96,
         "amount": 300000.0,
-        "purpose": "Property down payment"
+        "purpose": "Home down payment"
       }
     ],
-    "total_wealth": 750000.0,
-    "experience_level": "Knowledgeable",
+    "total_wealth": 800000.0,
+    "experience_level": "ETF investor",
     "constraints": {
       "excluded_sectors": [],
       "esg_mandate": false,
@@ -25,34 +24,44 @@
     },
     "raw_holdings": [
       {
-        "ticker": "MSFT",
-        "name": "Microsoft Corporation",
+        "ticker": "SPYG",
+        "name": "Global equities",
         "asset_class": "Equities",
-        "region": "North America",
-        "currency": "USD",
-        "weight_pct": 10.0,
+        "region": "Global",
+        "currency": "SGD",
+        "weight_pct": 45.0,
         "risk_rating": 4
       },
       {
-        "ticker": "SPYG",
-        "name": "SPDR Portfolio S&P 500 Growth ETF",
-        "asset_class": "Equities",
+        "ticker": "LQD",
+        "name": "Investment-grade bonds",
+        "asset_class": "Fixed Income",
         "region": "North America",
         "currency": "USD",
-        "weight_pct": 32.0,
-        "risk_rating": 4
+        "weight_pct": 30.0,
+        "risk_rating": 3
       },
       {
         "ticker": "BIL",
-        "name": "SPDR 1-3 Month T-Bill ETF",
+        "name": "Cash and money market funds",
         "asset_class": "Cash Equivalents",
-        "region": "North America",
-        "currency": "USD",
-        "weight_pct": 58.0,
+        "region": "Singapore",
+        "currency": "SGD",
+        "weight_pct": 15.0,
         "risk_rating": 1
+      },
+      {
+        "ticker": "GLD",
+        "name": "Other diversifying assets",
+        "asset_class": "Commodities",
+        "region": "Global",
+        "currency": "USD",
+        "weight_pct": 10.0,
+        "risk_rating": 3
       }
     ],
-    "advisor_notes": "Age 38. Concentrated in US equities after RSU vesting; large cash balance to deploy; wants income."
+    "new_capital_amount": 120000.0,
+    "advisor_notes": "Illustrative client for the Prism prototype. S$120,000 is available to invest. Portfolio mix: 45% equities, 30% investment-grade bonds, 15% cash or money market funds, and 10% other assets. ETF investor. The S$800,000 portfolio value is a prototype assumption because the assignment does not specify total wealth."
   },
   "demo_daniel": {
     "client_id": "CL-DEMO-002",
