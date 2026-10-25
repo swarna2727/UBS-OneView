@@ -1,5 +1,6 @@
 """Trajectory tests: LangGraph execution paths, advisor checkpoints, selective regeneration and audit (layer T)."""
 
+import copy
 import pytest
 from src.api.service import AdvisorySessionService
 from src.schemas.workspace import AdvisorActionRequest
@@ -125,12 +126,41 @@ def test_advisor_revision_regenerates_only_that_idea(balanced_client_data):
     assert after[2].ticker != before[2].ticker
 
 def test_flag_needs_documented_exception(sample_profiles):
-    """Sarah: existing US concentration is a FLAG; overriding it requires a note, which is logged."""
-    service = new_service()
+    """An unchanged, pre-existing concentration is a FLAG and requires a logged note to override."""
+    # Keep Sarah's current sample profile intact. This test creates a test-only variant
+    # with a suitable baseline risk score and an existing North American equity
+    # concentration, so it exercises the R7 FLAG path rather than Sarah's R4 hard FAIL.
+    client = copy.deepcopy(sample_profiles["demo_sarah"])
+    client["raw_holdings"][0]["region"] = "North America"
+    for holding, rating in zip(client["raw_holdings"], (3, 2, 1, 2)):
+        holding["risk_rating"] = rating
+
+    def low_risk_idea(slot, ticker, role):
+        return InvestmentIdea(
+            idea_id=f"IDEA-{ticker}-{slot:02d}", slot_number=slot,
+            instrument_id=f"X-{ticker}", ticker=ticker, name=ticker,
+            action="ADD", target_weight_pct=1.0,
+            allocation_range=AllocationRange(min_pct=0.0, max_pct=1.0, target_pct=1.0),
+            funding_source_ticker="BIL", portfolio_role=role, thesis="Diversifying allocation.",
+            why_now="Supports portfolio balance.", client_fit_rationale="Fits the client's stated goals.",
+            key_risks=["Market risk."], invalidation_trigger="Review if the thesis changes.",
+            cited_evidence_ids=["SRC-UBS-CIO-2026-101"]
+        )
+
+    flag_ideas = CandidateIdeaSet(
+        ideas=[
+            low_risk_idea(1, "IEF", "STABILITY"),
+            low_risk_idea(2, "LQD", "INCOME"),
+            low_risk_idea(3, "GLD", "DIVERSIFICATION"),
+        ],
+        complementarity_thesis="Small fixed income and diversifying allocations.",
+    )
+    service = new_service(override_responses={"CandidateIdeaSet": flag_ideas})
     sid = "test_flag"
-    service.start_session(sample_profiles["demo_sarah"], session_id=sid)
+    service.start_session(client, session_id=sid)
     review = approve_until(service, sid, "suitability_review")
     assert service.get_state(sid)["assessment"].overall_status == "FLAG"
+    assert any(r.rule_id == "R7" and r.outcome == "FLAG" for r in service.get_state(sid)["assessment"].rule_results)
     assert review["allowed_actions"][0] == "override_flag"
 
     with pytest.raises(ValueError, match="document"):

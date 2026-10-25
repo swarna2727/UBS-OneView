@@ -34,7 +34,11 @@ class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchB
         query = f"Macro {profile.calculated_risk_tier} yield inflation equities fixed income {' '.join(tickers[:5])}"
 
         # 2. Retrieve snippets via RAG tool
-        raw_snippets = retrieval_rag_tool(query, asset_universe=tickers)
+        # Keep evidence available for the securities covered by the deterministic
+        # quantitative signals below, even when the client does not already hold them.
+        # In the offline demo, this lets the advisor trace an idea back to a retrieved
+        # source instead of failing the evidence check for a missing citation.
+        raw_snippets = retrieval_rag_tool(query, asset_universe=list(dict.fromkeys(tickers + ["MSFT"])))
 
         # 3. Deterministic freshness validation (drop stale evidence)
         freshness_result = source_freshness_validator(raw_snippets, max_age_days=load_policy()["rules"]["R8_evidence_freshness"]["max_age_days"])
