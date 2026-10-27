@@ -294,6 +294,40 @@ def render_profile(profile: Any, raw: dict[str, Any]) -> None:
         st.subheader("Profile flags")
         for flag in profile.unresolved_flags:
             st.warning(flag.message)
+    render_profile_generation(profile, raw)
+
+
+def render_profile_generation(profile: Any, raw: dict[str, Any]) -> None:
+    """Slide 25: show how the profile was generated so the advisor can review each step."""
+    from src.tools.profile_tools import required_field_validator, risk_profile_calculator
+    with st.expander("How this profile was generated (review each step)"):
+        st.markdown("**1. Ingest** · advisor-verified inputs")
+        st.json({k: raw.get(k) for k in ("goals", "time_horizon_months", "stated_risk_willingness", "total_wealth", "liquidity_schedule") if k in raw}, expanded=False)
+        st.markdown("**2. Required-field validator** · deterministic")
+        check = required_field_validator(raw)
+        if check.is_valid:
+            st.success("All mandatory fields are present.")
+        else:
+            st.error("Missing: " + ", ".join(check.missing_fields))
+        st.markdown("**3. Risk-profile calculator** · deterministic, not the LLM")
+        try:
+            risk = risk_profile_calculator(raw)
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Risk willingness", f"{risk.willingness_score:.1f} / 5")
+            r2.metric("Risk capacity", f"{risk.capacity_score:.1f} / 5")
+            r3.metric("Final band (lower of the two)", risk.risk_tier)
+            if risk.has_capacity_conflict:
+                st.warning(risk.conflict_rationale or "Willingness exceeds capacity.")
+        except Exception as exc:
+            st.info(f"Risk band cannot be calculated yet: {exc}")
+        st.markdown("**4. Standardised profile** · what downstream agents receive")
+        st.json({
+            "risk_tier": profile.calculated_risk_tier, "risk_score_range": profile.risk_score_range,
+            "time_horizon_months": profile.time_horizon_months,
+            "near_term_liquidity_need": profile.near_term_liquidity_need,
+            "asset_class_weights": profile.current_asset_class_weights,
+            "unresolved_flags": [f.code for f in profile.unresolved_flags],
+        }, expanded=False)
 
 
 def render_portfolio(profile: Any, raw: dict[str, Any]) -> None:
