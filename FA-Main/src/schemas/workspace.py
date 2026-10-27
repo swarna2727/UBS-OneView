@@ -68,6 +68,7 @@ class AdvisorActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal[
         "approve", "regenerate", "reject", "revise", "override_flag", "edit_allocation", "add_advisor_note",
+        "maintain", "monitor",  # UC3 market-event decision ('revise' sends the client to new ideas)
         "accept", "resolve_conflict", "abort"
     ]
     idea_id: Optional[str] = None

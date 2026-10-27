@@ -1,9 +1,12 @@
-"""Pure conditional routing and review-action rules for the advisory state graph (slides 8 and 15).
+"""Pure conditional routing and review-action rules for the advisory state graph.
 
-Advisor review checkpoints follow the slide workflow:
-  Client Profile -> [review] -> Market Intelligence -> [review] -> Investment Ideas -> Suitability Critic
-  -> (FAIL: regenerate failed ideas automatically, max R10 times per idea) -> [recommendation review]
-  -> Memo -> [final approval] -> PDF
+One graph of shared agents serves three use cases, each with its own trigger and path:
+  UC1 pre_meeting:   Profile -> [CP1 confirm] -> Market landscape -> [CP2 review]
+                     -> (profile changed: Ideas -> Critic -> [CP3 approve]) -> Meeting brief -> [CP4 approve] -> PDF
+  UC2 adhoc_request: Profile -> [CP1] -> Research -> [CP2] -> Ideas -> Critic (FAIL: regenerate failed ideas,
+                     max R10 per idea) -> [CP3] -> Memo -> [CP4 final approval] -> PDF
+  UC3 market_event:  Profile -> Event research -> Client impact + rule re-check -> [CP decide]
+                     -> maintain / monitor: decision record PDF; revise: Ideas -> Critic -> [CP3] -> Memo -> [CP4] -> PDF
 Each review node records its decision in state["review_outcome"]; the routers map it to the next node.
 """
 
@@ -16,6 +19,11 @@ REVIEW_PROFILE = "client_profile"
 REVIEW_MARKET = "market_intelligence"
 REVIEW_RECOMMENDATIONS = "suitability_review"
 REVIEW_MEMO = "advisor_approval"
+REVIEW_EVENT = "event_decision"
+REVIEW_BRIEF = "brief_approval"
+
+PRE_MEETING, ADHOC_REQUEST, MARKET_EVENT = "pre_meeting", "adhoc_request", "market_event"
+USE_CASES = (PRE_MEETING, ADHOC_REQUEST, MARKET_EVENT)
 
 MAX_REGENERATIONS_PER_IDEA = load_policy()["rules"]["R10_max_regenerations_per_idea"]
 
@@ -30,8 +38,11 @@ _ACTION_ALIASES = {
 EDITABLE_PROFILE_FIELDS = [
     "client_id", "name", "goals", "time_horizon_months", "stated_risk_willingness",
     "liquidity_schedule", "total_wealth", "experience_level", "constraints",
-    "raw_holdings", "questionnaire_answers", "base_currency", "advisor_notes"
+    "raw_holdings", "questionnaire_answers", "base_currency", "advisor_notes", "new_capital_amount"
 ]
+
+def use_case(state: AdvisoryState) -> str:
+    return state.get("use_case") or ADHOC_REQUEST
 
 def normalize_action(stage: str, action: str) -> str:
     """Map legacy/alias action names onto the canonical action for a review stage."""
@@ -75,6 +86,14 @@ def allowed_review_actions(stage: str, state: AdvisoryState) -> List[str]:
         blocked = memo and any(r.outcome in ("FAIL", "BLOCK") for r in memo.compliance_checks)
         return ([] if blocked else ["approve"]) + ["regenerate", "revise", "edit_allocation", "reject"]
 
+    if stage == REVIEW_EVENT:
+        return ["maintain", "monitor", "revise"]
+
+    if stage == REVIEW_BRIEF:
+        brief = state.get("meeting_brief")
+        blocked = brief and any(r.outcome in ("FAIL", "BLOCK") for r in brief.compliance_checks)
+        return ([] if blocked else ["approve"]) + ["regenerate", "reject"]
+
     return []
 
 def resolve_review_outcome(stage: str, human_action: Dict[str, Any]) -> str:
@@ -91,6 +110,10 @@ def resolve_review_outcome(stage: str, human_action: Dict[str, Any]) -> str:
 
     if action in ("approve", "override_flag"):
         return "approve"
+    if action in ("maintain", "monitor"):
+        return "record_decision"
+    if action == "revise" and stage == REVIEW_EVENT:
+        return "new_ideas"
     if action == "edit_allocation":
         return "revalidate"
     if action == "regenerate":
@@ -104,11 +127,35 @@ def resolve_review_outcome(stage: str, human_action: Dict[str, Any]) -> str:
         return "reject"
     raise ValueError(f"Unknown review action '{action}'")
 
+def has_blocking_flags(state: AdvisoryState) -> bool:
+    profile = state.get("profile")
+    return bool(profile and any(f.severity == "BLOCKING_INTERRUPT" and not f.is_resolved for f in profile.unresolved_flags))
+
+def route_after_client_profile(state: AdvisoryState) -> Literal["review_profile", "market_intelligence"]:
+    """UC3 starts from the confirmed client record, so the profile checkpoint only opens if mandatory data is missing."""
+    if use_case(state) == MARKET_EVENT and not has_blocking_flags(state):
+        return "market_intelligence"
+    return "review_profile"
+
 def route_after_profile_review(state: AdvisoryState) -> Literal["market_intelligence", "client_profile", "end_session"]:
     return {"regenerate": "client_profile", "reject": "end_session"}.get(state.get("review_outcome"), "market_intelligence")
 
-def route_after_market_review(state: AdvisoryState) -> Literal["investment_ideas", "market_intelligence", "end_session"]:
-    return {"regenerate": "market_intelligence", "reject": "end_session"}.get(state.get("review_outcome"), "investment_ideas")
+def route_after_market_intelligence(state: AdvisoryState) -> Literal["review_market", "event_impact"]:
+    return "event_impact" if use_case(state) == MARKET_EVENT else "review_market"
+
+def route_after_market_review(state: AdvisoryState) -> Literal["investment_ideas", "meeting_brief", "market_intelligence", "end_session"]:
+    outcome = state.get("review_outcome")
+    if outcome in ("regenerate", "reject"):
+        return {"regenerate": "market_intelligence", "reject": "end_session"}[outcome]
+    if use_case(state) == PRE_MEETING and not state.get("include_ideas"):
+        return "meeting_brief"  # UC1: no change since the last review, so the brief needs no new recommendations
+    return "investment_ideas"
+
+def route_after_event_review(state: AdvisoryState) -> Literal["decision_record", "investment_ideas"]:
+    return "investment_ideas" if state.get("review_outcome") == "new_ideas" else "decision_record"
+
+def route_after_brief_review(state: AdvisoryState) -> Literal["generate_brief_pdf", "meeting_brief", "end_session"]:
+    return {"regenerate": "meeting_brief", "reject": "end_session"}.get(state.get("review_outcome"), "generate_brief_pdf")
 
 def route_after_critic(state: AdvisoryState) -> Literal["mark_failed_slots", "review_recommendations"]:
     """FAIL is regenerated automatically until R10's retry limit is hit; then the advisor decides."""
@@ -118,12 +165,13 @@ def route_after_critic(state: AdvisoryState) -> Literal["mark_failed_slots", "re
         return "mark_failed_slots"
     return "review_recommendations"
 
-def route_after_recommendation_review(state: AdvisoryState) -> Literal["memo_formatter", "investment_ideas", "suitability_critic", "end_session"]:
+def route_after_recommendation_review(state: AdvisoryState) -> Literal["memo_formatter", "meeting_brief", "investment_ideas", "suitability_critic", "end_session"]:
+    approved_next = "meeting_brief" if use_case(state) == PRE_MEETING else "memo_formatter"
     return {
         "regenerate_ideas": "investment_ideas",
         "revalidate": "suitability_critic",
         "reject": "end_session",
-    }.get(state.get("review_outcome"), "memo_formatter")
+    }.get(state.get("review_outcome"), approved_next)
 
 def route_after_memo_review(state: AdvisoryState) -> Literal["generate_pdf", "memo_formatter", "investment_ideas", "suitability_critic", "end_session"]:
     return {

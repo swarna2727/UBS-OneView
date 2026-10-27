@@ -236,5 +236,39 @@
     "esg_rating": "AAA",
     "sector": "Diversified",
     "instrument_type": "Cash"
+  },
+  {
+    "instrument_id": "EQ-ACWI",
+    "ticker": "ACWI",
+    "name": "iShares MSCI ACWI ETF",
+    "asset_class": "Equities",
+    "sub_asset_class": "Global Diversified Equity Fund",
+    "region": "Global",
+    "currency": "USD",
+    "risk_rating": 3,
+    "complexity_rating": 1,
+    "liquidity_tier": "Daily",
+    "is_approved": true,
+    "status": "APPROVED",
+    "esg_rating": "A",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
+  },
+  {
+    "instrument_id": "FI-AGGG",
+    "ticker": "AGGG",
+    "name": "iShares Core Global Aggregate Bond UCITS ETF (SGD Hedged)",
+    "asset_class": "Fixed Income",
+    "sub_asset_class": "Global Investment Grade Bond Fund",
+    "region": "Global",
+    "currency": "SGD",
+    "risk_rating": 2,
+    "complexity_rating": 1,
+    "liquidity_tier": "Daily",
+    "is_approved": true,
+    "status": "APPROVED",
+    "esg_rating": "A",
+    "sector": "Diversified",
+    "instrument_type": "Fund"
   }
 ]

@@ -10,7 +10,7 @@ from src.graph.workflow import build_advisory_graph, checkpoint_serializer
 from src.graph.state import AdvisoryState
 from src.schemas.workspace import AdvisorWorkspaceView, AdvisorActionRequest
 from src.api.views import build_workspace_view
-from src.graph.routing import normalize_action
+from src.graph.routing import normalize_action, ADHOC_REQUEST, USE_CASES, REVIEW_EVENT
 from src.llm.base import LLMClientProtocol
 from src.llm.openrouter import default_llm_client
 from src.audit.run_log import RunLog, file_fingerprint
@@ -37,8 +37,12 @@ class AdvisorySessionService:
         sid = session_id or f"sess_{uuid.uuid4().hex[:10]}"
         config = {"configurable": {"thread_id": sid}}
 
+        use_case = raw_input.get("use_case") or ADHOC_REQUEST
+        if use_case not in USE_CASES:
+            raise ValueError(f"Unknown use_case '{use_case}'. Expected one of {list(USE_CASES)}.")
         initial_state: AdvisoryState = {
             "session_id": sid,
+            "use_case": use_case,
             "raw_input": raw_input,
             "locked_idea_ids": [],
             "regenerate_slots": [],
@@ -126,6 +130,10 @@ class AdvisorySessionService:
             )
         if action == "override_flag" and not (action_request.notes or "").strip():
             raise ValueError("An exception override must document the advisor's reasoning in 'notes'.")
+        if stage == REVIEW_EVENT and not (action_request.notes or "").strip():
+            raise ValueError("A market-event decision must document the advisor's rationale in 'notes'.")
+        if action == "monitor" and not str((action_request.edits or {}).get("follow_up", "")).strip():
+            raise ValueError("A 'monitor' decision needs a follow-up trigger or date in edits.follow_up.")
         if action == "edit_allocation":
             weight = (action_request.edits or {}).get("target_weight_pct")
             idea_ids = {i["idea_id"] for i in pending_review.get("candidate_ideas") or (self.get_state(session_id)["candidate_ideas"].model_dump()["ideas"])}

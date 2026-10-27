@@ -199,6 +199,30 @@ def test_guarantee_request_never_appears_in_memo(sample_profiles):
     assert all(c.outcome == "PASS" for c in memo.compliance_checks)
     assert "approve" in service.get_pending_review(sid)["allowed_actions"]
 
+def test_idea_lineage_candidate_checked_approved(sample_profiles):
+    """Daniel: the original candidate set, the critic-checked regeneration and the advisor-approved set are all kept."""
+    service = new_service()
+    sid = "test_lineage"
+    service.start_session(sample_profiles["demo_daniel"], session_id=sid)
+    approve_until(service, sid, "suitability_review")
+    rounds = service.get_state(sid)["idea_rounds"]
+    assert [r["trigger"]["source"] for r in rounds] == ["initial", "auto_regeneration"]
+    assert rounds[0]["overall_status"] == "FAIL" and rounds[0]["statuses"]["IDEA-SPYG-02"] == "FAIL"
+    assert rounds[1]["trigger"]["slots"] == [2] and rounds[1]["overall_status"] == "PASS"
+    assert [i["ticker"] for i in rounds[1]["ideas"]][::2] == [i["ticker"] for i in rounds[0]["ideas"]][::2]  # slots 1, 3 locked
+    assert service.get_state(sid).get("approved_idea_set") is None
+
+    act(service, sid, action="approve", notes="Fits the deposit horizon.")
+    approved = service.get_state(sid)["approved_idea_set"]
+    assert approved["decision"] == "approve" and approved["notes"] == "Fits the deposit horizon."
+    memo = service.get_state(sid)["memo"]
+    assert [i["ticker"] for i in approved["ideas"]] == [d.ticker for d in memo.page_2_details]
+
+    act(service, sid, action="revise", idea_id=approved["ideas"][0]["idea_id"], notes="Prefer a bond income idea.")
+    state = service.get_state(sid)
+    assert state["approved_idea_set"] is None  # a revised set must be approved again
+    assert state["idea_rounds"][-1]["trigger"] == {"source": "advisor_revision", "slots": [1], "notes": "Prefer a bond income idea."}
+
 def test_missing_horizon_blocks_workflow(sample_profiles):
     """Aaron (R1): no horizon -> the workflow stops at the profile and nothing is recommended."""
     service = new_service()

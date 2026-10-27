@@ -55,6 +55,7 @@ class ClientAdvisoryProfile(BaseModel):
     base_currency: str = "USD"
     near_term_liquidity_need: float = 0.0  # sum of liquidity events due within the liquidity-rule window
     advisor_notes: str = ""  # free-text advisor context; passed to agents as data, never as instructions
+    new_capital_amount: float = 0.0  # UC2: new money to deploy, held as cash until the ideas are approved
 
     @field_validator("risk_score_range")
     @classmethod
@@ -227,6 +228,81 @@ class MemoPage3PortfolioView(BaseModel):
     market_developments: str
     audit_sources_summary: List[str]
     advisor_signature_block: str
+
+class ProfileChange(BaseModel):
+    """One client fact that differs from the last review (UC1)."""
+    model_config = ConfigDict(extra="forbid")
+    field: str
+    label: str
+    before: str
+    after: str
+
+# ==========================================
+# 6. USE CASE OUTPUTS: MEETING BRIEF (UC1) AND MARKET-EVENT DECISION (UC3)
+# ==========================================
+
+class MeetingBrief(BaseModel):
+    """UC1 client meeting brief: confirm the profile, share the market landscape, discuss next steps."""
+    model_config = ConfigDict(extra="forbid")
+    brief_id: str
+    created_at: str
+    client_name: str
+    client_id: str
+    meeting_purpose: str
+    review_period: str
+    profile_summary: List[str]
+    profile_changes: List[ProfileChange] = Field(default_factory=list)
+    portfolio_summary: str
+    portfolio_risks: List[str]
+    market_developments: List[str]
+    talking_points: List[str]
+    questions_for_client: List[str]
+    recommendations: List[ExecutiveIdeaGlance] = Field(default_factory=list)  # only when the profile changed
+    sources: List[str] = Field(default_factory=list)
+    compliance_checks: List[RuleResult] = Field(default_factory=list)
+    advisor_signature_block: str = "Pending Relationship Manager approval."
+    advisor_approved: bool = False
+    pdf_artifact_path: Optional[str] = None
+
+class HoldingImpact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ticker: str
+    name: str
+    asset_class: str
+    weight_pct: float
+    shock_pct: float
+    contribution_pct: float  # weight x shock, in portfolio percentage points
+
+class EventImpact(BaseModel):
+    """UC3 deterministic client impact of a market event: which holdings move, and does suitability still hold."""
+    model_config = ConfigDict(extra="forbid")
+    event_key: str
+    event_title: str
+    event_description: str
+    holdings: List[HoldingImpact]
+    portfolio_move_pct: float
+    risk_score_before: float
+    risk_score_after: float
+    rule_results: List[RuleResult] = Field(default_factory=list)  # suitability re-check of the drifted portfolio
+    suggested_decision: Literal["MAINTAIN", "MONITOR", "REVISE"]
+    rationale: str
+
+class EventDecisionRecord(BaseModel):
+    """UC3 documented advisor decision when the advice is maintained or monitored (no new trades)."""
+    model_config = ConfigDict(extra="forbid")
+    record_id: str
+    created_at: str
+    client_name: str
+    client_id: str
+    event_title: str
+    decision: Literal["MAINTAIN", "MONITOR", "REVISE"]
+    rationale: str
+    follow_up: str = ""
+    portfolio_move_pct: float
+    key_findings: List[str]
+    sources: List[str] = Field(default_factory=list)
+    advisor_signature_block: str = ""
+    pdf_artifact_path: Optional[str] = None
 
 class StructuredMemo(BaseModel):
     model_config = ConfigDict(extra="forbid")

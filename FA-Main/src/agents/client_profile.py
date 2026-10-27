@@ -6,7 +6,7 @@ from src.schemas.advisory import (
     ClientAdvisoryProfile, ProfileFlag, ClientConstraints, LiquidityEvent
 )
 from src.tools.profile_tools import (
-    required_field_validator, risk_profile_calculator, portfolio_parser
+    required_field_validator, risk_profile_calculator, portfolio_parser, with_new_capital
 )
 from src.tools.risk_engine import load_policy
 from src.llm.base import LLMClientProtocol
@@ -53,8 +53,10 @@ class ClientProfileAgent(BaseAdvisoryAgent[Dict[str, Any], ClientAdvisoryProfile
                 affected_fields=["stated_risk_willingness", "time_horizon_months", "liquidity_schedule"]
             ))
 
-        # 3. Deterministic portfolio holdings parsing
-        raw_holdings = inputs.get("raw_holdings", [])
+        # 3. Deterministic portfolio holdings parsing; UC2 new capital is held as cash until ideas are approved
+        wealth = float(inputs.get("total_wealth", 1000000.0) or 1000000.0)
+        new_capital = float(inputs.get("new_capital_amount") or 0.0)
+        raw_holdings = with_new_capital(inputs.get("raw_holdings", []), wealth, new_capital)
         parsed_holdings_data = portfolio_parser(raw_holdings)
         if not parsed_holdings_data.is_balanced_sum:
             flags.append(ProfileFlag(
@@ -108,7 +110,8 @@ class ClientProfileAgent(BaseAdvisoryAgent[Dict[str, Any], ClientAdvisoryProfile
             risk_tier_number=tier_num,
             risk_score_range=tier_ranges.get(tier_num, [2.5, 3.5]),
             liquidity_schedule=liquidity_schedule,
-            total_wealth=float(inputs.get("total_wealth", 1000000.0) or 1000000.0),
+            total_wealth=wealth + new_capital,
+            new_capital_amount=new_capital,
             experience_level=str(inputs.get("experience_level", "Knowledgeable")),
             constraints=constraints,
             parsed_holdings=parsed_holdings_data.holdings,

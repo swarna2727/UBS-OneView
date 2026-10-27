@@ -43,15 +43,19 @@ class BaseAdvisoryAgent(ABC, Generic[InT, OutT]):
         """Execution wrapper with logging, timing and model/prompt version capture."""
         start_time = time.time()
         self.logger.info(f"Agent [{self.name}] starting execution.")
+        if hasattr(self.llm, "last_call"):
+            self.llm.last_call = {}  # so a deterministic agent never reports the previous agent's usage
         try:
             result = self.execute(inputs, **kwargs)
             duration = round((time.time() - start_time) * 1000, 2)
             model_for = getattr(self.llm, "model_for", None)
+            last_call = getattr(self.llm, "last_call", None) or {}
             self.last_run = {
                 "agent": self.name,
                 "model": model_for(self.name) if callable(model_for) else type(self.llm).__name__,
                 "prompt_version": self.PROMPT_VERSION,
-                "duration_ms": duration
+                "duration_ms": duration,
+                "usage": last_call.get("usage")  # token counts reported by the provider, if any
             }
             self.logger.info(f"Agent [{self.name}] completed in {duration}ms.")
             return result

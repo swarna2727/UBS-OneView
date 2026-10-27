@@ -1,0 +1,8 @@
+[client]
+toolbarMode = "viewer"  # hide developer controls (Deploy) in the advisor workspace
+
+[theme]
+primaryColor = "#c8102e"
+
+[browser]
+gatherUsageStats = false

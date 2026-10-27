@@ -8,11 +8,12 @@ from src.agents.base import BaseAdvisoryAgent
 from src.schemas.advisory import (
     ClientAdvisoryProfile, CandidateIdeaSet, SuitabilityAssessment, ResearchBrief,
     StructuredMemo, MemoPage1Executive, MemoPage2IdeaDetail,
-    MemoPage3PortfolioView, ExecutiveIdeaGlance
+    MemoPage3PortfolioView, ExecutiveIdeaGlance, MeetingBrief, ProfileChange, EventImpact, EventDecisionRecord
 )
 from src.schemas.tools import RuleResult
+from src.tools.event_tools import stress_impact
 from src.tools.memo_tools import memo_consistency_validator, citation_source_mapper
-from src.tools.risk_engine import prohibited_wording
+from src.tools.risk_engine import prohibited_wording, portfolio_metrics
 from src.llm.base import LLMClientProtocol
 
 CURRENCY_SYMBOLS = {"SGD": "S$", "USD": "US$", "CHF": "CHF ", "EUR": "€", "GBP": "£"}
@@ -32,6 +33,30 @@ class MemoFormatterInputs:
         self.assessment = assessment
         self.research_brief = research_brief
         self.advisor_notes = advisor_notes or []
+
+class MeetingBriefInputs:
+    """UC1: everything the advisor approved for the meeting (profile, research, and the 3 ideas if the profile changed)."""
+    def __init__(self, profile: ClientAdvisoryProfile, research_brief: ResearchBrief, meeting_purpose: str,
+                 review_period: str, changes: Optional[List[dict]] = None, ideas: Optional[CandidateIdeaSet] = None,
+                 assessment: Optional[SuitabilityAssessment] = None):
+        self.profile = profile
+        self.research_brief = research_brief
+        self.meeting_purpose = meeting_purpose
+        self.review_period = review_period
+        self.changes = changes or []
+        self.ideas = ideas
+        self.assessment = assessment
+
+class DecisionRecordInputs:
+    """UC3: the advisor's documented maintain / monitor decision on a market event."""
+    def __init__(self, profile: ClientAdvisoryProfile, impact: EventImpact, decision: str, rationale: str,
+                 follow_up: str = "", research_brief: Optional[ResearchBrief] = None):
+        self.profile = profile
+        self.impact = impact
+        self.decision = decision
+        self.rationale = rationale
+        self.follow_up = follow_up
+        self.research_brief = research_brief
 
 def money(amount: float, currency: str) -> str:
     return f"{CURRENCY_SYMBOLS.get(currency, currency + ' ')}{amount:,.0f}"
@@ -59,7 +84,104 @@ class MemoFormatterAgent(BaseAdvisoryAgent[MemoFormatterInputs, StructuredMemo])
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
         super().__init__("MemoFormatterAgent", llm_client)
 
-    def execute(self, inputs: MemoFormatterInputs) -> StructuredMemo:
+    def execute(self, inputs):
+        """One formatter, three artifacts: investment memo (UC2/UC3 revise), meeting brief (UC1), decision record (UC3)."""
+        if isinstance(inputs, MeetingBriefInputs):
+            return self._meeting_brief(inputs)
+        if isinstance(inputs, DecisionRecordInputs):
+            return self._decision_record(inputs)
+        return self._memo(inputs)
+
+    def _meeting_brief(self, inputs: MeetingBriefInputs) -> MeetingBrief:
+        p, brief = inputs.profile, inputs.research_brief
+        cur = p.base_currency
+        m = portfolio_metrics(p.parsed_holdings, p)
+        mix = ", ".join(f"{k} {v:.0f}%" for k, v in sorted(p.current_asset_class_weights.items(), key=lambda kv: -kv[1]))
+        goals = [neutralise_guarantee(g) for g in p.goals]
+
+        summary = [
+            f"Objective: {'; '.join(goals)}.",
+            f"Horizon {p.time_horizon_months} months; stated risk willingness '{p.stated_risk_willingness}', applied band "
+            f"{p.calculated_risk_tier} ({p.risk_score_range[0]:.1f}-{p.risk_score_range[1]:.1f}).",
+            f"Investable assets {money(p.total_wealth, cur)}; near-term liquidity need {money(p.near_term_liquidity_need, cur)}.",
+            f"Experience: {p.experience_level}.",
+        ]
+        risks = []
+        if m["risk_score"] > p.risk_score_range[1]:
+            risks.append(f"Portfolio risk score {m['risk_score']:.2f} is above the {p.calculated_risk_tier} ceiling of {p.risk_score_range[1]:.2f}.")
+        else:
+            risks.append(f"Portfolio risk score {m['risk_score']:.2f} is within the {p.calculated_risk_tier} band (ceiling {p.risk_score_range[1]:.2f}).")
+        top_class, top_pct = max(p.current_asset_class_weights.items(), key=lambda kv: kv[1], default=("None", 0.0))
+        if top_pct >= 40:
+            risks.append(f"Largest exposure: {top_class} at {top_pct:.0f}% of the portfolio.")
+        for market, pct in m["market"].items():
+            if pct > 30:
+                risks.append(f"Single-market equity concentration: {market} at {pct:.0f}% (limit 30%).")
+        foreign = sum(v for k, v in p.current_currency_weights.items() if k != cur)
+        if foreign >= 30:
+            risks.append(f"{foreign:.0f}% of the portfolio is in currencies other than {cur}.")
+        stress = stress_impact(p.parsed_holdings)
+        worst = min(stress.items(), key=lambda kv: kv[1])
+        risks.append(f"Illustrative stress: '{worst[0]}' would move the portfolio about {worst[1]:+.1f}%.")
+        if p.near_term_liquidity_need > 0:
+            risks.append(f"Liquid assets cover near-term needs {m['liquidity_ratio']:.2f}x (minimum 1.0x).")
+
+        findings = sorted(brief.findings, key=lambda f: f.materiality_rank)
+        developments = [f"{f.theme}: {f.claim} Relevance: {f.relevance_to_client} ({', '.join(f.cited_source_ids)})" for f in findings]
+
+        changes = [ProfileChange(**c) for c in inputs.changes]
+        talking = []
+        for c in changes:
+            talking.append(f"Confirm the change in {c.label.lower()}: {c.before} -> {c.after}, and what it means for the plan.")
+        if not changes:
+            talking.append("Confirm that goals, timing, capital and risk comfort are unchanged since the last review.")
+        talking += [f"Market this period: {f.theme.lower()} - {f.relevance_to_client}" for f in findings[:2]]
+        recs = []
+        if inputs.ideas:
+            recs = [ExecutiveIdeaGlance(idea_id=i.idea_id, slot_number=i.slot_number, ticker=i.ticker, name=i.name, action=i.action,
+                                        target_weight_pct=i.target_weight_pct, portfolio_role=i.portfolio_role,
+                                        why_it_fits=i.client_fit_rationale) for i in inputs.ideas.ideas]
+            talking.append("Because the profile changed, walk through the three suitability-checked ideas and their trade-offs; "
+                           "a recommendation needs the client's confirmation and a formal memo.")
+        else:
+            talking.append("No change to the advice is proposed for this meeting.")
+        questions = [
+            f"Has anything changed in your income, spending or timing for: {goals[0]}?",
+            "Do you expect any large cash needs in the next 24 months?",
+            "How comfortable were you with the portfolio's movements over the last quarter?",
+            "Do you have new money to invest, or do you plan to withdraw any?",
+        ]
+
+        sources = citation_source_mapper(None, brief.validated_sources)
+        result = MeetingBrief(
+            brief_id=f"BRIEF-{uuid.uuid4().hex[:8].upper()}", created_at=datetime.now().isoformat(),
+            client_name=p.name, client_id=p.client_id, meeting_purpose=inputs.meeting_purpose, review_period=inputs.review_period,
+            profile_summary=summary, profile_changes=changes,
+            portfolio_summary=f"Current mix: {mix}. Risk score {m['risk_score']:.2f} on a 1-5 scale.",
+            portfolio_risks=risks, market_developments=developments, talking_points=talking, questions_for_client=questions,
+            recommendations=recs, sources=sources,
+        )
+        text = " ".join(result.profile_summary + result.portfolio_risks + result.market_developments + result.talking_points)
+        hits = prohibited_wording(text)
+        return result.model_copy(update={"compliance_checks": [RuleResult(
+            rule_id="R9", name="No prohibited wording", outcome="FAIL" if hits else "PASS",
+            message=f"Prohibited wording: {', '.join(sorted(set(hits)))}." if hits else "No guarantee or risk-free wording.")]})
+
+    def _decision_record(self, inputs: DecisionRecordInputs) -> EventDecisionRecord:
+        impact = inputs.impact
+        findings = []
+        if inputs.research_brief:
+            findings = [f"{f.theme}: {f.claim} ({', '.join(f.cited_source_ids)})"
+                        for f in sorted(inputs.research_brief.findings, key=lambda f: f.materiality_rank)[:3]]
+        sources = citation_source_mapper(None, inputs.research_brief.validated_sources) if inputs.research_brief else []
+        return EventDecisionRecord(
+            record_id=f"DEC-{uuid.uuid4().hex[:8].upper()}", created_at=datetime.now().isoformat(),
+            client_name=inputs.profile.name, client_id=inputs.profile.client_id, event_title=impact.event_title,
+            decision=inputs.decision, rationale=inputs.rationale, follow_up=inputs.follow_up,
+            portfolio_move_pct=impact.portfolio_move_pct, key_findings=findings, sources=sources,
+        )
+
+    def _memo(self, inputs: MemoFormatterInputs) -> StructuredMemo:
         profile, ideas, assessment = inputs.profile, inputs.ideas, inputs.assessment
         sources = inputs.research_brief.validated_sources if inputs.research_brief else []
         source_lines = {s.source_id: line for s, line in zip(sources, citation_source_mapper(None, sources))}
@@ -130,7 +252,8 @@ class MemoFormatterAgent(BaseAdvisoryAgent[MemoFormatterInputs, StructuredMemo])
                     f"Horizon: {profile.time_horizon_months} months, Investable assets: {money(profile.total_wealth, profile.base_currency)}, "
                     f"Near-term liquidity need: {money(profile.near_term_liquidity_need, profile.base_currency)}"
                 ),
-                portfolio_snapshot=f"Asset class breakdown: {profile.current_asset_class_weights}",
+                portfolio_snapshot="Asset class breakdown: " + ", ".join(
+                    f"{name} {weight:.0f}%" for name, weight in profile.current_asset_class_weights.items()),
                 ideas_at_a_glance=ideas_glance
             ),
             page_2_details=idea_details,

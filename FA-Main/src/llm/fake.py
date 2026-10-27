@@ -49,7 +49,7 @@ class FakeAdvisoryLLMClient:
                 return response_model.model_validate(override_val)
 
         if response_model == ResearchBrief:
-            return self._build_fake_research_brief() # type: ignore
+            return self._focus_findings(self._build_fake_research_brief(), user_prompt) # type: ignore
         elif response_model == CandidateIdeaSet:
             return self._build_fake_candidate_ideas(user_prompt) # type: ignore
         elif response_model == StructuredMemo:
@@ -171,6 +171,26 @@ class FakeAdvisoryLLMClient:
             ]
         )
 
+    @staticmethod
+    def _focus_findings(brief: ResearchBrief, user_prompt: str) -> ResearchBrief:
+        """Put the use case's research question first: the market event (UC3) or the quarter since the last review (UC1)."""
+        if "MARKET EVENT:" in user_prompt:
+            lead = ResearchFinding(
+                finding_id="FND-EVENT", theme="Rates repricing", materiality_rank=1, finding_type="MACRO_POLICY",
+                claim="Markets now price fewer rate cuts: intermediate yields have risen and duration-heavy bond funds have marked down.",
+                relevance_to_client="The client's bond funds carry most of the rate exposure; equities face some valuation pressure.",
+                cited_source_ids=["SRC-FED-MINUTES-2026-09"], publication_dates=["2026-09-28"])
+        elif "Quarterly client review" in user_prompt:
+            lead = ResearchFinding(
+                finding_id="FND-QUARTER", theme="Quarter in review", materiality_rank=1, finding_type="MACRO_POLICY",
+                claim="Over the quarter, central banks moved toward gradual easing while equity leadership broadened beyond US technology.",
+                relevance_to_client="Supports reviewing the balance between growth assets and bonds as the client's goal gets closer.",
+                cited_source_ids=["SRC-UBS-CIO-2026-101", "SRC-FED-MINUTES-2026-09"], publication_dates=["2026-10-10", "2026-09-28"])
+        else:
+            return brief
+        rest = [f.model_copy(update={"materiality_rank": f.materiality_rank + 1}) for f in brief.findings]
+        return brief.model_copy(update={"findings": [lead] + rest})
+
     # Offline idea pools per slot. A slot's first entry is the initial idea; each regeneration of
     # that slot moves to the next entry, so selective regeneration produces a genuinely different idea.
     IDEA_POOLS = {
@@ -238,6 +258,82 @@ class FakeAdvisoryLLMClient:
         ],
     }
 
+    # (ticker, instrument_id, name, target %, role, thesis, why now, client fit, risks, invalidation, conviction,
+    #  alternative, evidence, action); a slot's later entries are used when that slot is regenerated.
+    SARAH_POOLS = {
+        "adhoc_request": {
+            1: [("ACWI", "EQ-ACWI", "iShares MSCI ACWI ETF", 45.0, "GROWTH",
+                 "Broad global equity exposure compounds long-term growth without adding single-market risk.",
+                 "Global earnings revisions have stabilised and valuations outside the US remain below their long-run average.",
+                 "Puts part of the S$120k to work for the 8-year home goal while keeping equities near Sarah's existing 45% mix.",
+                 ["Equity drawdown", "Currency translation risk"], "Global earnings revisions turn negative for two quarters.",
+                 "Medium", "A US-only growth fund (rejected: adds single-market concentration).", ["SRC-UBS-CIO-2026-101"], "ADD")],
+            2: [("HYG", "FI-USHY", "iShares iBoxx $ High Yield Corporate Bond ETF", 12.0, "STABILITY",
+                 "High-yield credit offers a higher running yield than investment-grade bonds.",
+                 "All-in yields on high-yield credit remain elevated.",
+                 "Adds income to the portfolio from part of the new capital.",
+                 ["Default risk", "Equity-like drawdowns in a recession"], "High-yield spreads widen above 450bps.",
+                 "Low", "Investment-grade bonds (lower yield).", ["SRC-UBS-CIO-2026-101"], "ADD"),
+                ("IEF", "FI-US10Y", "iShares 7-10 Year Treasury Bond ETF", 6.0, "STABILITY",
+                 "High-quality government bonds dampen equity drawdowns and lock in attractive real yields.",
+                 "Policy rates are expected to ease gradually, which supports intermediate Treasuries.",
+                 "Adds a stabiliser that fits Sarah's Moderate band, replacing the high-yield idea the critic rejected.",
+                 ["Duration volatility if inflation re-accelerates"], "Fed signals renewed hikes.",
+                 "Medium", "High-yield credit (rejected: breaches the risk band).", ["SRC-FED-MINUTES-2026-09"], "ADD"),
+                ("IEAC", "FI-EUCORP", "iShares Core Euro Corporate Bond UCITS ETF", 6.0, "STABILITY",
+                 "European investment-grade credit adds carry with moderate duration.",
+                 "ECB easing supports spread compression.", "A lower-risk stabiliser within the Moderate band.",
+                 ["Credit spread widening", "EUR currency risk"], "Euro area IG spreads above 180bps.",
+                 "Medium", "US Treasuries.", ["SRC-EURO-CREDIT-2026-10"], "ADD")],
+            3: [("GLD", "CM-GOLD", "SPDR Gold Shares", 11.0, "DIVERSIFICATION",
+                 "Gold diversifies equity and rate risk and has low correlation with the rest of the portfolio.",
+                 "Central-bank buying continues to support demand.",
+                 "A small top-up keeps the diversifier at about one tenth of the larger portfolio.",
+                 ["No income", "Price volatility"], "Real yields rise above 2.5%.",
+                 "Low", "Inflation-linked bonds.", ["SRC-GOLD-MONITOR-2026-10"], "ADD")],
+        },
+        "pre_meeting": {
+            1: [("ACWI", "EQ-ACWI", "iShares MSCI ACWI ETF", 40.0, "GROWTH",
+                 "Trim global equities from 45% to 40% now that the home purchase is two years closer.",
+                 "A shorter horizon reduces the time available to recover from an equity drawdown.",
+                 "Aligns the growth allocation with the home purchase brought forward from 10 to 8 years.",
+                 ["Lower expected return", "Timing risk when trimming"], "Reassess if the purchase date moves again.",
+                 "Medium", "Keep 45% equities and accept a higher drawdown risk.", ["SRC-UBS-CIO-2026-101"], "TRIM")],
+            2: [("IEF", "FI-US10Y", "iShares 7-10 Year Treasury Bond ETF", 5.0, "STABILITY",
+                 "Add high-quality government bonds as a stabiliser for the shorter horizon.",
+                 "Gradual policy easing supports intermediate Treasuries.",
+                 "Reduces portfolio volatility ahead of the down payment.",
+                 ["Duration volatility"], "Fed signals renewed hikes.", "Medium", "Hold the trimmed amount in cash.",
+                 ["SRC-FED-MINUTES-2026-09"], "ADD")],
+            3: [("IEAC", "FI-EUCORP", "iShares Core Euro Corporate Bond UCITS ETF", 3.0, "DIVERSIFICATION",
+                 "Diversify bond exposure beyond the US with European investment-grade credit.",
+                 "ECB easing supports spread compression while yields remain near multi-year highs.",
+                 "Spreads Sarah's fixed income across regions without adding much risk.",
+                 ["Credit spread widening", "EUR currency risk"], "Euro area IG spreads above 180bps.",
+                 "Low", "Add more US Treasuries instead.", ["SRC-EURO-CREDIT-2026-10"], "ADD")],
+        },
+        "market_event": {
+            1: [("AGGG", "FI-AGGG", "iShares Core Global Aggregate Bond UCITS ETF (SGD Hedged)", 22.0, "STABILITY",
+                 "Trim the aggregate bond fund to reduce duration while rate expectations reprice.",
+                 "Yields have risen sharply; lowering duration limits further mark-to-market losses.",
+                 "Keeps a meaningful bond allocation for the home goal while lowering rate sensitivity.",
+                 ["Missing a bond rally if yields fall back"], "Yields retrace below pre-event levels.",
+                 "Medium", "Hold the bond allocation unchanged.", ["SRC-FED-MINUTES-2026-09"], "TRIM")],
+            2: [("VYMI", "EQ-VYMI", "Vanguard International High Dividend Yield ETF", 3.0, "INCOME",
+                 "Dividend payers outside the US add income that is less sensitive to US rate moves.",
+                 "Higher yields have compressed growth valuations more than dividend payers.",
+                 "Replaces part of the bond income with diversified equity income.",
+                 ["Non-US equity drawdown", "Currency translation risk"], "Dividend cuts across European banks and energy.",
+                 "Medium", "A US dividend fund.", ["SRC-UBS-CIO-2026-101"], "ADD")],
+            3: [("GLD", "CM-GOLD", "SPDR Gold Shares", 12.0, "DIVERSIFICATION",
+                 "Gold hedges the risk that rate volatility spills into equities.",
+                 "Central-bank buying supports gold even as real yields rise.",
+                 "A modest top-up to the existing diversifier.",
+                 ["No income", "Price volatility"], "Real yields rise above 2.5%.",
+                 "Low", "Inflation-linked bonds.", ["SRC-GOLD-MONITOR-2026-10"], "ADD")],
+        },
+    }
+
     def _build_fake_candidate_ideas(self, user_prompt: str) -> CandidateIdeaSet:
         # A new idea set starts every slot at its first idea; a regeneration request advances only the listed slots.
         if "Is Regeneration Request: True" in user_prompt:
@@ -247,45 +343,35 @@ class FakeAdvisoryLLMClient:
         else:
             self._slot_attempts = {1: 0, 2: 0, 3: 0}
 
-        # Sarah's sample portfolio starts above its Moderate risk ceiling. The generic mock
-        # slate only adds risk assets from cash, so every retry worsened R4 and could never
-        # reach advisor sign-off. Give this offline demo a deterministic rebalance that trims
-        # existing positions and moves the proceeds to BIL; the Suitability Critic still
-        # evaluates the proposed trades and remains the authority on whether they can proceed.
-        sarah_rebalance = "Client: Sarah Tan (CL-DEMO-001)" in user_prompt
-        sarah_trims = {
-            1: ("SPYG", "EQ-SPYG", "SPDR Portfolio S&P 500 Growth ETF", 35.0, "GROWTH",
-                "Trim the existing US growth allocation from 45% to 35% and hold the proceeds in cash.",
-                "Rebalance the existing portfolio toward Sarah's Moderate risk ceiling.",
-                "Reduces the portfolio's risk score while retaining a measured long-term growth allocation.",
-                ["Equity drawdown", "Growth valuation compression"],
-                "Reassess if the client's risk profile or long-term goal changes.", "Medium",
-                "Maintain the current allocation after confirming risk capacity.", ["SRC-UBS-CIO-2026-102"]),
-            2: ("LQD", "FI-USIG", "iShares iBoxx $ Investment Grade Corporate Bond ETF", 20.0, "STABILITY",
-                "Trim the existing investment-grade bond allocation from 30% to 20% and hold the proceeds in cash.",
-                "Reduce portfolio risk while preserving a meaningful fixed-income allocation.",
-                "Moves the existing portfolio risk score closer to Sarah's documented Moderate band.",
-                ["Credit spread widening", "Duration volatility"],
-                "Reassess if credit quality or the client's income objective changes.", "Medium",
-                "Retain the current bond allocation after confirming risk capacity.", ["SRC-UBS-CIO-2026-101"]),
-            3: ("GLD", "CM-GOLD", "SPDR Gold Shares", 7.5, "DIVERSIFICATION",
-                "Trim the existing gold allocation from 10% to 7.5% and hold the proceeds in cash.",
-                "Make a small rebalancing adjustment alongside the equity and bond trims.",
-                "Lowers overall portfolio risk without removing the portfolio's diversifying assets.",
-                ["Price volatility", "No income"],
-                "Reassess if diversification needs or the client's risk profile changes.", "Low",
-                "Keep the existing allocation and monitor its portfolio role.", ["SRC-UBS-CIO-2026-101"]),
-        }
+        # Sarah is the demo client for all three use cases, so her offline ideas follow the use case.
+        # UC2 (deploy S$120k): Idea 2 first proposes high-yield credit as "stability"; the critic fails it on R4,
+        # locks Ideas 1 and 3 and regenerates only Idea 2. The critic remains the authority on every set.
+        use_case = re.search(r"ADVISORY USE CASE: (\w+)", user_prompt)
+        sarah_pool = self.SARAH_POOLS.get(use_case.group(1) if use_case else "") if "Client: Sarah Tan (CL-DEMO-001)" in user_prompt else None
+
+        # Daniel's first slot-2 idea over-allocates growth for his 15-month deposit, so the offline demo
+        # shows the critic failing one idea, locking the other two and regenerating only that slot.
+        daniel_first_round = "Client: Daniel Koh (CL-DEMO-002)" in user_prompt and self._slot_attempts[2] == 0
+        daniel_growth = ("SPYG", "EQ-SPYG", "SPDR Portfolio S&P 500 Growth ETF", 30.0, "GROWTH",
+                         "US large-cap growth leaders continue to compound earnings through AI-driven productivity gains.",
+                         "Earnings revisions for US growth names remain positive into the next reporting season.",
+                         "Responds to the client's stated comfort with high risk and adds an equity return source.",
+                         ["Equity drawdown", "Rate sensitivity of long-duration growth stocks", "Single-market exposure"],
+                         "Forward earnings revisions turning negative for two consecutive months.", "Medium",
+                         "A global equity fund (lower US weight).", ["SRC-UBS-CIO-2026-101"])
 
         ideas = []
         for slot, pool in self.IDEA_POOLS.items():
             (ticker, inst, name, weight, role, thesis, why_now, fit, risks, trigger,
              conviction, alternative, evidence) = pool[min(self._slot_attempts[slot], len(pool) - 1)]
-            action = "ADD"
-            if sarah_rebalance:
+            if daniel_first_round and slot == 2:
                 (ticker, inst, name, weight, role, thesis, why_now, fit, risks, trigger,
-                 conviction, alternative, evidence) = sarah_trims[slot]
-                action = "TRIM"
+                 conviction, alternative, evidence) = daniel_growth
+            action = "ADD"
+            if sarah_pool:
+                options = sarah_pool[slot]
+                (ticker, inst, name, weight, role, thesis, why_now, fit, risks, trigger,
+                 conviction, alternative, evidence, action) = options[min(self._slot_attempts[slot], len(options) - 1)]
             ideas.append(InvestmentIdea(
                 idea_id=f"IDEA-{ticker}-{slot:02d}", slot_number=slot, instrument_id=inst, ticker=ticker, name=name,
                 action=action, target_weight_pct=weight,

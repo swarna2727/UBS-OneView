@@ -24,22 +24,22 @@
     },
     "raw_holdings": [
       {
-        "ticker": "SPYG",
-        "name": "Global equities",
+        "ticker": "ACWI",
+        "name": "Global equities (iShares MSCI ACWI ETF)",
         "asset_class": "Equities",
         "region": "Global",
-        "currency": "SGD",
+        "currency": "USD",
         "weight_pct": 45.0,
-        "risk_rating": 4
+        "risk_rating": 3
       },
       {
-        "ticker": "LQD",
-        "name": "Investment-grade bonds",
+        "ticker": "AGGG",
+        "name": "Investment-grade bonds (Global Aggregate, SGD hedged)",
         "asset_class": "Fixed Income",
-        "region": "North America",
-        "currency": "USD",
+        "region": "Global",
+        "currency": "SGD",
         "weight_pct": 30.0,
-        "risk_rating": 3
+        "risk_rating": 2
       },
       {
         "ticker": "BIL",
@@ -52,7 +52,7 @@
       },
       {
         "ticker": "GLD",
-        "name": "Other diversifying assets",
+        "name": "Other diversifying assets (gold)",
         "asset_class": "Commodities",
         "region": "Global",
         "currency": "USD",
@@ -60,8 +60,24 @@
         "risk_rating": 3
       }
     ],
-    "new_capital_amount": 120000.0,
-    "advisor_notes": "Illustrative client for the Prism prototype. S$120,000 is available to invest. Portfolio mix: 45% equities, 30% investment-grade bonds, 15% cash or money market funds, and 10% other assets. ETF investor. The S$800,000 portfolio value is a prototype assumption because the assignment does not specify total wealth."
+    "advisor_notes": "Illustrative client for the OneView prototype. ETF investor. Portfolio mix: 45% global equities, 30% investment-grade bonds, 15% cash or money market funds and 10% other diversifying assets. The S$800,000 portfolio value is a prototype assumption.",
+    "last_review": {
+      "date": "2026-07-15",
+      "goals": [
+        "Home down payment of S$300,000 in 10 years"
+      ],
+      "time_horizon_months": 120,
+      "stated_risk_willingness": "Moderate",
+      "liquidity_schedule": [
+        {
+          "due_months": 120,
+          "amount": 300000.0,
+          "purpose": "Home down payment"
+        }
+      ],
+      "total_wealth": 780000.0,
+      "experience_level": "ETF investor"
+    }
   },
   "demo_daniel": {
     "client_id": "CL-DEMO-002",
@@ -116,7 +132,25 @@
         "risk_rating": 4
       }
     ],
-    "advisor_notes": "Age 29. Says he is comfortable with high risk, but most of the money is needed for a deposit."
+    "advisor_notes": "Age 29. Says he is comfortable with high risk, but most of the money is needed for a deposit.",
+    "last_review": {
+      "date": "2026-07-20",
+      "goals": [
+        "S$180k property deposit in 2 years",
+        "Grow remaining savings"
+      ],
+      "time_horizon_months": 24,
+      "stated_risk_willingness": "Comfortable with high risk",
+      "liquidity_schedule": [
+        {
+          "due_months": 24,
+          "amount": 180000.0,
+          "purpose": "Property deposit"
+        }
+      ],
+      "total_wealth": 210000.0,
+      "experience_level": "Limited"
+    }
   },
   "demo_mdm_lim": {
     "client_id": "CL-DEMO-003",
@@ -182,7 +216,25 @@
         "risk_rating": 1
       }
     ],
-    "advisor_notes": "Age 62, retiring in 3 years. Has asked for a 'guaranteed 6%'."
+    "advisor_notes": "Age 62, retiring in 3 years. Has asked for a 'guaranteed 6%'.",
+    "last_review": {
+      "goals": [
+        "Guaranteed 6% annual income",
+        "Preserve capital before retirement"
+      ],
+      "time_horizon_months": 36,
+      "stated_risk_willingness": "Low to moderate",
+      "liquidity_schedule": [
+        {
+          "due_months": 36,
+          "amount": 200000.0,
+          "purpose": "Retirement cash reserve"
+        }
+      ],
+      "total_wealth": 1200000.0,
+      "experience_level": "Knowledgeable",
+      "date": "2026-07-08"
+    }
   },
   "demo_aaron": {
     "client_id": "CL-DEMO-004",

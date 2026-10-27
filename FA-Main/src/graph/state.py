@@ -3,7 +3,7 @@
 from typing import TypedDict, Optional, List, Dict, Any, Annotated
 from src.schemas.advisory import (
     ClientAdvisoryProfile, ResearchBrief, CandidateIdeaSet,
-    SuitabilityAssessment, StructuredMemo
+    SuitabilityAssessment, StructuredMemo, MeetingBrief, EventImpact, EventDecisionRecord
 )
 
 def append_list(current: List[Any], new_items: List[Any]) -> List[Any]:
@@ -35,6 +35,20 @@ class AdvisoryState(TypedDict, total=False):
     auto_regenerate: bool  # False after an advisor edit: a resulting FAIL goes back to the advisor
     regeneration_history: Annotated[List[Dict[str, Any]], append_list]  # automatic replacements shown to the advisor
     market_feedback: Optional[str]
+
+    # Idea-set lineage: candidate set -> system-checked set -> advisor-approved set -> memo
+    idea_round_trigger: Optional[Dict[str, Any]]  # why the next critic run happens (initial, auto, advisor)
+    idea_rounds: Annotated[List[Dict[str, Any]], append_list]  # every candidate set with its critic verdicts
+    approved_idea_set: Optional[Dict[str, Any]]  # the set the advisor approved for the memo, with the decision
+
+    # Use cases: pre_meeting (UC1), adhoc_request (UC2), market_event (UC3)
+    use_case: str
+    profile_changes: List[Dict[str, Any]]  # UC1: client facts that differ from the last review
+    include_ideas: bool  # UC1: generate 3 recommendations for the meeting (default: the profile changed)
+    meeting_brief: Optional[MeetingBrief]
+    event_impact: Optional[EventImpact]  # UC3: deterministic client impact and rule re-check
+    event_decision: Optional[Dict[str, Any]]  # UC3: maintain / monitor / revise, with rationale and follow-up
+    decision_record: Optional[EventDecisionRecord]
 
     # Governance & Human-In-The-Loop tracking
     advisor_notes: Annotated[List[str], append_list]

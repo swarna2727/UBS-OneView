@@ -215,3 +215,60 @@ def portfolio_parser(raw_holdings: List[Dict[str, Any]]) -> StandardizedHoldings
         weighted_risk_score=weighted_risk_score,
         is_balanced_sum=is_balanced
     )
+
+def with_new_capital(raw_holdings: List[Dict[str, Any]], total_wealth: float, new_capital: float) -> List[Dict[str, Any]]:
+    """UC2: add new money to the portfolio as cash (BIL) and re-weight the existing holdings over the larger total."""
+    if new_capital <= 0 or total_wealth <= 0:
+        return [dict(h) for h in raw_holdings]
+    scale = total_wealth / (total_wealth + new_capital)
+    cash_pct = new_capital / (total_wealth + new_capital) * 100.0
+    holdings = [{**h, "weight_pct": round(float(h.get("weight_pct", 0.0)) * scale, 4)} for h in raw_holdings]
+    cash = next((h for h in holdings if str(h.get("ticker", "")).upper() == "BIL"), None)
+    if cash is None:
+        holdings.append({"ticker": "BIL", "name": "Cash and money market funds", "asset_class": "Cash Equivalents",
+                         "region": "Singapore", "currency": "SGD", "weight_pct": 0.0, "risk_rating": 1})
+        cash = holdings[-1]
+    cash["weight_pct"] = round(cash["weight_pct"] + cash_pct, 4)
+    return holdings
+
+# Client facts compared against the last review (UC1). Wealth only counts as a change above this drift.
+CHANGE_FIELDS = {
+    "goals": "Investment objective",
+    "time_horizon_months": "Time horizon (months)",
+    "stated_risk_willingness": "Risk willingness",
+    "liquidity_schedule": "Liquidity needs",
+    "experience_level": "Investment experience",
+    "total_wealth": "Investable wealth",
+}
+WEALTH_CHANGE_THRESHOLD = 0.10
+
+def _describe(field: str, value: Any) -> str:
+    if value in (None, "", []):
+        return "Not recorded"
+    if field == "goals":
+        return "; ".join(value) if isinstance(value, list) else str(value)
+    if field == "liquidity_schedule":
+        return "; ".join(f"{e.get('purpose', 'Need')}: {float(e.get('amount', 0)):,.0f} in {e.get('due_months')} months"
+                         for e in value) or "None"
+    if field == "total_wealth":
+        return f"{float(value):,.0f}"
+    return str(value)
+
+def profile_change_detector(current: Dict[str, Any], last_review: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Deterministically list client facts that changed since the last review. No last review -> no changes."""
+    if not last_review:
+        return []
+    changes = []
+    for field, label in CHANGE_FIELDS.items():
+        before, after = last_review.get(field), current.get(field)
+        if field == "total_wealth":
+            if not before or not after or abs(float(after) - float(before)) / float(before) < WEALTH_CHANGE_THRESHOLD:
+                continue
+        elif field == "liquidity_schedule":
+            key = lambda events: sorted((int(e.get("due_months", 0)), float(e.get("amount", 0))) for e in events or [])
+            if key(before) == key(after):
+                continue
+        elif before == after:
+            continue
+        changes.append({"field": field, "label": label, "before": _describe(field, before), "after": _describe(field, after)})
+    return changes
