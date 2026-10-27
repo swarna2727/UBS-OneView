@@ -128,6 +128,8 @@ The Streamlit workspace opens with a mode selector. **Offline clients** opens th
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/sessions` | Start a session with the client intake; runs to the first advisor checkpoint |
+| `POST` | `/sessions/stream` | Same as `POST /sessions`, as server-sent events: one `node_completed` event per agent step, then a `checkpoint` event holding the workspace view |
+| `POST` | `/sessions/{id}/actions/stream` | Same as `/actions`, streamed the same way |
 | `GET` | `/sessions/{id}` | Workspace view, including `pending_review` (agent output, `allowed_actions`) |
 | `POST` | `/sessions/{id}/actions` | Advisor decision: `approve`, `regenerate`, `reject`, `revise`, `lock_idea`, `unlock_idea`, `edit_allocation`, `add_advisor_note` (optional `idea_id`, `notes`, `edits`). 400 if not allowed at the current checkpoint |
 | `GET` | `/sessions/{id}/pdf` | Approved memo PDF (exists only after final approval) |

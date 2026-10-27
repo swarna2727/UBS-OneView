@@ -2,7 +2,7 @@
 
 import uuid
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Iterator
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
@@ -37,7 +37,19 @@ class AdvisorySessionService:
         sid = session_id or f"sess_{uuid.uuid4().hex[:10]}"
         config = {"configurable": {"thread_id": sid}}
 
-        initial_state: AdvisoryState = {
+        initial_state = self._initial_state(sid, raw_input)
+        logger.info(f"Starting advisory session: {sid}")
+        self._log_run_started(sid, raw_input)
+
+        try:
+            self.graph.invoke(initial_state, config=config)
+            return self._current_view(sid)
+        except Exception as e:
+            logger.error(f"Error in session {sid}: {e}")
+            raise
+
+    def _initial_state(self, sid: str, raw_input: Dict[str, Any]) -> AdvisoryState:
+        return {
             "session_id": sid,
             "raw_input": raw_input,
             "locked_idea_ids": [],
@@ -51,7 +63,7 @@ class AdvisorySessionService:
             "is_completed": False
         }
 
-        logger.info(f"Starting advisory session: {sid}")
+    def _log_run_started(self, sid: str, raw_input: Dict[str, Any]) -> None:
         model_for = getattr(self.llm_client, "model_for", None)
         self.run_log.record(
             sid, "run_started", inputs=raw_input,
@@ -60,12 +72,34 @@ class AdvisorySessionService:
             default_model=model_for(None) if callable(model_for) else None
         )
 
-        try:
-            self.graph.invoke(initial_state, config=config)
-            return self._current_view(sid)
-        except Exception as e:
-            logger.error(f"Error in session {sid}: {e}")
-            raise
+    def _stream_progress(self, session_id: str, graph_input: Any) -> Iterator[Dict[str, Any]]:
+        """Run the graph and yield one progress event per completed node, then the resulting workspace view."""
+        config = {"configurable": {"thread_id": session_id}}
+        for update in self.graph.stream(graph_input, config=config, stream_mode="updates"):
+            for node, payload in update.items():
+                if node == "__interrupt__":
+                    continue
+                yield {"event": "node_completed", "session_id": session_id, "node": node,
+                       "stage": (payload or {}).get("current_stage")}
+        view = self._current_view(session_id)
+        yield {"event": "checkpoint", "session_id": session_id, "view": view.model_dump(mode="json")}
+
+    def stream_session(self, raw_input: Dict[str, Any], session_id: Optional[str] = None) -> Iterator[Dict[str, Any]]:
+        """start_session with real-time progress events (slide 26)."""
+        sid = session_id or f"sess_{uuid.uuid4().hex[:10]}"
+        initial_state = self._initial_state(sid, raw_input)
+        self._log_run_started(sid, raw_input)
+        yield {"event": "session_started", "session_id": sid}
+        yield from self._stream_progress(sid, initial_state)
+
+    def stream_action(self, session_id: str, action_request: AdvisorActionRequest) -> Iterator[Dict[str, Any]]:
+        """execute_action with real-time progress events. Validation errors raise before the stream starts."""
+        pending = self._validate_action(session_id, action_request)
+        if pending is None:  # advisor notes never resume the graph
+            yield {"event": "checkpoint", "session_id": session_id,
+                   "view": self.execute_action(session_id, action_request).model_dump(mode="json")}
+            return
+        yield from self._stream_progress(session_id, Command(resume=action_request.model_dump()))
 
     def _snapshot(self, session_id: str):
         config = {"configurable": {"thread_id": session_id}}
@@ -113,6 +147,19 @@ class AdvisorySessionService:
                     self.graph.invoke(None, config=config)
             return self._current_view(session_id)
 
+        self._validate_action(session_id, action_request)
+
+        try:
+            self.graph.invoke(Command(resume=action_request.model_dump()), config=config)
+            return self._current_view(session_id)
+        except Exception as e:
+            logger.error(f"Error executing action on session {session_id}: {e}")
+            raise
+
+    def _validate_action(self, session_id: str, action_request: AdvisorActionRequest) -> Optional[Dict[str, Any]]:
+        """Check an advisor action against the current checkpoint; returns it, or None for a note-only action."""
+        if action_request.action == "add_advisor_note":
+            return None
         pending_review = self.get_pending_review(session_id)
         if pending_review is None:
             raise ValueError(f"Advisory session '{session_id}' is not waiting for an advisor review.")
@@ -143,13 +190,7 @@ class AdvisorySessionService:
             idea_ids = {i["idea_id"] for i in pending_review.get("candidate_ideas") or (self.get_state(session_id)["candidate_ideas"].model_dump()["ideas"])}
             if action_request.idea_id not in idea_ids or not isinstance(weight, (int, float)) or not 0 <= weight <= 100:
                 raise ValueError("edit_allocation needs a valid idea_id and edits.target_weight_pct between 0 and 100.")
-
-        try:
-            self.graph.invoke(Command(resume=action_request.model_dump()), config=config)
-            return self._current_view(session_id)
-        except Exception as e:
-            logger.error(f"Error executing action on session {session_id}: {e}")
-            raise
+        return pending_review
 
     def get_state(self, session_id: str) -> AdvisoryState:
         """Return the raw internal graph state for debugging or assertion."""

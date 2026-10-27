@@ -1,9 +1,10 @@
 """FastAPI REST Application for the UBS Human-Led Multi-Agent Advisory System."""
 
 import os
+import json
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.schemas.workspace import AdvisorWorkspaceView, AdvisorActionRequest
@@ -45,6 +46,32 @@ def create_advisory_session(payload: Dict[str, Any], session_id: Optional[str] =
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to start advisory session: {str(e)}"
         )
+
+def _sse(events) -> StreamingResponse:
+    """Server-sent events: one `data:` line per progress event, ending with the checkpoint workspace view."""
+    def body():
+        try:
+            for event in events:
+                yield f"event: {event['event']}\ndata: {json.dumps(event, default=str)}\n\n"
+        except Exception as e:  # surfaced to the client instead of dropping the connection
+            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+    return StreamingResponse(body(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+@app.post("/sessions/stream")
+def stream_advisory_session(payload: Dict[str, Any], session_id: Optional[str] = None):
+    """Start a session and stream agent progress in real time (slide 26); the last event is the checkpoint view."""
+    return _sse(service.stream_session(payload, session_id=session_id))
+
+@app.post("/sessions/{session_id}/actions/stream")
+def stream_advisor_action(session_id: str, action_req: AdvisorActionRequest):
+    """Execute an advisor action and stream the resulting agent progress."""
+    try:
+        service._validate_action(session_id, action_req)  # reject bad actions with a 4xx before streaming starts
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Advisory session '{session_id}' not found.")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return _sse(service.stream_action(session_id, action_req))
 
 @app.get("/sessions/{session_id}", response_model=AdvisorWorkspaceView)
 def get_advisory_session_workspace(session_id: str):
