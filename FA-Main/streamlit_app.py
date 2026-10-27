@@ -365,6 +365,7 @@ def render_ideas(view: Any) -> None:
                     if status.status == "PASS": st.success("Suitability check passed")
                     elif status.status == "FLAG": st.warning("Advisor review required")
                     else: st.error("Suitability check failed")
+                render_lock_control(view, idea, status)
     if assessment:
         st.markdown("### Portfolio-level suitability")
         c1, c2, c3 = st.columns(3)
@@ -379,6 +380,29 @@ def render_ideas(view: Any) -> None:
         with st.expander("Review rule checks"):
             checks = [{"Rule": r.rule_id, "Check": r.name, "Result": r.outcome, "Observed": r.after_value, "Limit": r.threshold_value} for r in assessment.rule_results]
             st.dataframe(pd.DataFrame(checks), hide_index=True, width="stretch")
+
+
+def render_lock_control(view: Any, idea: Any, status: Any) -> None:
+    """Slide 25: each idea is locked in individually; there is no common accept button."""
+    pending = view.pending_review
+    if not pending or pending.stage != "suitability_review":
+        return
+    locked = idea.idea_id in pending.locked_idea_ids
+    note = st.session_state.get("advisor_note", "")
+    if locked:
+        st.success("Locked in")
+        if "unlock_idea" in pending.allowed_actions and st.button("Unlock", key=f"unlock_{idea.idea_id}", width="stretch"):
+            submit_action("unlock_idea", note, idea_id=idea.idea_id)
+        return
+    needs_note = view.center_panel.data_payload.get("suitability_status") == "FLAG" or (status and status.status == "FLAG")
+    failed = bool(status and status.status == "FAIL")
+    if st.button(
+        "Lock in this idea", key=f"lock_{idea.idea_id}", type="primary", width="stretch",
+        disabled=failed or "lock_idea" not in pending.allowed_actions or (needs_note and not note.strip()),
+    ):
+        submit_action("lock_idea", note, idea_id=idea.idea_id)
+    if needs_note and not note.strip() and not failed:
+        st.caption("Record an exception rationale in the advisor note to lock this idea.")
 
 
 def submit_action(action: str, notes: str = "", **kwargs: Any) -> None:
@@ -490,13 +514,11 @@ def render_advisor_review() -> None:
                     else:
                         st.warning(message)
             st.caption("Review recommendations and rule results on the Recommendations screen.")
-            if pending and "override_flag" in pending.allowed_actions:
-                st.warning("An exception requires a documented advisor rationale.")
-                if st.button("Approve with documented exception", type="primary", width="stretch", disabled=not st.session_state.advisor_note.strip()):
-                    submit_action("override_flag", st.session_state.advisor_note)
-            elif pending and "approve" in pending.allowed_actions:
-                if st.button("Approve suitability review", type="primary", width="stretch"):
-                    submit_action("approve", st.session_state.advisor_note)
+            if pending:
+                total = len(pending.candidate_ideas)
+                st.markdown(f"**Ideas locked in:** {len(pending.locked_idea_ids)} of {total}")
+                st.caption("Lock in each idea on the Recommendations screen. The memo is drafted once all three are locked. "
+                           "A FLAG needs a documented rationale; a FAIL cannot be locked.")
             if pending and "revise" in pending.allowed_actions:
                 if st.button("Revise ideas using this rationale", type="primary", width="stretch", disabled=not st.session_state.advisor_note.strip()):
                     submit_action("revise", st.session_state.advisor_note)

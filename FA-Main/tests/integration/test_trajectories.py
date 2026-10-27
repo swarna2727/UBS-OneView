@@ -13,6 +13,13 @@ def new_service(**fake_kwargs):
 def act(service, session_id, **kwargs):
     return service.execute_action(session_id, AdvisorActionRequest(**kwargs))
 
+def lock_all(service, session_id, notes=None):
+    """Slide 25: the advisor locks in each idea individually; the last lock-in proceeds to the memo."""
+    view = None
+    for idea in service.get_pending_review(session_id)["candidate_ideas"]:
+        view = act(service, session_id, action="lock_idea", idea_id=idea["idea_id"], notes=notes)
+    return view
+
 def approve_until(service, session_id, stage):
     """Approve each review checkpoint until the graph pauses at `stage`."""
     for _ in range(10):
@@ -20,7 +27,10 @@ def approve_until(service, session_id, stage):
         assert review is not None, f"Session ended before reaching '{stage}' review"
         if review["stage"] == stage:
             return review
-        act(service, session_id, action="approve")
+        if review["stage"] == "suitability_review":
+            lock_all(service, session_id)
+        else:
+            act(service, session_id, action="approve")
     raise AssertionError(f"Never reached '{stage}' review")
 
 def stages_visited(service, session_id):
@@ -45,7 +55,7 @@ def test_balanced_client_full_trajectory_pdf_only_after_approval(balanced_client
     assert state["assessment"].overall_status == "PASS"
     assert len(view.pending_review.candidate_ideas) == 3
 
-    view = act(service, sid, action="approve")
+    view = lock_all(service, sid)
     assert view.pending_review.stage == "advisor_approval"
     state = service.get_state(sid)
     assert state["memo"] is not None
@@ -161,11 +171,12 @@ def test_flag_needs_documented_exception(sample_profiles):
     review = approve_until(service, sid, "suitability_review")
     assert service.get_state(sid)["assessment"].overall_status == "FLAG"
     assert any(r.rule_id == "R7" and r.outcome == "FLAG" for r in service.get_state(sid)["assessment"].rule_results)
-    assert review["allowed_actions"][0] == "override_flag"
+    assert review["allowed_actions"][0] == "lock_idea"
 
+    first = review["candidate_ideas"][0]["idea_id"]
     with pytest.raises(ValueError, match="document"):
-        act(service, sid, action="override_flag")
-    view = act(service, sid, action="override_flag", notes="Client is reducing US exposure via RSU sales over 6 months.")
+        act(service, sid, action="lock_idea", idea_id=first)
+    view = lock_all(service, sid, notes="Client is reducing US exposure via RSU sales over 6 months.")
     assert view.pending_review.stage == "advisor_approval"
     assert any("RSU sales" in n for n in view.advisor_notes)
 
@@ -279,5 +290,62 @@ def test_run_log_captures_inputs_versions_rules_and_decisions(balanced_client_da
     assert market["output"]["validated_sources"][0]["published_at"]
     assert "rule_results" in events and "pdf_generated" in events and events[-1] == "run_ended"
     assert [e["stage"] for e in log if e["event"] == "advisor_decision"] == [
-        "client_profile", "market_intelligence", "suitability_review", "advisor_approval"
+        "client_profile", "market_intelligence", "suitability_review", "suitability_review", "suitability_review", "advisor_approval"
     ]
+
+
+def test_ideas_are_locked_in_individually_with_no_common_accept(balanced_client_data):
+    """Slide 25: no bulk accept; the memo starts only after the third individual lock-in."""
+    service = new_service()
+    sid = "test_lock_in"
+    service.start_session(balanced_client_data, session_id=sid)
+    review = approve_until(service, sid, "suitability_review")
+    assert "approve" not in review["allowed_actions"] and "override_flag" not in review["allowed_actions"]
+    with pytest.raises(ValueError):
+        act(service, sid, action="approve")
+
+    ids = [i["idea_id"] for i in review["candidate_ideas"]]
+    view = act(service, sid, action="lock_idea", idea_id=ids[0])
+    assert view.pending_review.stage == "suitability_review" and view.pending_review.locked_idea_ids == [ids[0]]
+    assert service.get_state(sid).get("memo") is None
+
+    view = act(service, sid, action="unlock_idea", idea_id=ids[0])
+    assert view.pending_review.locked_idea_ids == []
+
+    for idea_id in ids[:2]:
+        view = act(service, sid, action="lock_idea", idea_id=idea_id)
+    assert view.pending_review.stage == "suitability_review" and service.get_state(sid).get("memo") is None
+    view = act(service, sid, action="lock_idea", idea_id=ids[2])
+    assert view.pending_review.stage == "advisor_approval"
+
+def test_locks_survive_revising_another_idea_and_reset_for_the_revised_one(balanced_client_data):
+    service = new_service()
+    sid = "test_lock_revise"
+    service.start_session(balanced_client_data, session_id=sid)
+    review = approve_until(service, sid, "suitability_review")
+    ids = [i["idea_id"] for i in review["candidate_ideas"]]
+    act(service, sid, action="lock_idea", idea_id=ids[0])
+    act(service, sid, action="lock_idea", idea_id=ids[1])
+    view = act(service, sid, action="revise", idea_id=ids[1], notes="Different instrument please.")
+    assert view.pending_review.stage == "suitability_review"
+    assert view.pending_review.locked_idea_ids == [ids[0]]
+
+def test_allocation_edit_unlocks_that_idea(balanced_client_data):
+    service = new_service()
+    sid = "test_lock_edit"
+    service.start_session(balanced_client_data, session_id=sid)
+    review = approve_until(service, sid, "suitability_review")
+    ids = [i["idea_id"] for i in review["candidate_ideas"]]
+    act(service, sid, action="lock_idea", idea_id=ids[0])
+    act(service, sid, action="lock_idea", idea_id=ids[2])
+    view = act(service, sid, action="edit_allocation", idea_id=ids[0], edits={"target_weight_pct": 1.0})
+    assert ids[0] not in view.pending_review.locked_idea_ids
+
+def test_fail_idea_cannot_be_locked(balanced_client_data):
+    service = new_service(override_responses={"CandidateIdeaSet": _always_failing_idea_set()})
+    sid = "test_lock_fail"
+    service.start_session(balanced_client_data, session_id=sid)
+    review = approve_until(service, sid, "suitability_review")
+    failed = next(ie for ie in service.get_state(sid)["assessment"].idea_evaluations if ie.status == "FAIL")
+    with pytest.raises(ValueError, match="FAIL"):
+        act(service, sid, action="lock_idea", idea_id=failed.idea_id)

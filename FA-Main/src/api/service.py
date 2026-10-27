@@ -126,6 +126,18 @@ class AdvisorySessionService:
             )
         if action == "override_flag" and not (action_request.notes or "").strip():
             raise ValueError("An exception override must document the advisor's reasoning in 'notes'.")
+        if action in ("lock_idea", "unlock_idea"):
+            ideas = pending_review.get("candidate_ideas") or []
+            if action_request.idea_id not in {i["idea_id"] for i in ideas}:
+                raise ValueError(f"{action} needs the idea_id of one of the three ideas.")
+            if action == "lock_idea":
+                assessment = self.get_state(session_id).get("assessment")
+                status = assessment.overall_status if assessment else "FAIL"
+                idea_status = next((ie.status for ie in assessment.idea_evaluations if ie.idea_id == action_request.idea_id), "FAIL")
+                if idea_status == "FAIL" or status == "FAIL" and idea_status != "PASS":
+                    raise ValueError("A FAIL idea cannot be locked in; revise, edit or reject it.")
+                if (status == "FLAG" or idea_status == "FLAG") and not (action_request.notes or "").strip():
+                    raise ValueError("Locking an idea in a FLAG set must document the advisor's exception in 'notes'.")
         if action == "edit_allocation":
             weight = (action_request.edits or {}).get("target_weight_pct")
             idea_ids = {i["idea_id"] for i in pending_review.get("candidate_ideas") or (self.get_state(session_id)["candidate_ideas"].model_dump()["ideas"])}

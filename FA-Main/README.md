@@ -30,8 +30,8 @@ flowchart TD
     SEL --> IG
     SC -->|"PASS / FLAG / FAIL escalated"| R3{{"Advisor: recommendation review"}}
     R3 -->|"Revise idea / regenerate all"| IG
-    R3 -->|"Edit allocation"| SC
-    R3 -->|"Accept (PASS) / documented exception (FLAG)"| MF[5. Memo Formatter Agent]
+    R3 -->|"Edit allocation (unlocks that idea)"| SC
+    R3 -->|"Lock in each idea (FLAG: note required); 3 of 3 locked"| MF[5. Memo Formatter Agent]
     MF --> R4{{"Advisor: final approval"}}
     R4 -->|"Regenerate memo"| MF
     R4 -->|"Revise idea"| IG
@@ -44,7 +44,7 @@ flowchart TD
 |---|---|---|
 | Client profile | `approve`, `regenerate` (with `edits` to the intake fields), `reject` | Approve is unavailable while mandatory fields are missing (R1). Approving resolves flags such as R5 with the advisor's note. |
 | Research brief | `approve`, `regenerate` (notes become feedback), `reject` | Advisor can inspect every source and its date. |
-| Recommendations | `approve` (PASS only), `override_flag` (FLAG, note required), `revise` (one idea via `idea_id`, others locked), `edit_allocation`, `regenerate` (all ideas), `reject` | A FAIL can never be approved. FAILed ideas are regenerated automatically up to 2 times per idea before reaching the advisor (R10). An edited allocation is re-validated and returned to the advisor, never auto-regenerated. |
+| Recommendations | `lock_idea` / `unlock_idea` (per idea, no common accept button; a FLAG set needs a `notes` rationale, a FAIL idea can never be locked; the memo is drafted when all three are locked), `revise` (one idea via `idea_id`, others locked), `edit_allocation`, `regenerate` (all ideas), `reject` | A FAIL can never be approved. FAILed ideas are regenerated automatically up to 2 times per idea before reaching the advisor (R10). An edited allocation is re-validated and returned to the advisor, never auto-regenerated. |
 | Final approval | `approve` (generates the PDF), `regenerate`, `revise`, `edit_allocation`, `reject` | Approve is unavailable if the memo fails R9 wording or the consistency check. |
 
 `add_advisor_note` can be sent at any time; it is logged but never acts as a review decision. Advisor notes and feedback are passed to models as quoted data, not instructions.
@@ -129,7 +129,7 @@ The Streamlit workspace opens with a mode selector. **Offline clients** opens th
 |---|---|---|
 | `POST` | `/sessions` | Start a session with the client intake; runs to the first advisor checkpoint |
 | `GET` | `/sessions/{id}` | Workspace view, including `pending_review` (agent output, `allowed_actions`) |
-| `POST` | `/sessions/{id}/actions` | Advisor decision: `approve`, `regenerate`, `reject`, `revise`, `override_flag`, `edit_allocation`, `add_advisor_note` (optional `idea_id`, `notes`, `edits`). 400 if not allowed at the current checkpoint |
+| `POST` | `/sessions/{id}/actions` | Advisor decision: `approve`, `regenerate`, `reject`, `revise`, `lock_idea`, `unlock_idea`, `edit_allocation`, `add_advisor_note` (optional `idea_id`, `notes`, `edits`). 400 if not allowed at the current checkpoint |
 | `GET` | `/sessions/{id}/pdf` | Approved memo PDF (exists only after final approval) |
 | `GET` | `/sessions/{id}/audit` | Audit trail and full run log |
 | `GET` | `/health` | Health check |

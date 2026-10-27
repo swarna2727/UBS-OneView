@@ -61,7 +61,8 @@ def get_advisory_session_workspace(session_id: str):
 def execute_advisor_action(session_id: str, action_req: AdvisorActionRequest):
     """
     Execute Relationship Manager (RM) command:
-    - 'accept': Approve recommendations or final advisory memo
+    - 'lock_idea' / 'unlock_idea': lock in (or release) one idea; the memo starts when all three are locked
+    - 'approve': approve the profile, research brief or final memo
     - 'reject': Reject specific candidate idea (triggers selective regeneration)
     - 'revise': Request revisions with specific notes (triggers selective regeneration)
     - 'override_flag': Document an exception for a FLAG (notes required)
