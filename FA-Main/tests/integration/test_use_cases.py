@@ -17,6 +17,14 @@ def act(service, sid, **kwargs):
     return service.execute_action(sid, AdvisorActionRequest(**kwargs))
 
 
+def lock_all(service, sid):
+    """CP3: the advisor locks in each idea individually; the last lock-in moves the set on."""
+    view = None
+    for idea in service.get_pending_review(sid)["candidate_ideas"]:
+        view = act(service, sid, action="lock_idea", idea_id=idea["idea_id"])
+    return view
+
+
 def client(sample_profiles, key, **extra):
     return {**copy.deepcopy(sample_profiles[key]), **extra}
 
@@ -31,7 +39,7 @@ def test_pre_meeting_changed_profile_generates_ideas_then_brief(sample_profiles)
     act(service, sid, action="approve")
     view = act(service, sid, action="approve")  # include_ideas defaults to True because the profile changed
     assert view.pending_review.stage == "suitability_review"
-    view = act(service, sid, action="approve")
+    view = lock_all(service, sid)
     assert view.pending_review.stage == "brief_approval"
     brief = service.get_state(sid)["meeting_brief"]
     assert len(brief.recommendations) == 3 and brief.profile_changes
@@ -109,7 +117,7 @@ def test_market_event_revise_runs_ideas_critic_and_memo(sample_profiles):
     view = act(service, sid, action="revise", notes="Reduce duration.")
     assert view.pending_review.stage == "suitability_review"
     assert service.get_state(sid)["event_decision"]["decision"] == "REVISE"
-    act(service, sid, action="approve")
+    lock_all(service, sid)
     view = act(service, sid, action="approve")
     assert view.outcome == "APPROVED" and service.get_state(sid)["memo"] is not None
 

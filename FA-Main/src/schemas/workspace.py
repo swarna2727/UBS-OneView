@@ -68,6 +68,7 @@ class AdvisorActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal[
         "approve", "regenerate", "reject", "revise", "override_flag", "edit_allocation", "add_advisor_note",
+        "lock_idea", "unlock_idea",
         "maintain", "monitor",  # UC3 market-event decision ('revise' sends the client to new ideas)
         "accept", "resolve_conflict", "abort"
     ]
@@ -91,6 +92,7 @@ class PendingReview(BaseModel):
     raw_input: Dict[str, Any] = Field(default_factory=dict)
     candidate_ideas: List[Dict[str, Any]] = Field(default_factory=list)
     escalated: bool = False
+    locked_idea_ids: List[str] = Field(default_factory=list)
     regeneration_history: List[Dict[str, Any]] = Field(default_factory=list)
 
 AdvisorWorkspaceView.model_rebuild()

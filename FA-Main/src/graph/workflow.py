@@ -16,7 +16,7 @@ from src.graph.routing import (
     REVIEW_PROFILE, REVIEW_MARKET, REVIEW_RECOMMENDATIONS, REVIEW_MEMO, REVIEW_EVENT, REVIEW_BRIEF,
     PRE_MEETING, MARKET_EVENT,
     EDITABLE_PROFILE_FIELDS, MAX_REGENERATIONS_PER_IDEA, use_case,
-    allowed_review_actions, resolve_review_outcome, failed_slots, is_escalated,
+    allowed_review_actions, resolve_review_outcome, effective_locked_ids, failed_slots, is_escalated,
     route_after_client_profile, route_after_profile_review, route_after_market_intelligence,
     route_after_market_review, route_after_critic, route_after_event_review, route_after_brief_review,
     route_after_recommendation_review, route_after_memo_review
@@ -92,7 +92,9 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         counts = dict(state.get("slot_regen_counts") or {})
         for slot in slots:
             counts[slot] = 0
+        regenerated_ids = {i.idea_id for i in ideas if i.slot_number in slots}
         return {
+            "advisor_locked_idea_ids": [i for i in effective_locked_ids(state) if i not in regenerated_ids],
             "regenerate_slots": slots,
             "locked_idea_ids": [i.idea_id for i in ideas if i.slot_number not in slots],
             "slot_regen_counts": counts,
@@ -140,7 +142,11 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
                     })
                 })
             updated.append(idea)
-        return {"candidate_ideas": idea_set.model_copy(update={"ideas": updated}), "allocation_edited": True}
+        return {
+            "candidate_ideas": idea_set.model_copy(update={"ideas": updated}), "allocation_edited": True,
+            # An edited allocation is a new recommendation: the advisor must lock it in again after re-validation.
+            "advisor_locked_idea_ids": [i for i in effective_locked_ids(state) if i != human_action.get("idea_id")],
+        }
 
     # ------------------------------------------------------------------
     # Agent 1: Client Profile + review
@@ -346,17 +352,26 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         human_action = _request_review(
             REVIEW_RECOMMENDATIONS, "Suitability Critic Agent", reason, assessment, state,
             candidate_ideas=state["candidate_ideas"].model_dump()["ideas"] if state.get("candidate_ideas") else [],
+            locked_idea_ids=effective_locked_ids(state),
             escalated=escalated,
             regeneration_history=state.get("regeneration_history") or []
         )
         outcome = resolve_review_outcome(REVIEW_RECOMMENDATIONS, human_action)
         update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
-        if human_action.get("action") == "override_flag" and human_action.get("notes"):
+        if human_action.get("action") in ("override_flag", "lock_idea") and status == "FLAG" and human_action.get("notes"):
             update["advisor_notes"] = [f"RM Exception Note: {human_action['notes']}"]
-        if outcome == "approve":
+        if outcome in ("lock_idea", "unlock_idea"):
+            locked = effective_locked_ids(state)
+            target = human_action.get("idea_id")
+            locked = [i for i in locked if i != target] + ([target] if outcome == "lock_idea" else [])
+            update["advisor_locked_idea_ids"] = locked
+            # Last idea locked in: the set is complete and proceeds to the memo (or the meeting brief in UC1).
+            if outcome == "lock_idea" and set(locked) >= set(i.idea_id for i in state["candidate_ideas"].ideas):
+                update["review_outcome"] = "approve"
+        if update["review_outcome"] == "approve":
             update["approved_idea_set"] = {
                 "timestamp": datetime.now().isoformat(),
-                "decision": human_action.get("action"),
+                "decision": "override_flag" if status == "FLAG" else "lock_in",
                 "notes": human_action.get("notes"),
                 "overall_status": status,
                 "ideas": state["candidate_ideas"].model_dump(mode="json")["ideas"]
@@ -643,6 +658,7 @@ def build_advisory_graph(
         "meeting_brief": "meeting_brief",
         "investment_ideas": "investment_ideas",
         "suitability_critic": "suitability_critic",
+        "review_recommendations": "review_recommendations",
         "end_session": "end_session"
     })
 

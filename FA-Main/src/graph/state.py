@@ -27,6 +27,7 @@ class AdvisoryState(TypedDict, total=False):
 
     # Selective regeneration & locking controls
     locked_idea_ids: List[str]
+    advisor_locked_idea_ids: List[str]  # ideas the advisor has individually locked in (slide 25)
     regenerate_slots: List[int]
     idea_feedback: Optional[str]
     regeneration_count: int

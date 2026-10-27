@@ -31,7 +31,7 @@ from src.llm.fake import FakeAdvisoryLLMClient
 from src.schemas.workspace import AdvisorActionRequest
 from src.tools.event_tools import MARKET_EVENTS, stress_impact
 from src.tools.exposure import portfolio_exposure_calculator
-from src.tools.profile_tools import profile_change_detector, risk_profile_calculator
+from src.tools.profile_tools import profile_change_detector, required_field_validator, risk_profile_calculator
 from src.tools.risk_engine import evaluate_profile_rules, load_policy
 
 load_dotenv()
@@ -68,7 +68,7 @@ EXPERIENCE_OPTIONS = ["New investor", "Limited", "ETF investor", "Knowledgeable"
 STEPS = {
     PRE_MEETING: [("profile", "Client profile", "CP1"), ("research", "Market landscape", "CP2"),
                   ("ideas", "Candidate ideas", None), ("suitability", "Suitability check", None),
-                  ("approval", "Approve ideas", "CP3"), ("brief", "Meeting brief", "CP4")],
+                  ("approval", "Lock in ideas", "CP3"), ("brief", "Meeting brief", "CP4")],
     ADHOC: [("profile", "Client inputs", "CP1"), ("research", "Research", "CP2"), ("ideas", "Candidate ideas", None),
             ("suitability", "Suitability check", None), ("approval", "Advisor approval", "CP3"), ("memo", "Memo & sign-off", "CP4")],
     EVENT: [("profile", "Client profile", None), ("event", "Event impact", "Decide"),
@@ -309,6 +309,8 @@ def submit_action(action: str, notes: str = "", **kwargs: Any) -> None:
         if action != "add_advisor_note":
             ctx = load_context()
             st.session_state.screen = screen_for_pending(previous_stage, ctx)
+            if action in ("lock_idea", "unlock_idea") and ctx["stage"] == "suitability_review":
+                st.session_state.screen = "approval"  # keep locking in the remaining ideas on the same page
             if ctx["outcome"]:
                 record_lifecycle(ctx)
     except Exception as exc:  # surfaced to the advisor instead of a blank screen
@@ -772,6 +774,37 @@ def profile_form(ctx: dict[str, Any], raw: dict[str, Any], editable: bool) -> tu
     return edits, missing
 
 
+def render_profile_generation(profile: Any, raw: dict[str, Any]) -> None:
+    """Show how the profile was generated, step by step, so the advisor can review each one."""
+    steps = st.columns(4)
+    with steps[0], st.container(border=True, height=330):
+        st.markdown("**1 · Ingest**  \nAdvisor-verified inputs")
+        st.json({k: raw.get(k) for k in ("goals", "time_horizon_months", "stated_risk_willingness", "total_wealth",
+                                         "new_capital_amount", "liquidity_schedule") if k in raw}, expanded=True)
+    with steps[1], st.container(border=True, height=330):
+        st.markdown("**2 · Required-field validator**  \nDeterministic")
+        check = required_field_validator(raw)
+        if check.is_valid:
+            html_block(pill("PASS", "All mandatory fields present"))
+        else:
+            html_block(pill("FAIL", "Missing: " + ", ".join(check.missing_fields)))
+    with steps[2], st.container(border=True, height=330):
+        st.markdown("**3 · Risk-profile calculator**  \nDeterministic, not the LLM")
+        try:
+            risk = risk_profile_calculator(raw)
+            st.metric("Risk willingness", f"{risk.willingness_score:.1f} / 5")
+            st.metric("Risk capacity", f"{risk.capacity_score:.1f} / 5")
+            st.metric("Band (lower of the two)", risk.risk_tier)
+        except Exception as exc:
+            st.info(f"The risk band cannot be calculated yet: {exc}")
+    with steps[3], st.container(border=True, height=330):
+        st.markdown("**4 · Standardised profile**  \nWhat the downstream agents receive")
+        st.json({"risk_tier": profile.calculated_risk_tier, "risk_score_range": profile.risk_score_range,
+                 "time_horizon_months": profile.time_horizon_months, "near_term_liquidity_need": profile.near_term_liquidity_need,
+                 "asset_class_weights": profile.current_asset_class_weights,
+                 "unresolved_flags": [f.code for f in profile.unresolved_flags]}, expanded=True)
+
+
 def render_profile(ctx: dict[str, Any]) -> None:
     state, uc = ctx["state"], ctx["use_case"]
     profile = state.get("profile")
@@ -790,7 +823,7 @@ def render_profile(ctx: dict[str, Any]) -> None:
     tab_names = ["Client details *"]
     if uc == PRE_MEETING:
         tab_names.append(f"Changes since last review ({len(changes)})")
-    tab_names += ["Exposure & risk", "Flags & rules"]
+    tab_names += ["Exposure & risk", "Flags & rules", "How it was generated"]
     tabs = st.tabs(tab_names)
     with tabs[0]:
         edits, missing = profile_form(ctx, raw, editable=pending)
@@ -841,6 +874,8 @@ def render_profile(ctx: dict[str, Any]) -> None:
             html_block("<table class='grid'><tr><th>Rule</th><th>Outcome</th><th>Detail</th></tr>" + "".join(
                 f"<tr><td>{esc(r.rule_id)} · {esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>"
                 for r in evaluate_profile_rules(profile)) + "</table>")
+    with tabs[i + 2]:
+        render_profile_generation(profile, raw)
 
     if not pending:
         msg = decision_summary(ctx, "client_profile", "Checkpoint 1 · profile confirmed") if uc != EVENT else \
@@ -1259,7 +1294,7 @@ def render_approval(ctx: dict[str, Any]) -> None:
     approved = state.get("approved_idea_set")
     status_html = pill("PASS", "Approved by advisor") if approved else (pill("FLAG", "Waiting for your decision") if ctx["stage"] == "suitability_review" else "")
     page_header(ctx, "approval", "Human-approved idea set",
-                f"Only an approved set is formatted into the {final_label(ctx).lower()}. A FAIL can never be approved.", status_html)
+                f"Lock in each idea; only a fully locked-in set is formatted into the {final_label(ctx).lower()}. A FAIL can never be locked.", status_html)
     if not assessment:
         st.info("This checkpoint opens once the suitability check has run.")
         return
@@ -1267,11 +1302,13 @@ def render_approval(ctx: dict[str, Any]) -> None:
     ideas = state["candidate_ideas"].ideas
     statuses = {ie.idea_id: ie.status for ie in assessment.idea_evaluations}
     tabs = st.tabs(["Checked set", "Human-approved set", "Idea lineage"])
+    locked_ids = set(ctx["pending"].locked_idea_ids) if ctx["stage"] == "suitability_review" else {i["idea_id"] for i in (approved or {}).get("ideas", [])}
     with tabs[0]:
         left, right = st.columns([1.3, 1])
         with left:
-            html_block("<table class='grid'><tr><th>Idea</th><th>Verdict</th><th>Action</th><th>Why it fits</th></tr>" + "".join(
+            html_block("<table class='grid'><tr><th>Idea</th><th>Verdict</th><th>Locked in</th><th>Action</th><th>Why it fits</th></tr>" + "".join(
                 f"<tr><td><b>{esc(i.ticker)}</b> · {esc(i.portfolio_role.title())}</td><td>{pill(statuses.get(i.idea_id, 'PASS'))}</td>"
+                f"<td>{pill('PASS', 'Locked') if i.idea_id in locked_ids else info_pill('Not yet')}</td>"
                 f"<td>{i.action} {i.target_weight_pct:.1f}%</td><td>{esc(i.client_fit_rationale)}</td></tr>"
                 for i in sorted(ideas, key=lambda x: x.slot_number)) + "</table>")
         with right:
@@ -1280,7 +1317,7 @@ def render_approval(ctx: dict[str, Any]) -> None:
             st.metric("Proposed portfolio risk", f"{m.after_risk_score:.2f}", f"band ceiling {state['profile'].risk_score_range[1]:.2f}", delta_color="off", delta_arrow="off")
     with tabs[1]:
         if not approved:
-            st.info("No set has been approved yet. Approving locks the set that is formatted next.")
+            st.info("No set has been approved yet. Lock in all three ideas to approve the set that is formatted next.")
         else:
             for col, idea in zip(st.columns(3), sorted(approved["ideas"], key=lambda i: i["slot_number"])):
                 with col:
@@ -1300,7 +1337,7 @@ def render_approval(ctx: dict[str, Any]) -> None:
         rows = []
         for idea_id, entry in seen.items():
             if idea_id in final_ids:
-                fate = "Approved"
+                fate = "Locked in"
             elif idea_id in latest:
                 fate = "Awaiting advisor" if latest[idea_id] != "FAIL" else "Failing, needs action"
             else:
@@ -1313,23 +1350,30 @@ def render_approval(ctx: dict[str, Any]) -> None:
         return
     pending = ctx["pending"]
     allowed = pending.allowed_actions
+    locked = set(pending.locked_idea_ids)
+    flagged = assessment.overall_status == "FLAG"
     idea_label = lambda i: f"Idea {i.slot_number} · {i.ticker} ({statuses.get(i.idea_id, '')})"
     with st.container(border=True, key="footer"):
-        left, mid, right = st.columns([3, 1.4, 1.1], vertical_alignment="bottom")
-        with left:
-            note = st.text_input("Checkpoint 3 · Approve the idea set — rationale"
-                                 + (" (required for an exception or a change)" if "override_flag" in allowed else " (required for a change)"),
-                                 key=f"cp3_note_{ctx['sid']}", placeholder="Why this set suits the client, or what to change.")
-            if not {"approve", "override_flag"} & set(allowed):
-                st.error("A FAIL can never be approved. Revise the failing idea, edit its allocation or reject.", icon=":material/block:")
-        with mid:
-            if "approve" in allowed:
-                if st.button(f"Approve · draft {final_label(ctx).lower()}", type="primary", icon=":material/arrow_forward:", width="stretch"):
-                    submit_action("approve", note)
-            elif "override_flag" in allowed:
-                if st.button("Approve with exception", type="primary", icon=":material/gavel:", width="stretch", disabled=not note.strip()):
-                    submit_action("override_flag", note)
-        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
+        cols = st.columns([2.6, 1, 1, 1, 1.1], vertical_alignment="bottom")
+        with cols[0]:
+            note = st.text_input("Checkpoint 3 · Lock in each idea — rationale" + (" (required: FLAG)" if flagged else ""),
+                                 key=f"cp3_note_{ctx['sid']}", placeholder="Why this idea suits the client, or what to change.")
+            st.caption(f"Locked in: {len(locked)} of {len(ideas)}. The {final_label(ctx).lower()} is drafted once all three are locked; a FAIL cannot be locked.")
+        # No common accept button: the advisor locks in each idea individually.
+        for col, idea in zip(cols[1:4], sorted(ideas, key=lambda x: x.slot_number)):
+            with col:
+                verdict = statuses.get(idea.idea_id, "PASS")
+                if idea.idea_id in locked:
+                    if st.button(f"Unlock {idea.ticker}", icon=":material/lock:", width="stretch", key=f"unlock_{idea.idea_id}",
+                                 disabled="unlock_idea" not in allowed):
+                        submit_action("unlock_idea", note, idea_id=idea.idea_id)
+                else:
+                    needs_note = flagged or verdict == "FLAG"
+                    if st.button(f"Lock in {idea.ticker}", icon=":material/lock_open:", type="primary", width="stretch", key=f"lock_{idea.idea_id}",
+                                 disabled=verdict == "FAIL" or "lock_idea" not in allowed or (needs_note and not note.strip()),
+                                 help="A FAIL idea cannot be locked" if verdict == "FAIL" else ("Needs a rationale" if needs_note else None)):
+                        submit_action("lock_idea", note, idea_id=idea.idea_id)
+        with cols[4], st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
             st.caption("Changes need a rationale. Revising one idea keeps the other two locked; every change is re-checked by the critic.")
             target = st.selectbox("Idea", ideas, format_func=idea_label, key=f"cp3_idea_{ctx['sid']}")
             if st.button("Revise this idea", icon=":material/edit:", width="stretch", disabled=not note.strip() or "revise" not in allowed):

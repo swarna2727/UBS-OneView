@@ -54,3 +54,31 @@ def test_review_checkpoint_exposed_and_disallowed_action_rejected(incomplete_cli
 
     action_resp = client.post(f"/sessions/{body['session_id']}/actions", json={"action": "approve"})
     assert action_resp.status_code == 400
+
+
+def test_streaming_endpoints_report_progress_then_checkpoint(balanced_client_data):
+    import json
+    from fastapi.testclient import TestClient
+    from src.api.app import app
+    client = TestClient(app)
+
+    def events(response):
+        out = []
+        for block in response.text.strip().split("\n\n"):
+            data = [l for l in block.splitlines() if l.startswith("data: ")]
+            out.append(json.loads(data[0][6:]))
+        return out
+
+    resp = client.post("/sessions/stream?session_id=stream_test", json=balanced_client_data)
+    assert resp.status_code == 200 and resp.headers["content-type"].startswith("text/event-stream")
+    evs = events(resp)
+    assert evs[0]["event"] == "session_started"
+    assert [e["node"] for e in evs if e["event"] == "node_completed"] == ["client_profile"]
+    assert evs[-1]["event"] == "checkpoint" and evs[-1]["view"]["pending_review"]["stage"] == "client_profile"
+
+    resp = client.post("/sessions/stream_test/actions/stream", json={"action": "approve"})
+    nodes = [e["node"] for e in events(resp) if e["event"] == "node_completed"]
+    assert "market_intelligence" in nodes
+
+    bad = client.post("/sessions/stream_test/actions/stream", json={"action": "unlock_idea", "idea_id": "x"})
+    assert bad.status_code == 400

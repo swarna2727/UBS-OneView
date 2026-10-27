@@ -61,6 +61,15 @@ def is_escalated(state: AdvisoryState) -> bool:
     counts = state.get("slot_regen_counts") or {}
     return any(counts.get(slot, 0) >= MAX_REGENERATIONS_PER_IDEA for slot in failed_slots(state))
 
+def current_idea_ids(state: AdvisoryState) -> List[str]:
+    ideas = state.get("candidate_ideas")
+    return [i.idea_id for i in ideas.ideas] if ideas else []
+
+def effective_locked_ids(state: AdvisoryState) -> List[str]:
+    """Advisor lock-ins that still refer to an idea in the current set."""
+    current = set(current_idea_ids(state))
+    return [i for i in (state.get("advisor_locked_idea_ids") or []) if i in current]
+
 def allowed_review_actions(stage: str, state: AdvisoryState) -> List[str]:
     """Return the canonical actions the RM may take at a review checkpoint."""
     if stage == REVIEW_PROFILE:
@@ -77,8 +86,14 @@ def allowed_review_actions(stage: str, state: AdvisoryState) -> List[str]:
     if stage == REVIEW_RECOMMENDATIONS:
         assessment = state.get("assessment")
         status = assessment.overall_status if assessment else "FAIL"
-        # A FAIL can never reach the memo: the advisor can only revise, edit or reject.
-        gate = {"PASS": ["approve"], "FLAG": ["override_flag"]}.get(status, [])
+        # Slide 25: no common accept button. The advisor locks in each idea individually; once all three
+        # are locked (and the set is not a FAIL) the graph proceeds to the memo. A FAIL idea can never be locked.
+        locked = effective_locked_ids(state)
+        failed_ids = {ie.idea_id for ie in assessment.idea_evaluations if ie.status == "FAIL"} if assessment else set()
+        lockable = [i for i in current_idea_ids(state) if i not in locked and i not in failed_ids]
+        gate = ["lock_idea"] if lockable else []
+        if locked:
+            gate.append("unlock_idea")
         return gate + ["revise", "edit_allocation", "regenerate", "reject"]
 
     if stage == REVIEW_MEMO:
@@ -110,6 +125,8 @@ def resolve_review_outcome(stage: str, human_action: Dict[str, Any]) -> str:
 
     if action in ("approve", "override_flag"):
         return "approve"
+    if action in ("lock_idea", "unlock_idea"):
+        return action
     if action in ("maintain", "monitor"):
         return "record_decision"
     if action == "revise" and stage == REVIEW_EVENT:
@@ -165,9 +182,11 @@ def route_after_critic(state: AdvisoryState) -> Literal["mark_failed_slots", "re
         return "mark_failed_slots"
     return "review_recommendations"
 
-def route_after_recommendation_review(state: AdvisoryState) -> Literal["memo_formatter", "meeting_brief", "investment_ideas", "suitability_critic", "end_session"]:
+def route_after_recommendation_review(state: AdvisoryState) -> Literal["memo_formatter", "meeting_brief", "investment_ideas", "suitability_critic", "review_recommendations", "end_session"]:
     approved_next = "meeting_brief" if use_case(state) == PRE_MEETING else "memo_formatter"
     return {
+        "lock_idea": "review_recommendations",
+        "unlock_idea": "review_recommendations",
         "regenerate_ideas": "investment_ideas",
         "revalidate": "suitability_critic",
         "reject": "end_session",

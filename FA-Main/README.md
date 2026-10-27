@@ -20,8 +20,8 @@ The use cases are connected in the client lifecycle (prepare → recommend → r
 
 | Use case | Trigger | Path | Checkpoints | Output |
 |---|---|---|---|---|
-| **UC1 Prepare** · `pre_meeting` | “I'm meeting the client tomorrow” (a quarterly review; a simulated calendar prompt on the landing page shows the future-state trigger) | Profile (with the changes since `last_review`) → market landscape since the last review → **only if the profile changed**: ideas → critic → approval → meeting brief | CP1 confirm profile · CP2 review research (choose whether to add ideas; on by default when the profile changed) · CP3 approve ideas (if any) · CP4 approve brief | Meeting brief PDF: profile to confirm, changes, portfolio risks, market landscape, talking points, questions, ideas (if any), with charts |
-| **UC2 Recommend** · `adhoc_request` | “The client has S$120k to deploy” | New capital added as cash → research → ideas → critic (FAIL ideas regenerated, passing ideas locked) → approval → memo | CP1 confirm inputs · CP2 research · CP3 approve ideas · CP4 sign off memo | 3-page investment memo PDF with allocation, risk-band and stress charts |
+| **UC1 Prepare** · `pre_meeting` | “I'm meeting the client tomorrow” (a quarterly review; a simulated calendar prompt on the landing page shows the future-state trigger) | Profile (with the changes since `last_review`) → market landscape since the last review → **only if the profile changed**: ideas → critic → approval → meeting brief | CP1 confirm profile · CP2 review research (choose whether to add ideas; on by default when the profile changed) · CP3 lock in each idea (if any) · CP4 approve brief | Meeting brief PDF: profile to confirm, changes, portfolio risks, market landscape, talking points, questions, ideas (if any), with charts |
+| **UC2 Recommend** · `adhoc_request` | “The client has S$120k to deploy” | New capital added as cash → research → ideas → critic (FAIL ideas regenerated, passing ideas locked) → approval → memo | CP1 confirm inputs · CP2 research · CP3 lock in each idea · CP4 sign off memo | 3-page investment memo PDF with allocation, risk-band and stress charts |
 | **UC3 Reassess** · `market_event` | “Markets just moved” (event preset + description) | Client record → event research → deterministic client impact + rule re-check → advisor decision | Decide: **maintain** / **monitor** (follow-up trigger required) / **revise** (→ ideas → critic → CP3 → memo → CP4) | Decision record PDF with the impact chart, or a revised memo |
 
 Within one browser session the client record carries forward: an approved UC1 brief becomes the new `last_review`, and approved UC2/UC3 trades are assumed executed, so the next workflow starts from the updated portfolio.
@@ -42,8 +42,8 @@ flowchart TD
     SEL --> IG
     SC -->|"PASS / FLAG / FAIL escalated"| R3{{"Advisor: recommendation review"}}
     R3 -->|"Revise idea / regenerate all"| IG
-    R3 -->|"Edit allocation"| SC
-    R3 -->|"Accept (PASS) / documented exception (FLAG)"| MF[5. Memo Formatter Agent]
+    R3 -->|"Edit allocation (unlocks that idea)"| SC
+    R3 -->|"Lock in each idea (FLAG: note required); 3 of 3 locked"| MF[5. Memo Formatter Agent]
     MF --> R4{{"Advisor: final approval"}}
     R4 -->|"Regenerate memo"| MF
     R4 -->|"Revise idea"| IG
@@ -56,7 +56,7 @@ flowchart TD
 |---|---|---|
 | Client profile | `approve`, `regenerate` (with `edits` to the intake fields), `reject` | Approve is unavailable while mandatory fields are missing (R1). Approving resolves flags such as R5 with the advisor's note. |
 | Research brief | `approve`, `regenerate` (notes become feedback), `reject` | Advisor can inspect every source and its date. |
-| Recommendations | `approve` (PASS only), `override_flag` (FLAG, note required), `revise` (one idea via `idea_id`, others locked), `edit_allocation`, `regenerate` (all ideas), `reject` | A FAIL can never be approved. FAILed ideas are regenerated automatically up to 2 times per idea before reaching the advisor (R10). An edited allocation is re-validated and returned to the advisor, never auto-regenerated. |
+| Recommendations | `lock_idea` / `unlock_idea` (per idea, no common accept button; a FLAG set needs a `notes` rationale, a FAIL idea can never be locked; the memo is drafted when all three are locked), `revise` (one idea via `idea_id`, others locked), `edit_allocation`, `regenerate` (all ideas), `reject` | A FAIL can never be approved. FAILed ideas are regenerated automatically up to 2 times per idea before reaching the advisor (R10). An edited allocation is re-validated and returned to the advisor, never auto-regenerated. |
 | Final approval | `approve` (generates the PDF), `regenerate`, `revise`, `edit_allocation`, `reject` | Approve is unavailable if the memo fails R9 wording or the consistency check. |
 | Market-event decision (UC3) | `maintain`, `monitor` (`edits.follow_up` required), `revise` | Notes are required. The impact tool suggests a decision; the advisor makes it. A market event never places a trade. |
 | Meeting brief (UC1) | `approve` (generates the PDF), `regenerate`, `reject` | Approve is unavailable if the brief fails the R9 wording check. |
@@ -141,12 +141,12 @@ python -m pytest tests/ -v                                       # offline test 
 | Event & client impact (UC3) | What changed, contribution by holding, suitability re-check, advice under review | Decide: maintain / monitor / revise |
 | Candidate ideas | **Candidate idea set** per round, rationale, proposed weights, lock/regenerate grid with critic feedback | Next page |
 | Suitability check | **System-checked suitable set**: verdicts, before → after vs rule limits, exposure shift and stress, rule matrix | Next page |
-| Advisor approval | **Human-approved set**: checked set, approved set, idea lineage | CP3: approve / exception, revise one idea, edit allocation, regenerate, reject |
+| Advisor approval | **Human-approved set**: checked set, approved set, idea lineage | CP3: lock in each idea (a FLAG needs a note; the set moves on once all three are locked), revise one idea, edit allocation, regenerate, reject |
 | Memo (UC2, UC3 revise) / Meeting brief (UC1) | **Memo formatting**: memo pages or brief sections | CP4: approve → PDF download |
 | Decision record (UC3) | Decision, rationale, follow-up, impact chart | PDF download |
 | Audit & performance | Decision timeline, latency per agent call, tokens and estimated cost, notes, raw run log | – |
 
-The idea-set lineage is kept in graph state: `idea_rounds` stores every candidate set with the critic's verdicts and what triggered it (initial, automatic regeneration, advisor revision, allocation edit), and `approved_idea_set` stores the set the advisor approved at CP3. The memo is formatted from that set.
+The idea-set lineage is kept in graph state: `idea_rounds` stores every candidate set with the critic's verdicts and what triggered it (initial, automatic regeneration, advisor revision, allocation edit), and `approved_idea_set` stores the set once the advisor has locked in all three ideas at CP3. The memo is formatted from that set.
 
 ### Demo clients (`data/samples/client_profiles.json`)
 
@@ -162,15 +162,27 @@ The idea-set lineage is kept in graph state: `idea_rounds` stores every candidat
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/sessions` | Start a session with the client intake; runs to the first advisor checkpoint |
+| `POST` | `/sessions/stream` | Same as `POST /sessions`, as server-sent events: one `node_completed` event per agent step, then a `checkpoint` event holding the workspace view |
+| `POST` | `/sessions/{id}/actions/stream` | Same as `/actions`, streamed the same way |
 | `GET` | `/sessions/{id}` | Workspace view, including `pending_review` (agent output, `allowed_actions`) |
-| `POST` | `/sessions/{id}/actions` | Advisor decision: `approve`, `regenerate`, `reject`, `revise`, `override_flag`, `edit_allocation`, `add_advisor_note` (optional `idea_id`, `notes`, `edits`). 400 if not allowed at the current checkpoint |
+| `POST` | `/sessions/{id}/actions` | Advisor decision: `approve`, `regenerate`, `reject`, `revise`, `lock_idea`, `unlock_idea`, `edit_allocation`, `add_advisor_note` (optional `idea_id`, `notes`, `edits`). 400 if not allowed at the current checkpoint |
 | `GET` | `/sessions/{id}/pdf` | Approved memo PDF (exists only after final approval) |
 | `GET` | `/sessions/{id}/audit` | Audit trail and full run log |
 | `GET` | `/health` | Health check |
+
+### Evaluation (slides 30-33)
+
+```bash
+python -m src.evaluation.run --out reports/baseline_vs_multi_agent.md
+```
+
+`src/evaluation/` scores a single-LLM baseline (`baseline.py`) and the multi-agent workflow on the same client with deterministic metrics (`metrics.py`): suitability violations delivered, unsupported claims, personalization (sensitivity of the idea set to changed client inputs), explainability (the five AS-7 questions), output consistency over repeat runs, latency and LLM calls as a cost proxy. Without `OPENROUTER_API_KEY` the scripted offline model is used, which verifies the harness but says nothing about model quality; the report says so.
 
 ### Tests
 
 - `tests/unit/test_risk_engine.py`: every rule R1-R10 and L1, existing-vs-worsened outcomes, idea attribution.
 - `tests/unit/test_openrouter_client.py`: schema validation, retry on invalid output, fail-safe error, per-agent models.
-- `tests/integration/test_trajectories.py`: full trajectory with PDF only after approval; automatic regeneration then R10 escalation; a FAIL never reaches the memo; selective revision locks other ideas; allocation edits re-validated; FLAG needs a documented exception; demo-client controls; audit log contents; idea-set lineage (candidate → checked → approved, cleared again after a revision).
+- `tests/integration/test_stress_cases.py`: the six stress cases of slide 33 end to end (liquidity vs willingness, concentration, guarantee wording, missing risk data, stale research, selective revision).
+- `tests/unit/test_evaluation.py`: evaluation metrics and the baseline-vs-multi-agent harness.
+- `tests/integration/test_trajectories.py`: full trajectory with PDF only after approval; automatic regeneration then R10 escalation; a FAIL never reaches the memo; selective revision locks other ideas; allocation edits re-validated; FLAG needs a documented exception; demo-client controls; audit log contents; idea-set lineage (candidate → checked → locked-in set, cleared again after a revision).
 - `tests/integration/test_use_cases.py`: UC1 with and without profile changes (and the advisor override), UC2 new capital and selective regeneration, UC3 maintain/monitor validation, the decision record and the revise path, R1 still blocking UC3, unknown use case rejected.
