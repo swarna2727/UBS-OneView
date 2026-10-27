@@ -134,8 +134,18 @@ The Streamlit workspace opens with a mode selector. **Offline clients** opens th
 | `GET` | `/sessions/{id}/audit` | Audit trail and full run log |
 | `GET` | `/health` | Health check |
 
+### Evaluation (slides 30-33)
+
+```bash
+python -m src.evaluation.run --out reports/baseline_vs_multi_agent.md
+```
+
+`src/evaluation/` scores a single-LLM baseline (`baseline.py`) and the multi-agent workflow on the same client with deterministic metrics (`metrics.py`): suitability violations delivered, unsupported claims, personalization (sensitivity of the idea set to changed client inputs), explainability (the five AS-7 questions), output consistency over repeat runs, latency and LLM calls as a cost proxy. Without `OPENROUTER_API_KEY` the scripted offline model is used, which verifies the harness but says nothing about model quality; the report says so.
+
 ### Tests
 
 - `tests/unit/test_risk_engine.py`: every rule R1-R10 and L1, existing-vs-worsened outcomes, idea attribution.
 - `tests/unit/test_openrouter_client.py`: schema validation, retry on invalid output, fail-safe error, per-agent models.
+- `tests/integration/test_stress_cases.py`: the six stress cases of slide 33 end to end (liquidity vs willingness, concentration, guarantee wording, missing risk data, stale research, selective revision).
+- `tests/unit/test_evaluation.py`: evaluation metrics and the baseline-vs-multi-agent harness.
 - `tests/integration/test_trajectories.py`: full trajectory with PDF only after approval; automatic regeneration then R10 escalation; a FAIL never reaches the memo; selective revision locks other ideas; allocation edits re-validated; FLAG needs a documented exception; demo-client controls; audit log contents.
