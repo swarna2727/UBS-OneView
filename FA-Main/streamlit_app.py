@@ -84,28 +84,28 @@ st.set_page_config(page_title="UBS OneView", layout="wide", initial_sidebar_stat
 st.html("""
 <style>
   :root { --brand-red: #c8102e; }
-  .block-container { max-width: 1520px; padding-top: 1.4rem; padding-bottom: .8rem; }
+  .block-container { max-width: 1520px; padding-top: 3.75rem; padding-bottom: 1.1rem; }
   /* The transparent header overlays the top of the page; let clicks reach buttons under it (menu stays clickable). */
   header[data-testid="stHeader"] { background: transparent; }
   header[data-testid="stHeader"], header[data-testid="stHeader"] * { pointer-events: none !important; }
   header[data-testid="stHeader"] button, header[data-testid="stHeader"] button * { pointer-events: auto !important; }
-  [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: .6rem; }
+  [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: .85rem; }
   h1, h2, h3 { letter-spacing: -0.03em; }
-  h2 { font-size: 1.4rem !important; font-weight: 640; padding: 0 !important; margin: 0 !important; }
-  h4 { font-size: 1rem !important; padding: .2rem 0 0 !important; }
-  [data-testid="stMetric"] { border: 1px solid color-mix(in srgb, currentColor 13%, transparent); border-radius: 10px; padding: .5rem .8rem; }
+  h2 { font-size: 1.4rem !important; font-weight: 640; padding: 0 !important; margin: 0 0 .25rem !important; }
+  h4 { font-size: 1rem !important; padding: .2rem 0 0 !important; margin: 0 0 .2rem !important; }
+  [data-testid="stMetric"] { border: 1px solid color-mix(in srgb, currentColor 13%, transparent); border-radius: 10px; padding: .65rem .9rem; }
   [data-testid="stMetricValue"] { font-size: 1.25rem; }
   [data-testid="stSidebarHeader"] { height: 2.4rem; padding-top: .6rem; }
   [data-testid="stSidebarUserContent"] { padding-top: 0; }
-  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: .28rem; }
-  [data-testid="stSidebar"] .stButton button { justify-content: flex-start; min-height: 2.1rem; padding: .25rem .7rem; }
+  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: .4rem; }
+  [data-testid="stSidebar"] .stButton button { justify-content: flex-start; min-height: 2.2rem; padding: .35rem .75rem; }
   [data-testid="stSidebar"] .stButton button p { text-align: left; font-size: .9rem; }
   [data-testid="stSidebar"] .eyebrow { display: block; margin: .6rem 0 1.1rem; }
   .eyebrow { color: var(--brand-red); font-size: .72rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
   .subtle { opacity: .72; font-size: .9rem; }
   .brand { font-weight: 750; font-size: 1.15rem; letter-spacing: -.02em; }
   .brand span { color: var(--brand-red); }
-  .client-chip { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 10px; padding: .5rem .7rem; margin: .35rem 0 .2rem; font-size: .85rem; line-height: 1.35; }
+  .client-chip { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 10px; padding: .65rem .8rem; margin: .45rem 0 .3rem; font-size: .85rem; line-height: 1.4; }
   .client-chip b { font-size: .95rem; }
   .pill { display: inline-block; border-radius: 99px; padding: .08rem .55rem; font-size: .75rem; font-weight: 650; border: 1px solid; margin-right: .25rem; white-space: nowrap; }
   .pill.PASS { color: #0a7d0a; border-color: #0ca30c; background: color-mix(in srgb, #0ca30c 10%, transparent); }
@@ -113,24 +113,24 @@ st.html("""
   .pill.FAIL, .pill.BLOCK { color: #b42f2f; border-color: #d03b3b; background: color-mix(in srgb, #d03b3b 10%, transparent); }
   .pill.INFO { border-color: color-mix(in srgb, currentColor 25%, transparent); opacity: .85; }
   @media (prefers-color-scheme: dark) { .pill.PASS { color: #3ccf3c; } .pill.FLAG { color: #fab219; } .pill.FAIL, .pill.BLOCK { color: #ff7a7a; } .eyebrow { color: #ff8091; } }
-  .lineage { display: flex; align-items: stretch; gap: .4rem; flex-wrap: wrap; margin: .35rem 0 0; }
-  .lineage .step { flex: 1 1 150px; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 10px; padding: .3rem .6rem; font-size: .78rem; line-height: 1.25; }
+  .lineage { display: flex; align-items: stretch; gap: .55rem; flex-wrap: wrap; margin: .5rem 0 0; }
+  .lineage .step { flex: 1 1 150px; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 10px; padding: .45rem .7rem; font-size: .78rem; line-height: 1.4; }
   .lineage .step.active { border-color: var(--brand-red); box-shadow: inset 3px 0 0 var(--brand-red); }
   .lineage .step b { font-size: .98rem; margin-left: .3rem; }
   .lineage .arrow { align-self: center; opacity: .5; }
   .card-ticker { font-size: 1.25rem; font-weight: 700; letter-spacing: -.02em; }
-  .kv { font-size: .86rem; line-height: 1.45; margin-bottom: .45rem; }
+  .kv { font-size: .86rem; line-height: 1.55; margin-bottom: .55rem; }
   .kv b { opacity: .7; font-weight: 600; }
-  .stats { display: flex; gap: 1.2rem; margin: .4rem 0 .5rem; font-size: .8rem; }
+  .stats { display: flex; gap: 1.4rem; margin: .5rem 0 .65rem; font-size: .8rem; }
   .stats b { display: block; font-size: 1.1rem; }
-  .callout { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-left: 3px solid var(--brand-red); border-radius: 8px; padding: .5rem .8rem; font-size: .9rem; }
+  .callout { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-left: 3px solid var(--brand-red); border-radius: 8px; padding: .65rem .9rem; font-size: .9rem; }
   table.grid { border-collapse: collapse; width: 100%; font-size: .84rem; }
-  table.grid th, table.grid td { border: 1px solid color-mix(in srgb, currentColor 13%, transparent); padding: .32rem .5rem; text-align: left; vertical-align: top; }
+  table.grid th, table.grid td { border: 1px solid color-mix(in srgb, currentColor 13%, transparent); padding: .45rem .6rem; text-align: left; vertical-align: top; }
   table.grid th { opacity: .75; font-weight: 600; }
   .st-key-footer { border-top: 3px solid var(--brand-red) !important; }
   .st-key-footer_done { border-top: 3px solid #0ca30c !important; }
-  .usecase-trigger { font-style: italic; opacity: .85; font-size: .9rem; min-height: 2.6rem; }
-  .cal { margin-top: .6rem; border: 1px dashed color-mix(in srgb, currentColor 35%, transparent); border-radius: 10px; padding: .5rem .8rem; font-size: .9rem; }
+  .usecase-trigger { font-style: italic; opacity: .85; font-size: .9rem; line-height: 1.45; min-height: 3rem; margin: .25rem 0 .35rem; }
+  .cal { margin-top: .8rem; border: 1px dashed color-mix(in srgb, currentColor 35%, transparent); border-radius: 10px; padding: .65rem .9rem; font-size: .9rem; }
 </style>
 """)
 
@@ -777,18 +777,18 @@ def profile_form(ctx: dict[str, Any], raw: dict[str, Any], editable: bool) -> tu
 def render_profile_generation(profile: Any, raw: dict[str, Any]) -> None:
     """Show how the profile was generated, step by step, so the advisor can review each one."""
     steps = st.columns(4)
-    with steps[0], st.container(border=True, height=330):
+    with steps[0], st.container(border=True, height="stretch"):
         st.markdown("**1 · Ingest**  \nAdvisor-verified inputs")
         st.json({k: raw.get(k) for k in ("goals", "time_horizon_months", "stated_risk_willingness", "total_wealth",
                                          "new_capital_amount", "liquidity_schedule") if k in raw}, expanded=True)
-    with steps[1], st.container(border=True, height=330):
+    with steps[1], st.container(border=True, height="stretch"):
         st.markdown("**2 · Required-field validator**  \nDeterministic")
         check = required_field_validator(raw)
         if check.is_valid:
             html_block(pill("PASS", "All mandatory fields present"))
         else:
             html_block(pill("FAIL", "Missing: " + ", ".join(check.missing_fields)))
-    with steps[2], st.container(border=True, height=330):
+    with steps[2], st.container(border=True, height="stretch"):
         st.markdown("**3 · Risk-profile calculator**  \nDeterministic, not the LLM")
         try:
             risk = risk_profile_calculator(raw)
@@ -797,7 +797,7 @@ def render_profile_generation(profile: Any, raw: dict[str, Any]) -> None:
             st.metric("Band (lower of the two)", risk.risk_tier)
         except Exception as exc:
             st.info(f"The risk band cannot be calculated yet: {exc}")
-    with steps[3], st.container(border=True, height=330):
+    with steps[3], st.container(border=True, height="stretch"):
         st.markdown("**4 · Standardised profile**  \nWhat the downstream agents receive")
         st.json({"risk_tier": profile.calculated_risk_tier, "risk_score_range": profile.risk_score_range,
                  "time_horizon_months": profile.time_horizon_months, "near_term_liquidity_need": profile.near_term_liquidity_need,
@@ -914,7 +914,7 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
     with tabs[0]:
         html_block("".join(info_pill(t) for t in brief.macro_themes))
         left, right = st.columns([1.6, 1])
-        with left, st.container(height=360, border=False):
+        with left, st.container(border=False):
             for finding in sorted(brief.findings, key=lambda f: f.materiality_rank):
                 with st.container(border=True):
                     html_block(f"<b>#{finding.materiality_rank} · {esc(finding.theme)}</b> {info_pill(finding.finding_type.replace('_', ' ').title())}"
@@ -968,10 +968,10 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
         with right:
             for k, v in sentiments.items():
                 c1, c2 = st.columns(2)
-                with c1, st.container(border=True, height=300):
+                with c1, st.container(border=True, height="stretch"):
                     st.markdown(f"**▲ Positive themes · {md(k)}**")
                     st.markdown("\n".join(f"- {md(s)}" for s in v.bullish_signals) or "—")
-                with c2, st.container(border=True, height=300):
+                with c2, st.container(border=True, height="stretch"):
                     st.markdown(f"**▼ Negative themes · {md(k)}**")
                     st.markdown("\n".join(f"- {md(s)}" for s in v.bearish_signals) or "—")
     with tabs[3]:
@@ -1057,7 +1057,7 @@ def render_event(ctx: dict[str, Any]) -> None:
         left, right = st.columns([1.4, 1])
         with left:
             html_block(f"<div class='callout'><b>Event</b><br>{esc(impact.event_description)}</div>")
-            with st.container(height=300, border=False):
+            with st.container(border=False):
                 for f in sorted(brief.findings, key=lambda f: f.materiality_rank)[:3]:
                     with st.container(border=True):
                         html_block(f"<b>{esc(f.theme)}</b><div class='kv'>{esc(f.claim)}</div>"
@@ -1122,7 +1122,7 @@ def render_event(ctx: dict[str, Any]) -> None:
 # Pages: candidate ideas, suitability check, approval (CP3)
 # --------------------------------------------------------------------------------------
 
-def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, height: int = 300) -> None:
+def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, height: int | str = "stretch") -> None:
     with st.container(border=True, height=height):
         badges = (pill(status) if status else "") + (info_pill(tag) if tag else "")
         stats = (f"<div class='stats'><div>Action<b>{esc(idea['action'])}</b></div><div>Target weight<b>{idea['target_weight_pct']:.1f}%</b></div>"
@@ -1172,10 +1172,10 @@ def render_ideas(ctx: dict[str, Any]) -> None:
                         format_func=lambda s: next(f"Idea {i['slot_number']} · {i['ticker']}" for i in ideas if i["slot_number"] == s)) or 1
         idea = next(i for i in ideas if i["slot_number"] == pick)
         left, right = st.columns(2)
-        with left, st.container(border=True, height=300):
+        with left, st.container(border=True, height="stretch"):
             html_block(kv("Why it suits the client", idea["client_fit_rationale"]) + kv("Investment thesis", idea["thesis"])
                        + kv("Why now", idea["why_now"]) + kv("Alternative considered", idea["alternative_considered"] or "—"))
-        with right, st.container(border=True, height=300):
+        with right, st.container(border=True, height="stretch"):
             html_block(kv("Key risks", " · ".join(idea["key_risks"])) + kv("What would change our view", idea["invalidation_trigger"])
                        + kv("Allocation range", f"{idea['allocation_range']['min_pct']:.1f}% – {idea['allocation_range']['max_pct']:.1f}% (target {idea['target_weight_pct']:.1f}%)")
                        + kv("Funded from", idea["funding_source_ticker"]) + kv("Evidence", ", ".join(idea["cited_evidence_ids"])))
@@ -1226,7 +1226,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
         evaluations = {ie.idea_id: ie for ie in assessment.idea_evaluations}
         for col, idea in zip(st.columns(3), sorted(ideas, key=lambda i: i.slot_number)):
             ie = evaluations.get(idea.idea_id)
-            with col, st.container(border=True, height=270):
+            with col, st.container(border=True, height="stretch"):
                 html_block(f"<div class='eyebrow'>Idea {idea.slot_number} · {esc(idea.portfolio_role.title())}</div>"
                            f"<div class='card-ticker'>{esc(idea.ticker)} {pill(ie.status) if ie else ''}</div>"
                            f"<div class='subtle'>{esc(idea.name)} · {idea.action} {idea.target_weight_pct:.1f}%</div>")
@@ -1321,7 +1321,7 @@ def render_approval(ctx: dict[str, Any]) -> None:
         else:
             for col, idea in zip(st.columns(3), sorted(approved["ideas"], key=lambda i: i["slot_number"])):
                 with col:
-                    idea_card(idea, None, "Advisor approved", height=260)
+                    idea_card(idea, None, "Advisor approved")
             if approved.get("notes"):
                 html_block(f"<div class='callout'><b>Advisor rationale</b><br>{esc(approved['notes'])}</div>")
     with tabs[2]:
@@ -1421,14 +1421,14 @@ def render_memo(ctx: dict[str, Any]) -> None:
     with tabs[0]:
         for col, (label, text) in zip(st.columns([1.2, 1, 1]), [("Investment objective", page1.investment_objective),
                                                                ("Client snapshot", page1.client_snapshot), ("Portfolio snapshot", page1.portfolio_snapshot)]):
-            with col, st.container(border=True, height=150):
+            with col, st.container(border=True, height="stretch"):
                 html_block(kv(label, text))
         html_block("<table class='grid'><tr><th>#</th><th>Idea</th><th>Action</th><th>Target</th><th>Role</th><th>Why it fits</th></tr>" + "".join(
             f"<tr><td>{g.slot_number}</td><td><b>{esc(g.ticker)}</b> · {esc(g.name)}</td><td>{esc(g.action)}</td><td>{g.target_weight_pct:.1f}%</td>"
             f"<td>{esc(g.portfolio_role.title())}</td><td>{esc(g.why_it_fits)}</td></tr>" for g in page1.ideas_at_a_glance) + "</table>")
     with tabs[1]:
         for col, d in zip(st.columns(3), memo.page_2_details):
-            with col, st.container(border=True, height=420):
+            with col, st.container(border=True, height="stretch"):
                 html_block(f"<div class='eyebrow'>Idea {d.slot_number} · {esc(d.portfolio_role.title())} · {esc(d.conviction)} conviction</div>"
                            f"<div class='card-ticker'>{esc(d.ticker)}</div><div class='subtle'>{esc(d.action)} · {esc(d.allocation_range_str)}</div>"
                            + kv("Why it suits the client", d.client_fit_rationale) + kv("Thesis", d.thesis) + kv("Why now", d.why_now)
@@ -1440,7 +1440,7 @@ def render_memo(ctx: dict[str, Any]) -> None:
         with left:
             show_chart(before_after_bars(exposure_frame(profile, ideas, "asset_class"), "Asset allocation: current vs proposed", height=190))
             html_block(f"<div class='callout'><b>Portfolio-level impact</b><br>{esc(page3.portfolio_level_impact_narrative)}</div>")
-        with right, st.container(border=True, height=380):
+        with right, st.container(border=True, height="stretch"):
             st.markdown("**Scenario analysis**")
             st.markdown("\n".join(f"- **{md(k)}**: {md(v)}" for k, v in page3.scenario_analysis.items()))
             st.markdown("**Risk disclosures**")
@@ -1505,7 +1505,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
                    + (["Ideas to discuss"] if brief.recommendations else []))
     with tabs[0]:
         left, right = st.columns([1, 1.2])
-        with left, st.container(border=True, height=300):
+        with left, st.container(border=True, height="stretch"):
             html_block(f"<div class='eyebrow'>{esc(brief.meeting_purpose)} · {esc(brief.review_period)}</div>")
             st.markdown("\n".join(f"- {md(s)}" for s in brief.profile_summary))
         with right:
@@ -1521,19 +1521,19 @@ def render_brief(ctx: dict[str, Any]) -> None:
         with mid:
             frame = pd.DataFrame([{"Scenario": k, "Impact %": v} for k, v in stress_impact(profile.parsed_holdings).items()])
             show_chart(signed_bars(frame, "Scenario", "Impact %", "Illustrative stress: estimated portfolio move %", height=170))
-        with right, st.container(border=True, height=280):
+        with right, st.container(border=True, height="stretch"):
             st.markdown("**Portfolio risks to raise**")
             st.markdown("\n".join(f"- {md(r)}" for r in brief.portfolio_risks))
     with tabs[2]:
-        with st.container(height=360, border=False):
+        with st.container(border=False):
             for line in brief.market_developments:
                 with st.container(border=True):
                     st.markdown(md(line))
     with tabs[3]:
         left, right = st.columns(2)
-        with left, st.container(border=True, height=330):
+        with left, st.container(border=True, height="stretch"):
             st.markdown("**Talking points**\n" + "\n".join(f"{i + 1}. {md(t)}" for i, t in enumerate(brief.talking_points)))
-        with right, st.container(border=True, height=330):
+        with right, st.container(border=True, height="stretch"):
             st.markdown("**Questions for the client**\n" + "\n".join(f"- {md(q)}" for q in brief.questions_for_client))
     if brief.recommendations:
         with tabs[4]:
@@ -1580,7 +1580,7 @@ def render_record(ctx: dict[str, Any]) -> None:
         return
     impact = ctx["state"]["event_impact"]
     left, right = st.columns([1.2, 1])
-    with left, st.container(border=True, height=330):
+    with left, st.container(border=True, height="stretch"):
         html_block(f"<div class='eyebrow'>{esc(record.event_title)}</div><div class='card-ticker'>{esc(record.decision.title())}</div>"
                    + kv("Rationale", record.rationale) + (kv("Follow-up / monitoring trigger", record.follow_up) if record.follow_up else "")
                    + kv("Estimated portfolio move", f"{record.portfolio_move_pct:+.2f}%") + kv("Recorded", record.advisor_signature_block))
@@ -1650,7 +1650,7 @@ def render_audit(ctx: dict[str, Any]) -> None:
             show_chart(chart.properties(height=max(26 * len(frame) + 40, 160)))
     with tabs[2]:
         left, right = st.columns([1.2, 1])
-        with left, st.container(border=True, height=330):
+        with left, st.container(border=True, height="stretch"):
             st.markdown("**Notes and exceptions on this run**")
             st.markdown("\n".join(f"- {md(n)}" for n in state.get("advisor_notes") or []) or "No notes yet.")
         with right:
@@ -1780,7 +1780,7 @@ def render_client_home() -> None:
     live_blocked = st.session_state.get("mode") == LIVE and not os.environ.get("OPENROUTER_API_KEY")
     last_run = {h["use_case"]: h for h in record["history"]}
     for col, (key, (verb, label, trigger, icon)) in zip(st.columns(3), USE_CASES.items()):
-        with col, st.container(border=True, height=330):
+        with col, st.container(border=True, height="stretch"):
             html_block(f"<div class='eyebrow'>{esc(verb)}</div><b style='font-size:1.05rem'>{esc(label)}</b>"
                        f"<div class='usecase-trigger'>{esc(trigger)}</div>")
             if key == PRE_MEETING:
