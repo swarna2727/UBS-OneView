@@ -3,7 +3,7 @@
 import os
 import json
 from typing import Dict, Any, List
-from src.schemas.tools import QuantMetrics, SentimentBreakdown, DocumentSnippet
+from src.schemas.tools import QuantMetrics, SentimentBreakdown, DocumentSnippet, HoldingMove, Holding
 
 DATA_MARKET_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -109,3 +109,25 @@ def sentiment_analysis_tool(corpus_docs: List[DocumentSnippet]) -> SentimentBrea
         bearish_signals=bearish_signals[:5],
         neutral_catalysts=neutral_catalysts[:3]
     )
+
+
+DATA_MOVES_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "data", "market", "prices", "quarter_moves.json"
+)
+
+def portfolio_impact_tool(holdings: List[Holding]) -> List[HoldingMove]:
+    """UC1 facts only: which holdings moved over the look-back window and by how much. No forecasts, no assumptions.
+    A holding with no price data is listed with an empty move, never estimated."""
+    moves: Dict[str, float] = {}
+    if os.path.exists(DATA_MOVES_PATH):
+        with open(DATA_MOVES_PATH, "r", encoding="utf-8") as f:
+            moves = json.load(f).get("moves", {})
+    result = []
+    for h in holdings:
+        move = moves.get(h.ticker.upper())
+        result.append(HoldingMove(
+            ticker=h.ticker, name=h.name, weight_pct=h.weight_pct, move_pct=move,
+            contribution_pct=round(h.weight_pct * move / 100.0, 2) if move is not None else None,
+            source="Bank market data (illustrative)" if move is not None else "No price data on file"))
+    return sorted(result, key=lambda m: abs(m.contribution_pct or 0.0), reverse=True)

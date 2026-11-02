@@ -1,25 +1,29 @@
-"""Agent 3: Investment Idea Agent (Slide 16)."""
+"""Discover | Opportunity Agent (deck slide 21): ideas for discussion in two lanes, each with its reasons why."""
 
+import hashlib
 import json
 from typing import Optional, Dict, Any, List
 from src.agents.base import BaseAdvisoryAgent
 from src.schemas.advisory import (
-    ClientAdvisoryProfile, ResearchBrief, CandidateIdeaSet, InvestmentIdea, AllocationRange
+    ClientAdvisoryProfile, ResearchBrief, CandidateIdeaSet, InvestmentIdea, AllocationRange, OfferMap
 )
 from src.tools.universe import approved_product_universe_tool
 from src.tools.exposure import portfolio_exposure_calculator
 from src.llm.base import LLMClientProtocol
 
-INVESTMENT_IDEA_SYSTEM_PROMPT = """You are the UBS Investment Idea Agent.
-Your responsibility is strictly to synthesize the ClientAdvisoryProfile and ResearchBrief to construct candidate investment ideas.
+INVESTMENT_IDEA_SYSTEM_PROMPT = """You are the UBS Opportunity Agent.
+Your responsibility is strictly to synthesize the ClientAdvisoryProfile, ResearchBrief and the client's offer map to construct ideas for the Relationship Manager to discuss.
 CRITICAL GOVERNANCE RULES:
-1. Generate EXACTLY THREE complementary candidate ideas covering distinct portfolio roles (Growth, Income, Stability, Diversification).
-2. Each idea must belong to a distinct slot (Slot 1, Slot 2, Slot 3) with distinct instruments.
-3. Every idea MUST strictly pick from the approved product universe provided in the prompt.
-4. Every idea MUST cite valid evidence source IDs from the ResearchBrief.
-5. If certain slots are LOCKED, you must preserve the locked ideas verbatim and only generate fresh ideas for the unlocked/rejected slots.
-6. You CANNOT approve your own ideas or bypass downstream suitability validation.
+1. Generate EXACTLY THREE complementary ideas covering distinct portfolio roles (Growth, Income, Stability, Diversification).
+2. Two lanes: Slots 1 and 2 are ALIGNED ideas that build on the current portfolio; Slot 3 is an EXPLORATORY idea that is clearly labelled and still stays within the client's risk band and limits.
+3. Each idea must belong to a distinct slot (Slot 1, Slot 2, Slot 3) with distinct instruments.
+4. Every idea MUST strictly pick from the ELIGIBLE products provided in the prompt. Products outside the offer map are blocked by client limits and must never be proposed.
+5. Every idea MUST give its reasons (why it fits, why now, risks to raise) and cite valid evidence source IDs from the ResearchBrief.
+6. If certain slots are LOCKED, you must preserve the locked ideas verbatim and only generate fresh ideas for the unlocked/rejected slots, taking the locked ideas into account.
+7. You CANNOT approve your own ideas, show blocked products or bypass the Fit & Eligibility Critic.
 """
+
+LANES = {1: "ALIGNED", 2: "ALIGNED", 3: "EXPLORATORY"}  # the two-lane rule (deck slide 9)
 
 class InvestmentIdeaAgentInputs:
     def __init__(
@@ -30,7 +34,8 @@ class InvestmentIdeaAgentInputs:
         rejected_slots: Optional[List[int]] = None,
         feedback: Optional[str] = None,
         use_case: str = "adhoc_request",
-        use_case_context: str = ""
+        use_case_context: str = "",
+        offer_map: Optional[OfferMap] = None
     ):
         self.profile = profile
         self.research_brief = research_brief
@@ -39,15 +44,16 @@ class InvestmentIdeaAgentInputs:
         self.feedback = feedback
         self.use_case = use_case  # pre_meeting | adhoc_request | market_event
         self.use_case_context = use_case_context  # profile changes, new capital or the market event, as quoted data
+        self.offer_map = offer_map  # what UBS can offer this client (client limits layer)
 
-class InvestmentIdeaAgent(BaseAdvisoryAgent[InvestmentIdeaAgentInputs, CandidateIdeaSet]):
+class OpportunityAgent(BaseAdvisoryAgent[InvestmentIdeaAgentInputs, CandidateIdeaSet]):
     """
-    Synthesizes the ClientAdvisoryProfile and ResearchBrief to generate candidate investment opportunities.
+    Synthesizes the ClientAdvisoryProfile, ResearchBrief and offer map to generate ideas in two lanes.
     Supports selective regeneration of specific slots while keeping approved items locked.
     """
 
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
-        super().__init__("InvestmentIdeaAgent", llm_client)
+        super().__init__("OpportunityAgent", llm_client)
 
     def execute(self, inputs: InvestmentIdeaAgentInputs) -> CandidateIdeaSet:
         profile = inputs.profile
@@ -61,7 +67,13 @@ class InvestmentIdeaAgent(BaseAdvisoryAgent[InvestmentIdeaAgentInputs, Candidate
             "excluded_sectors": profile.constraints.excluded_sectors,
             "esg_mandate": profile.constraints.esg_mandate
         })
+        offer_map = inputs.offer_map
+        if offer_map is not None:
+            # The client limits layer narrows the universe: blocked products are never offered to the model.
+            eligible = {t.upper() for t in offer_map.eligible_tickers}
+            approved_universe = [p for p in approved_universe if p.ticker.upper() in eligible]
         allowed_tickers = {p.ticker: p for p in approved_universe}
+        disclosures = {p.ticker.upper(): p.required_disclosures for p in offer_map.eligible_products} if offer_map else {}
 
         # 2. Build Prompt Context
         locked_slots = {idea.slot_number: idea for idea in locked_ideas}
@@ -86,7 +98,10 @@ RESEARCH BRIEF THEMES & FINDINGS:
 - Macro Themes: {brief.macro_themes}
 - Validated Evidence Sources: {[{'id': s.source_id, 'title': s.title, 'publisher': s.publisher, 'tickers': s.tickers} for s in brief.validated_sources]}
 
-APPROVED PRODUCT UNIVERSE (MUST SELECT ONLY FROM THESE):
+TWO LANES: slot 1 = ALIGNED, slot 2 = ALIGNED, slot 3 = EXPLORATORY (labelled, within client limits).
+CLIENT LIMITS: {offer_map.status if offer_map else 'not provided'}; open gaps (quoted data): {[g.message for g in offer_map.gaps] if offer_map else []}
+
+ELIGIBLE PRODUCT UNIVERSE (MUST SELECT ONLY FROM THESE; everything else is blocked by client limits):
 {json.dumps([p.model_dump() for p in approved_universe], indent=2)}
 
 SELECTIVE REGENERATION STATUS:
@@ -133,7 +148,23 @@ the main alternative considered. Never describe returns as guaranteed or risk-fr
                 if gen_idea.ticker not in allowed_tickers:
                     self.logger.warning(f"Slot {slot}: {gen_idea.ticker} is outside the approved universe.")
 
-                final_ideas.append(gen_idea)
+                # Ids are opaque handles for the RM (lock, revise, regenerate): they must not encode the product,
+                # because a product blocked by client limits is never named to the RM.
+                handle = hashlib.sha1(f"{slot}|{gen_idea.ticker}|{gen_idea.thesis}".encode()).hexdigest()[:6].upper()
+                final_ideas.append(gen_idea.model_copy(update={"idea_id": f"IDEA-S{slot}-{handle}"}))
+
+        # Two-lane rule, required disclosures and indicative amounts are set by code, not by the model.
+        current = {h.ticker.upper(): h.weight_pct for h in profile.parsed_holdings}
+        enriched: List[InvestmentIdea] = []
+        for idea in final_ideas:
+            have = current.get(idea.ticker.upper(), 0.0)
+            amounts = sorted(abs(w - have) * profile.total_wealth / 100.0 for w in (idea.allocation_range.min_pct, idea.allocation_range.max_pct))
+            enriched.append(idea.model_copy(update={
+                "lane": LANES[idea.slot_number],
+                "indicative_amount_range": [round(a, -2) for a in amounts],
+                "required_disclosures": disclosures.get(idea.ticker.upper(), idea.required_disclosures),
+            }))
+        final_ideas = enriched
 
         # 4. Deterministic portfolio exposure preview check
         trades = [{
@@ -150,3 +181,6 @@ the main alternative considered. Never describe returns as guaranteed or risk-fr
             complementarity_thesis=candidate_set.complementarity_thesis,
             generation_round=candidate_set.generation_round
         )
+
+
+InvestmentIdeaAgent = OpportunityAgent  # earlier name, kept for imports

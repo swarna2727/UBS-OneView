@@ -1,10 +1,11 @@
-"""Agent 2: Market Intelligence Agent (Slide 15)."""
+"""Research | Market Intelligence Agent (deck slide 20): CIO research and RM-entered news as dated, sourced evidence for this client."""
 
 import json
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from src.agents.base import BaseAdvisoryAgent
 from src.schemas.advisory import ClientAdvisoryProfile, ResearchBrief, ResearchFinding
-from src.tools.market_tools import quantitative_analysis_tool, sentiment_analysis_tool
+from src.schemas.tools import DocumentSnippet
+from src.tools.market_tools import quantitative_analysis_tool, sentiment_analysis_tool, portfolio_impact_tool
 from src.tools.retrieval import retrieval_rag_tool, source_freshness_validator
 from src.tools.risk_engine import load_policy
 from src.llm.base import LLMClientProtocol
@@ -16,8 +17,23 @@ CRITICAL GOVERNANCE RULES:
 2. NEVER include claims without explicit source citations and publication dates.
 3. Filter research specifically to address gaps in the client's current asset allocation and constraints.
 4. Rank findings by materiality to this specific client's risk profile and goals.
-5. Do NOT recommend specific investment trades or allocations (that is owned by the Investment Idea Agent).
+5. Do NOT recommend specific investment trades or allocations (that is owned by the Opportunity Agent), and do NOT judge client suitability.
+6. Report facts only: no forecasts and no assumptions beyond the evidence. CIO research comes first; RM-entered news is labelled as such.
 """
+
+REFERENCE_DATE = "2026-10-21T00:00:00Z"  # matches the research corpus snapshot
+
+def rm_news_snippets(rm_news: List[Dict[str, Any]]) -> List[DocumentSnippet]:
+    """News the RM entered becomes a labelled, dated source; it is never presented as CIO research."""
+    snippets = []
+    for n, item in enumerate(rm_news or [], start=1):
+        published = str(item.get("published_at") or REFERENCE_DATE)
+        snippets.append(DocumentSnippet(
+            source_id=f"RM-NEWS-{n:02d}", title=str(item.get("title", "RM-entered news")),
+            publisher=f"RM-entered: {item.get('source', 'unspecified source')}", published_at=published,
+            retrieved_at=REFERENCE_DATE, text=str(item.get("text", "")), tickers=[str(t).upper() for t in item.get("tickers", [])],
+            asset_classes=[], macro_themes=[], is_fresh=True))
+    return snippets
 
 class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchBrief]):
     """
@@ -28,8 +44,10 @@ class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchB
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
         super().__init__("MarketIntelligenceAgent", llm_client)
 
-    def execute(self, profile: ClientAdvisoryProfile, feedback: Optional[str] = None, focus: Optional[str] = None) -> ResearchBrief:
-        """focus: the use case's research question, e.g. the quarter since the last review (UC1) or a market event (UC3)."""
+    def execute(self, profile: ClientAdvisoryProfile, feedback: Optional[str] = None, focus: Optional[str] = None,
+                window_days: Optional[int] = None, rm_news: Optional[List[Dict[str, Any]]] = None) -> ResearchBrief:
+        """focus: the use case's research question, e.g. the quarter since the last review (UC1) or a market event (UC3).
+        window_days: freshness limit; UC1 looks back over 3 months, otherwise the R8 limit applies. rm_news: news the RM entered."""
         # 1. Formulate targeted search queries from portfolio holdings and profile gaps
         tickers = [h.ticker for h in profile.parsed_holdings]
         query = f"Macro {profile.calculated_risk_tier} yield inflation equities fixed income {' '.join(tickers[:5])}"
@@ -41,8 +59,13 @@ class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchB
         # source instead of failing the evidence check for a missing citation.
         raw_snippets = retrieval_rag_tool(query, asset_universe=list(dict.fromkeys(tickers + ["MSFT"])))
 
+        # CIO research first, then news the RM entered. External news only by exception: the prototype never uses it.
+        raw_snippets = raw_snippets + rm_news_snippets(rm_news or [])
+        raw_snippets.sort(key=lambda sn: sn.source_id.startswith("RM-NEWS"))  # stable: CIO order is kept
+
         # 3. Deterministic freshness validation (drop stale evidence)
-        freshness_result = source_freshness_validator(raw_snippets, max_age_days=load_policy()["rules"]["R8_evidence_freshness"]["max_age_days"])
+        max_age = window_days or load_policy()["rules"]["R8_evidence_freshness"]["max_age_days"]
+        freshness_result = source_freshness_validator(raw_snippets, max_age_days=max_age)
         fresh_snippets = freshness_result.kept_snippets
 
         # 4. Deterministic quantitative signals for primary universe tickers
@@ -113,5 +136,10 @@ Synthesize a comprehensive ResearchBrief. Ensure every finding explicitly refere
         brief_dict["quantitative_signals"] = quant_signals
         brief_dict["sentiment_signals"] = {"Macro": sentiment_breakdown}
         brief_dict["validated_sources"] = fresh_snippets
+        # Facts only: which holdings moved and by how much over the window. Computed by a tool, not the model.
+        brief_dict["portfolio_impact"] = portfolio_impact_tool(profile.parsed_holdings)
+        brief_dict["window_days"] = max_age
+        brief_dict["external_news_used"] = False
+        brief_dict["rm_news_count"] = len(rm_news or [])
 
         return ResearchBrief(**brief_dict)

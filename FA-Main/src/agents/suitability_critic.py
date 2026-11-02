@@ -1,10 +1,12 @@
-"""Agent 4: Suitability Critic Agent (Slides 19, 21, 27)."""
+"""Check | Fit & Eligibility Critic (deck slide 22): independently tests each idea, and the resulting portfolio, against the client's circumstances and limits."""
 
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from src.agents.base import BaseAdvisoryAgent
 from src.schemas.advisory import (
-    ClientAdvisoryProfile, CandidateIdeaSet, SuitabilityAssessment, IdeaStatus, ResearchBrief
+    ClientAdvisoryProfile, CandidateIdeaSet, SuitabilityAssessment, IdeaStatus, ResearchBrief,
+    OfferMap, ProfileChangeCheck, ProfileChangeProposal
 )
+from src.tools.client_limits import profile_change_limits_check
 from src.schemas.tools import Breach, RuleResult
 from src.tools.risk_engine import suitability_rule_engine, worst_outcome
 from src.tools.universe import approved_product_universe_tool
@@ -15,11 +17,22 @@ class SuitabilityCriticInputs:
         self,
         profile: ClientAdvisoryProfile,
         candidate_ideas: CandidateIdeaSet,
-        research_brief: ResearchBrief
+        research_brief: ResearchBrief,
+        offer_map: Optional[OfferMap] = None
     ):
         self.profile = profile
         self.candidate_ideas = candidate_ideas
         self.research_brief = research_brief
+        self.offer_map = offer_map  # what UBS can offer this client; None skips the E1 eligibility rule
+
+class ProfileChangeInputs:
+    """UC3: spoken profile changes the Critic checks against client limits and the risk band."""
+    def __init__(self, raw_input: Dict[str, Any], proposals: List[ProfileChangeProposal]):
+        self.raw_input = raw_input
+        self.proposals = proposals
+
+# Fit check labels (deck slide 10) and the rules behind them.
+FIT_RULES = {"Risk range": "R4", "Horizon": "R6", "Concentration": "R7", "Liquidity": "L1"}
 
 def to_breach(r: RuleResult) -> Breach:
     """Project a FLAG/FAIL rule result onto the Breach shape the workspace renders."""
@@ -33,28 +46,55 @@ def to_breach(r: RuleResult) -> Breach:
         message=f"[{r.rule_id}] {r.message}"
     )
 
-class SuitabilityCriticAgent(BaseAdvisoryAgent[SuitabilityCriticInputs, SuitabilityAssessment]):
+def _worst(outcomes: List[str]) -> str:
+    outcomes = ["FAIL" if o == "BLOCK" else o for o in outcomes]
+    return worst_outcome(outcomes)
+
+class FitEligibilityCriticAgent(BaseAdvisoryAgent[Any, Any]):
     """
-    Independent critic validating candidate ideas against the client profile and the
-    post-trade portfolio using the code-based rule engine (R1-R10). Emits PASS / FLAG / FAIL
-    per idea and overall. It cannot approve its own exceptions: FLAGs go to the advisor and
-    FAILs are regenerated.
+    Independent critic validating ideas against the client profile, the post-trade portfolio and the client's
+    limits using the code-based rule engine (R1-R10, E1). Emits PASS / FLAG / FAIL per idea and overall.
+    Passing risk is not the same as being eligible or suitable. It cannot approve its own exceptions: FLAGs go
+    to the advisor, FAILs are regenerated, and an idea blocked by client limits is never shown.
+    In UC3 it also checks each spoken profile change against the limits and the risk band.
     """
 
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
-        super().__init__("SuitabilityCriticAgent", llm_client)
+        super().__init__("FitEligibilityCritic", llm_client)
 
-    def execute(self, inputs: SuitabilityCriticInputs) -> SuitabilityAssessment:
+    def execute(self, inputs: Any) -> Any:
+        if isinstance(inputs, ProfileChangeInputs):
+            return self._check_profile_changes(inputs)
+        return self._assess_ideas(inputs)
+
+    def _check_profile_changes(self, inputs: ProfileChangeInputs) -> List[ProfileChangeProposal]:
+        """Attach a PASS / FLAG / FAIL check to every proposed change. Changes stay PENDING: only the RM approves them."""
+        return [p.model_copy(update={"check": profile_change_limits_check(inputs.raw_input, p.field, p.after)}) for p in inputs.proposals]
+
+    def _assess_ideas(self, inputs: SuitabilityCriticInputs) -> SuitabilityAssessment:
         profile = inputs.profile
         ideas = inputs.candidate_ideas.ideas
         approved = {p.ticker.upper() for p in approved_product_universe_tool()}
 
-        engine = suitability_rule_engine(profile, ideas, inputs.research_brief, approved)
+        engine = suitability_rule_engine(profile, ideas, inputs.research_brief, approved, offer_map=inputs.offer_map)
         portfolio_results: List[RuleResult] = engine["portfolio_results"]
 
+        offer_map = inputs.offer_map
         idea_evaluations: List[IdeaStatus] = []
         for idea in ideas:
             results = engine["idea_results"][idea.idea_id]
+            fit_check = {
+                label: _worst([r.outcome for r in results if r.rule_id == rule]
+                              + [r.outcome for r in portfolio_results if r.rule_id == rule and r.outcome != "FAIL"])
+                for label, rule in FIT_RULES.items()
+            }
+            e1 = next((r for r in results if r.rule_id == "E1"), None)
+            offered = next((p for p in offer_map.eligible_products if p.ticker.upper() == idea.ticker.upper()), None) if offer_map else None
+            eligibility = {} if offer_map is None else {
+                "Client limits": {"PASS": "ELIGIBLE", "FLAG": "ESCALATE", "FAIL": "BLOCKED"}[e1.outcome] if e1 else "UNKNOWN",
+                "Product risk disclosure": "REQUIRED" if offered and offered.required_disclosures else "NONE",
+                "Open gaps": "NONE" if not offer_map.gaps else f"{len(offer_map.gaps)} OPEN",
+            }
             status = worst_outcome([r.outcome for r in results])
             status = "FAIL" if status == "BLOCK" else status
             issues = [r for r in results if r.outcome != "PASS"]
@@ -65,9 +105,12 @@ class SuitabilityCriticAgent(BaseAdvisoryAgent[SuitabilityCriticInputs, Suitabil
                 status=status,
                 detected_breaches=[to_breach(r) for r in issues],
                 qualitative_notes="; ".join(f"{r.rule_id}: {r.message}" for r in issues)
-                or "Passes R2 universe, R8 evidence and R9 wording checks; no portfolio breach attributed.",
+                or "Passes the universe, evidence, wording and client-limits checks; no portfolio breach attributed.",
                 evidence_verified=all(r.outcome == "PASS" for r in results if r.rule_id == "R8"),
-                rule_results=results
+                rule_results=results,
+                fit_check=fit_check,
+                eligibility=eligibility,
+                required_disclosures=offered.required_disclosures if offered else []
             ))
 
         portfolio_issues = [r for r in portfolio_results if r.outcome != "PASS"]
@@ -87,7 +130,7 @@ class SuitabilityCriticAgent(BaseAdvisoryAgent[SuitabilityCriticInputs, Suitabil
 
         # De-duplicate breaches: portfolio-level issues plus idea-only issues (R2/R8/R9).
         breaches = [to_breach(r) for r in portfolio_issues]
-        breaches += [b for ie in idea_evaluations for b in ie.detected_breaches if b.rule_id in ("R2", "R8", "R9")]
+        breaches += [b for ie in idea_evaluations for b in ie.detected_breaches if b.rule_id in ("R2", "R8", "R9", "E1")]
 
         return SuitabilityAssessment(
             overall_status=overall,
@@ -100,3 +143,6 @@ class SuitabilityCriticAgent(BaseAdvisoryAgent[SuitabilityCriticInputs, Suitabil
             critic_notes=notes,
             rule_results=portfolio_results
         )
+
+
+SuitabilityCriticAgent = FitEligibilityCriticAgent  # earlier name, kept for imports

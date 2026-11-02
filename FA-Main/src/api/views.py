@@ -2,6 +2,7 @@
 
 from typing import List, Dict, Any, Optional
 from src.graph.state import AdvisoryState
+from src.graph.redaction import withheld_tickers, redact_ideas, mask_tickers
 from src.tools.risk_engine import NO_LIQUIDITY_NEED_RATIO
 from src.schemas.workspace import (
     AdvisorWorkspaceView, WorkflowStage, DecisionSpacePayload,
@@ -10,20 +11,24 @@ from src.schemas.workspace import (
 
 STAGE_CONFIG = [
     ("client_profile", "Client Profile", "Ingest & reconcile advisor inputs"),
+    ("client_limits", "Client Limits", "What UBS can offer this client"),
     ("market_intelligence", "Market Intelligence", "Retrieve evidence-backed market data"),
-    ("investment_ideas", "Investment Ideas", "Generate complementary candidate ideas"),
-    ("suitability_review", "Risk Review", "Independent critic & portfolio risk checks"),
+    ("investment_ideas", "Opportunities", "Ideas in two lanes, each with its why"),
+    ("suitability_review", "Fit & Eligibility", "Independent critic: fit, eligibility & portfolio risk"),
     ("final_memo", "Advisory Memo", "Audit-ready 3-page UBS advisory memo"),
     ("advisor_approval", "Advisor Sign-off", "RM final approval of the memo")
 ]
 
 AGENT_NAMES = {
     "client_profile": "Client Profile Agent",
+    "client_limits": "Client Limits Layer",
     "market_intelligence": "Market Intelligence Agent",
-    "investment_ideas": "Investment Idea Agent",
-    "suitability_review": "Suitability Critic Agent",
-    "final_memo": "Memo Formatter Agent",
-    "advisor_approval": "Memo Formatter Agent"
+    "investment_ideas": "Opportunity Agent",
+    "suitability_review": "Fit & Eligibility Critic",
+    "final_memo": "Brief & Record Agent",
+    "advisor_approval": "Brief & Record Agent",
+    "brief_approval": "Brief & Record Agent",
+    "record_approval": "Brief & Record Agent"
 }
 
 def build_workspace_view(
@@ -81,6 +86,9 @@ def build_workspace_view(
     # 2. Center Panel: before/after metrics straight from the rule engine's results
     allocation_diffs: List[AllocationDiffRow] = []
     risk_warnings = assessment.detected_breaches if assessment else []
+    hidden = withheld_tickers(state)
+    if hidden:  # a blocked product is never named, not even in a breach message
+        risk_warnings = [b.model_copy(update={"message": mask_tickers(b.message, hidden)}) for b in risk_warnings]
     if assessment:
         for r in assessment.rule_results:
             if r.before_value is None or r.after_value is None or r.rule_id == "R3":
@@ -122,8 +130,11 @@ def build_workspace_view(
         data_payload={
             "risk_tier": profile.calculated_risk_tier if profile else "N/A",
             "suitability_status": assessment.overall_status if assessment else "PENDING",
-            "candidate_ideas": [i.model_dump() for i in ideas.ideas] if ideas else [],
-            "critic_notes": assessment.critic_notes if assessment else "Pending review"
+            # An idea blocked by client limits is never shown: its product is withheld from the RM.
+            "candidate_ideas": redact_ideas([i.model_dump() for i in ideas.ideas], withheld_tickers(state)) if ideas else [],
+            "critic_notes": mask_tickers(assessment.critic_notes, withheld_tickers(state)) if assessment else "Pending review",
+            "offer_map": state["offer_map"].rm_view() if state.get("offer_map") else None,
+            "meeting_record": state["meeting_record"].model_dump() if state.get("meeting_record") else None,
         }
     )
 

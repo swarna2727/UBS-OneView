@@ -10,7 +10,9 @@ from src.graph.workflow import build_advisory_graph, checkpoint_serializer
 from src.graph.state import AdvisoryState
 from src.schemas.workspace import AdvisorWorkspaceView, AdvisorActionRequest
 from src.api.views import build_workspace_view
-from src.graph.routing import normalize_action, ADHOC_REQUEST, USE_CASES, REVIEW_EVENT
+from src.graph.routing import (
+    normalize_action, ADHOC_REQUEST, POST_MEETING, USE_CASES, REVIEW_EVENT, REVIEW_LIMITS, REVIEW_RECORD, orchestration_plan
+)
 from src.llm.base import LLMClientProtocol
 from src.llm.openrouter import default_llm_client
 from src.audit.run_log import RunLog, file_fingerprint
@@ -52,6 +54,8 @@ class AdvisorySessionService:
         use_case = raw_input.get("use_case") or ADHOC_REQUEST
         if use_case not in USE_CASES:
             raise ValueError(f"Unknown use_case '{use_case}'. Expected one of {list(USE_CASES)}.")
+        if use_case == POST_MEETING and not str(raw_input.get("transcript") or "").strip():
+            raise ValueError("A post_meeting session needs the meeting notes or transcript in 'transcript'.")
         return {
             "session_id": sid,
             "use_case": use_case,
@@ -71,6 +75,7 @@ class AdvisorySessionService:
         model_for = getattr(self.llm_client, "model_for", None)
         self.run_log.record(
             sid, "run_started", inputs=raw_input,
+            orchestration=orchestration_plan(raw_input.get("use_case") or ADHOC_REQUEST),  # agents in order, CP: = RM checkpoint
             policy_version=file_fingerprint(CONFIG_POLICY_PATH),
             llm_client=type(self.llm_client).__name__,
             default_model=model_for(None) if callable(model_for) else None
@@ -179,6 +184,18 @@ class AdvisorySessionService:
             raise ValueError("An exception override must document the advisor's reasoning in 'notes'.")
         if stage == REVIEW_EVENT and not (action_request.notes or "").strip():
             raise ValueError("A market-event decision must document the advisor's rationale in 'notes'.")
+        if stage == REVIEW_LIMITS and action == "approve" and (pending_review.get("output") or {}).get("escalation_flags") \
+                and not (action_request.notes or "").strip():
+            raise ValueError("Approving client limits with open escalation flags must document how they are being handled in 'notes'.")
+        if stage == REVIEW_RECORD and action in ("approve_change", "reject_change"):
+            changes = {c["change_id"]: c for c in (pending_review.get("output") or {}).get("profile_changes", [])}
+            if action_request.item_id not in changes:
+                raise ValueError(f"{action} needs the item_id (change_id) of one of the proposed profile changes.")
+            check = changes[action_request.item_id].get("check") or {}
+            if action == "approve_change" and check.get("status", "FLAG") != "PASS" and not (action_request.notes or "").strip():
+                raise ValueError("Approving a profile change the Critic flagged must document the RM's reasoning in 'notes'.")
+        if stage == REVIEW_RECORD and action == "edit_record" and not isinstance(action_request.edits, dict):
+            raise ValueError("edit_record needs 'edits' with actions (action_id, owner, due_date, description) and/or email_subject / email_body.")
         if action == "monitor" and not str((action_request.edits or {}).get("follow_up", "")).strip():
             raise ValueError("A 'monitor' decision needs a follow-up trigger or date in edits.follow_up.")
         if action in ("lock_idea", "unlock_idea"):

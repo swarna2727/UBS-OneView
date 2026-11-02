@@ -14,7 +14,8 @@
     "status": "APPROVED",
     "esg_rating": "AA",
     "sector": "Technology",
-    "instrument_type": "Single Stock"
+    "instrument_type": "Single Stock",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "EQ-NVDA",
@@ -31,7 +32,8 @@
     "status": "APPROVED",
     "esg_rating": "A",
     "sector": "Technology",
-    "instrument_type": "Single Stock"
+    "instrument_type": "Single Stock",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "EQ-NESN",
@@ -48,7 +50,8 @@
     "status": "APPROVED",
     "esg_rating": "AAA",
     "sector": "Consumer Staples",
-    "instrument_type": "Single Stock"
+    "instrument_type": "Single Stock",
+    "fund_domicile": "Switzerland"
   },
   {
     "instrument_id": "EQ-AZN",
@@ -65,7 +68,8 @@
     "status": "APPROVED",
     "esg_rating": "AA",
     "sector": "Healthcare",
-    "instrument_type": "Single Stock"
+    "instrument_type": "Single Stock",
+    "fund_domicile": "United Kingdom"
   },
   {
     "instrument_id": "EQ-TSM",
@@ -82,7 +86,8 @@
     "status": "APPROVED",
     "esg_rating": "AA",
     "sector": "Technology",
-    "instrument_type": "Single Stock"
+    "instrument_type": "Single Stock",
+    "fund_domicile": "Taiwan"
   },
   {
     "instrument_id": "EQ-SPYG",
@@ -99,7 +104,8 @@
     "status": "APPROVED",
     "esg_rating": "A",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "EQ-VYMI",
@@ -116,7 +122,8 @@
     "status": "APPROVED",
     "esg_rating": "A",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "FI-US10Y",
@@ -133,7 +140,8 @@
     "status": "APPROVED",
     "esg_rating": "A",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "FI-IGCORP",
@@ -150,7 +158,8 @@
     "status": "APPROVED",
     "esg_rating": "A",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "FI-HYG",
@@ -167,7 +176,8 @@
     "status": "APPROVED",
     "esg_rating": "BBB",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "FI-EUBOND",
@@ -184,7 +194,8 @@
     "status": "APPROVED",
     "esg_rating": "AA",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "Ireland"
   },
   {
     "instrument_id": "ALT-GLD",
@@ -201,7 +212,8 @@
     "status": "APPROVED",
     "esg_rating": "N/A",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "ALT-REAL",
@@ -218,7 +230,8 @@
     "status": "APPROVED",
     "esg_rating": "A",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "CASH-USD",
@@ -235,7 +248,8 @@
     "status": "APPROVED",
     "esg_rating": "AAA",
     "sector": "Diversified",
-    "instrument_type": "Cash"
+    "instrument_type": "Cash",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "EQ-ACWI",
@@ -252,7 +266,8 @@
     "status": "APPROVED",
     "esg_rating": "A",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "US"
   },
   {
     "instrument_id": "FI-AGGG",
@@ -269,6 +284,7 @@
     "status": "APPROVED",
     "esg_rating": "A",
     "sector": "Diversified",
-    "instrument_type": "Fund"
+    "instrument_type": "Fund",
+    "fund_domicile": "Ireland"
   }
 ]

@@ -1,11 +1,11 @@
 """UBS OneView advisor workspace.
 
 After choosing a client, the advisor picks today's purpose. Each purpose is its own trigger and workflow
-over the same five agents:
-  UC1 Prepare   - quarterly review: confirm the profile, share the market landscape, approve a meeting brief
-                  (3 ideas are added only when the client's profile changed since the last review)
-  UC2 Recommend - ad-hoc request to deploy new capital: 3 ideas -> suitability -> approval -> memo
-  UC3 Reassess  - a market event: client impact -> maintain / monitor / revise
+over the same agents under the Relationship Manager (the human orchestrator):
+  UC1 Prepare   - before the meeting: confirm the profile, check client limits, review sourced research, approve the briefing
+  UC2 Discover  - ideas for new capital in two lanes (aligned, exploratory): fit + eligibility check -> keep / edit -> memo
+  UC3 Record    - after the meeting: summary, actions, profile changes the RM approves, follow-up email, compliance record
+  (Market-event reassessment from the earlier draft still runs in the API; it is not offered here.)
 The sidebar lists the steps of the active workflow. Each step is one page: labelled tabs show the
 intermediate output and the advisor checkpoint sits at the bottom of the page, like a "next page" button.
 """
@@ -45,12 +45,15 @@ CLIENT_CARD_SUMMARIES = {
     "demo_mdm_lim": ("Retirement reserve · 3 years", "Asks for a 'guaranteed 6%': R9 wording control"),
     "demo_aaron": ("Long-term growth · horizon not recorded", "R1: required field missing blocks the workflow"),
 }
-PRE_MEETING, ADHOC, EVENT = "pre_meeting", "adhoc_request", "market_event"
+PRE_MEETING, ADHOC, EVENT, POST_MEETING = "pre_meeting", "adhoc_request", "market_event", "post_meeting"
 USE_CASES = {
-    PRE_MEETING: ("Prepare", "Pre-meeting review", "“I'm meeting the client tomorrow. What should we discuss?”", ":material/event:"),
-    ADHOC: ("Recommend", "Ad-hoc investment request", "“The client has new money to deploy. What should I recommend?”", ":material/bolt:"),
+    PRE_MEETING: ("Prepare", "Before the meeting", "“I'm meeting the client tomorrow. What should we discuss?”", ":material/event:"),
+    ADHOC: ("Discover", "Investment opportunities", "“What could suit the client, and why?”", ":material/bolt:"),
+    POST_MEETING: ("Record", "After the meeting", "“What did we agree, and is it on record?”", ":material/edit_note:"),
     EVENT: ("Reassess", "Market-event response", "“Markets just moved. Does this change anything for the client?”", ":material/trending_down:"),
 }
+HOME_CASES = (PRE_MEETING, ADHOC, POST_MEETING)  # the three moments in the deck
+DEMO_TRANSCRIPTS = json.loads((Path(__file__).parent / "data" / "samples" / "meeting_transcripts.json").read_text(encoding="utf-8"))
 OFFLINE, LIVE = "Offline · test data stubs", "Live · OpenRouter"
 
 # Validated reference palette (dataviz skill): status colours never double as series colours.
@@ -66,11 +69,13 @@ EXPERIENCE_OPTIONS = ["New investor", "Limited", "ETF investor", "Knowledgeable"
 
 # Workflow steps per use case: key, label, checkpoint (None = output page, no advisor decision).
 STEPS = {
-    PRE_MEETING: [("profile", "Client profile", "CP1"), ("research", "Market landscape", "CP2"),
-                  ("ideas", "Candidate ideas", None), ("suitability", "Suitability check", None),
+    PRE_MEETING: [("profile", "Client profile", "CP1"), ("limits", "Client limits", "Limits"), ("research", "Market landscape", "CP2"),
+                  ("ideas", "Opportunities", None), ("suitability", "Fit & eligibility", None),
                   ("approval", "Lock in ideas", "CP3"), ("brief", "Meeting brief", "CP4")],
-    ADHOC: [("profile", "Client inputs", "CP1"), ("research", "Research", "CP2"), ("ideas", "Candidate ideas", None),
-            ("suitability", "Suitability check", None), ("approval", "Advisor approval", "CP3"), ("memo", "Memo & sign-off", "CP4")],
+    ADHOC: [("profile", "Client inputs", "CP1"), ("limits", "Client limits", "Limits"), ("research", "Research", "CP2"),
+            ("ideas", "Opportunities", None), ("suitability", "Fit & eligibility", None),
+            ("approval", "Keep / edit ideas", "CP3"), ("memo", "Memo & sign-off", "CP4")],
+    POST_MEETING: [("profile", "Client profile", None), ("meeting", "Meeting record", "Record")],
     EVENT: [("profile", "Client profile", None), ("event", "Event impact", "Decide"),
             ("ideas", "Candidate ideas", None), ("suitability", "Suitability check", None),
             ("approval", "Advisor approval", "CP3"), ("memo", "Memo & sign-off", "CP4"), ("record", "Decision record", None)],
@@ -238,7 +243,19 @@ def nav_status(key: str, ctx: dict[str, Any]) -> str:
             return "failed"
         if stage == "client_profile":
             return "action"
-        return "done" if state.get("profile") and (state.get("research_brief") or outcome) else ("open" if state.get("profile") else "locked")
+        return "done" if state.get("profile") and (state.get("research_brief") or state.get("meeting_record") or outcome) else ("open" if state.get("profile") else "locked")
+    if key == "limits":
+        if not state.get("offer_map"):
+            return "locked"
+        if rejected_at == "client_limits":
+            return "failed"
+        return "action" if stage == "client_limits" else "done"
+    if key == "meeting":
+        if not state.get("meeting_record"):
+            return "locked"
+        if rejected_at == "record_approval":
+            return "failed"
+        return "action" if stage == "record_approval" else ("done" if outcome == "APPROVED" else "open")
     if key == "research":
         if not state.get("research_brief"):
             return "locked"
@@ -287,14 +304,16 @@ def screen_for_pending(previous_stage: str | None, ctx: dict[str, Any]) -> str:
     if ctx["outcome"] == "APPROVED":
         if uc == PRE_MEETING:
             return "brief"
+        if uc == POST_MEETING:
+            return "meeting"
         return "record" if state.get("decision_record") else "memo"
     if ctx["outcome"] == "REJECTED":
         return "audit"
     stage = ctx["stage"]
     if stage == "suitability_review":
         return "ideas" if previous_stage in ("market_intelligence", "event_decision") else "suitability"
-    return {"client_profile": "profile", "market_intelligence": "research", "event_decision": "event",
-            "advisor_approval": "memo", "brief_approval": "brief"}.get(stage, "audit")
+    return {"client_profile": "profile", "client_limits": "limits", "market_intelligence": "research", "event_decision": "event",
+            "advisor_approval": "memo", "brief_approval": "brief", "record_approval": "meeting"}.get(stage, "audit")
 
 
 def submit_action(action: str, notes: str = "", **kwargs: Any) -> None:
@@ -334,7 +353,7 @@ def record_lifecycle(ctx: dict[str, Any]) -> None:
     raw = record["raw"]
     entry = {"use_case": uc, "date": date.today().isoformat(), "outcome": ctx["outcome"], "session": ctx["sid"], "summary": ""}
     if ctx["outcome"] == "APPROVED":
-        confirmed = {k: v for k, v in state.get("raw_input", {}).items() if k not in ("use_case", "meeting", "market_event", "new_capital_amount")}
+        confirmed = {k: v for k, v in state.get("raw_input", {}).items() if k not in ("use_case", "meeting", "market_event", "new_capital_amount", "transcript", "previous_meeting_record", "rm_news")}
         raw.update(confirmed)
         approved = state.get("approved_idea_set")
         if uc == PRE_MEETING:
@@ -351,6 +370,11 @@ def record_lifecycle(ctx: dict[str, Any]) -> None:
             raw["total_wealth"] = state["profile"].total_wealth
             entry["summary"] = "Approved: " + ", ".join(f"{i.action} {i.ticker} {i.target_weight_pct:.1f}%" for i in ideas)
             record["current_advice"] = {"date": entry["date"], "ideas": [i.model_dump() for i in ideas], "use_case": uc}
+        if uc == POST_MEETING and state.get("meeting_record"):
+            rec = state["meeting_record"]
+            record["previous_meeting_record"] = rec.model_dump(mode="json")  # feeds the next pre-meeting briefing
+            entry["summary"] = (f"Record confirmed · {len(rec.actions)} action(s) · "
+                                f"{len(state.get('approved_profile_updates') or [])} profile update(s) approved")
         if uc == EVENT and state.get("event_decision"):
             d = state["event_decision"]
             entry["summary"] = f"{d['decision'].title()}: {d['rationale']}" + (f" · follow-up: {d['follow_up']}" if d.get("follow_up") else "") \
@@ -388,11 +412,16 @@ def start_case(case: str, client_key: str | None = None) -> None:
     record = client_record(st.session_state.client_key)
     raw = copy.deepcopy(record["raw"])
     raw["use_case"] = case
+    if case == PRE_MEETING and record.get("previous_meeting_record"):
+        raw["previous_meeting_record"] = record["previous_meeting_record"]
     if case == PRE_MEETING:
         meeting_day = st.session_state.get("uc1_date") or (date.today() + timedelta(days=1))
         raw["meeting"] = {"purpose": st.session_state.get("uc1_purpose") or "Quarterly portfolio review", "date": str(meeting_day)}
     elif case == ADHOC:
         raw["new_capital_amount"] = float(st.session_state.get("uc2_amount") or 0)
+    elif case == POST_MEETING:
+        raw["transcript"] = st.session_state.get("uc3_transcript") or ""
+        raw["meeting"] = {"purpose": st.session_state.get("uc3_purpose") or "Client meeting", "date": str(date.today())}
     else:
         key = st.session_state.get("uc3_event") or "rates_up"
         raw["market_event"] = {"key": key, "title": MARKET_EVENTS[key]["title"],
@@ -577,11 +606,13 @@ def signed_bars(frame: pd.DataFrame, label: str, value: str, title: str, height:
 # --------------------------------------------------------------------------------------
 
 PAGE_ROLES = {
-    "profile": "Client Profile Agent · Understand", "research": "Market Intelligence Agent · Research",
-    "event": "Market Intelligence + Suitability Critic · Reassess", "ideas": "Investment Idea Agent · Recommend",
-    "suitability": "Suitability Critic + rule engine · Validate", "approval": "Advisor review · Decide",
-    "memo": "Memo Formatter Agent · Communicate", "brief": "Memo Formatter Agent · Communicate",
-    "record": "Memo Formatter Agent · Communicate", "audit": "Governance · Audit",
+    "profile": "Client Profile Agent · Understand", "limits": "Client Limits layer (rules) · Understand",
+    "research": "Market Intelligence Agent · Research",
+    "event": "Market Intelligence + Fit & Eligibility Critic · Reassess", "ideas": "Opportunity Agent · Discover",
+    "suitability": "Fit & Eligibility Critic + rule engine · Check", "approval": "Advisor review · Decide",
+    "memo": "Brief & Record Agent · Communicate", "brief": "Brief & Record Agent · Communicate",
+    "meeting": "Brief & Record Agent + Fit & Eligibility Critic · Communicate",
+    "record": "Brief & Record Agent · Communicate", "audit": "Governance · Audit",
 }
 
 
@@ -814,7 +845,8 @@ def render_profile(ctx: dict[str, Any]) -> None:
     status_html = pill("FLAG", f"{len(open_flags)} flag(s) to resolve") if open_flags else pill("PASS", "No open flags")
     subtitle = {PRE_MEETING: "Confirm or update what the client tells you. Required fields (*) must be complete to continue.",
                 ADHOC: "Confirm the request: amount to deploy, horizon, liquidity and risk. Required fields (*) must be complete.",
-                EVENT: "From the client record (confirmed at the last review). Shown for reference."}[uc]
+                EVENT: "From the client record (confirmed at the last review). Shown for reference.",
+                POST_MEETING: "From the client record. Shown for reference; spoken changes are proposed on the meeting record."}[uc]
     page_header(ctx, "profile", "Client profile", subtitle, status_html if profile else "")
     if not profile:
         st.info("The client profile appears when the workflow starts.")
@@ -835,11 +867,10 @@ def render_profile(ctx: dict[str, Any]) -> None:
                 st.info("No previous review on record: this is treated as the first review.")
             elif not changes:
                 st.success(f"Nothing has changed since the last review on {last.get('date', '—')}. "
-                           "The brief will not include new recommendations unless you ask for them at Checkpoint 2.")
+                           "The brief is facts and points to discuss; ideas are added only if you ask for them at Checkpoint 2.")
             else:
                 html_block(f"<div class='callout'><b>{len(changes)} change(s) since the last review on {esc(last.get('date', '—'))}.</b> "
-                           "Because the client's information changed, the workflow will generate three suitability-checked "
-                           "ideas for the meeting.</div>")
+                           "They appear in the briefing for you to confirm with the client. Ideas are optional (Checkpoint 2).</div>")
                 html_block("<table class='grid'><tr><th>Client fact</th><th>Last review</th><th>Now</th></tr>" + "".join(
                     f"<tr><td>{esc(c['label'])}</td><td>{esc(c['before'])}</td><td><b>{esc(c['after'])}</b></td></tr>" for c in changes) + "</table>")
         i += 1
@@ -878,8 +909,8 @@ def render_profile(ctx: dict[str, Any]) -> None:
         render_profile_generation(profile, raw)
 
     if not pending:
-        msg = decision_summary(ctx, "client_profile", "Checkpoint 1 · profile confirmed") if uc != EVENT else \
-            "Client record loaded from the last confirmed review. No profile checkpoint is needed for a market-event review."
+        msg = decision_summary(ctx, "client_profile", "Checkpoint 1 · profile confirmed") if uc not in (EVENT, POST_MEETING) else \
+            "Client record loaded from the last confirmed review. No profile checkpoint is needed for this workflow."
         done_footer(ctx, "profile", msg)
         return
     allowed = ctx["pending"].allowed_actions
@@ -902,6 +933,198 @@ def render_profile(ctx: dict[str, Any]) -> None:
                     submit_action("approve", note)
         with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
             if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="cp1_reject"):
+                submit_action("reject", note)
+
+
+# --------------------------------------------------------------------------------------
+# Page: client limits (what UBS can offer this client; UC1 / UC2 checkpoint)
+# --------------------------------------------------------------------------------------
+
+def render_limits(ctx: dict[str, Any]) -> None:
+    state = ctx["state"]
+    offer = state.get("offer_map")
+    pending = ctx["stage"] == "client_limits"
+    status_pill = {"CLEAR": pill("PASS", "Clear"), "GAPS": pill("FLAG", f"{len(offer.gaps)} gap(s)") if offer else "",
+                   "ESCALATE": pill("FLAG", "Escalation open"), "BLOCKED": pill("FAIL", "Blocked: data missing")}.get(offer.status, "") if offer else ""
+    page_header(ctx, "limits", "What UBS can offer this client",
+                "A rule layer, not an AI judgement. A blocked product is never shown; a gap is listed, never guessed.", status_pill)
+    if not offer:
+        st.info("The client limits appear once the client profile is confirmed.")
+        return
+    tabs = st.tabs([f"Eligible products ({len(offer.eligible_products)})", f"Blocked areas ({len(offer.blocked_areas)})",
+                    f"Gaps & escalations ({len(offer.gaps)})", "Regulatory profile"])
+    with tabs[0]:
+        if offer.eligible_products:
+            html_block("<table class='grid'><tr><th>Product</th><th>Required disclosures</th></tr>" + "".join(
+                f"<tr><td><b>{esc(p.ticker)}</b> · {esc(p.name)}</td><td>{esc('; '.join(p.required_disclosures))}</td></tr>"
+                for p in offer.eligible_products) + "</table>")
+        else:
+            st.error("Nothing can be offered until the gaps are resolved.", icon=":material/block:")
+    with tabs[1]:
+        if offer.blocked_areas:
+            html_block("<table class='grid'><tr><th>Blocked area</th><th>Why</th></tr>" + "".join(
+                f"<tr><td>{esc(a.area)}</td><td>{esc(a.reason)}</td></tr>" for a in offer.blocked_areas) + "</table>")
+            st.caption("Individual blocked products are not listed: they are never shown, and no idea can use them.")
+        else:
+            st.success("No area is blocked for this client.")
+    with tabs[2]:
+        for flag in offer.escalation_flags:
+            st.warning(flag, icon=":material/priority_high:")
+        for gap in offer.gaps:
+            st.markdown(f"**{md(gap.message)}**  \n{md(gap.resolution)}")
+        if not offer.gaps and not offer.escalation_flags:
+            st.success("No open gaps or escalations.")
+    reg = (state.get("raw_input") or {}).get("regulatory_profile") or {}
+    with tabs[3]:
+        c1, c2, c3 = st.columns(3)
+        domicile = c1.text_input("Domicile", value=reg.get("domicile", ""), disabled=not pending, key=f"reg_dom_{ctx['sid']}")
+        booking = c2.text_input("Booking centre", value=reg.get("booking_centre", ""), disabled=not pending, key=f"reg_book_{ctx['sid']}")
+        agreement = c3.selectbox("Agreement type", ["", "Advisory", "Discretionary", "Execution-only"],
+                                 index=["", "Advisory", "Discretionary", "Execution-only"].index(reg.get("agreement_type", "")) if reg.get("agreement_type", "") in ("", "Advisory", "Discretionary", "Execution-only") else 0,
+                                 disabled=not pending, key=f"reg_agr_{ctx['sid']}")
+        d1, d2, d3 = st.columns(3)
+        klass = d1.selectbox("Investor classification", ["", "Retail", "Accredited", "Institutional"],
+                             index=["", "Retail", "Accredited", "Institutional"].index(reg.get("investor_classification", "")) if reg.get("investor_classification", "") in ("", "Retail", "Accredited", "Institutional") else 0,
+                             disabled=not pending, key=f"reg_cls_{ctx['sid']}")
+        cka = d2.text_input("CKA valid until (YYYY-MM-DD)", value=reg.get("cka_valid_until", "") or "", disabled=not pending, key=f"reg_cka_{ctx['sid']}")
+        pep = d3.checkbox("Politically exposed person (PEP)", value=bool(reg.get("pep_status")), disabled=not pending, key=f"reg_pep_{ctx['sid']}")
+        forms = reg.get("tax_forms") or [{}]
+        form_name = forms[0].get("form", "W-8BEN")
+        tax_until = st.text_input(f"Tax form {form_name} valid until (YYYY-MM-DD)", value=forms[0].get("valid_until", "") or "",
+                                  disabled=not pending, key=f"reg_tax_{ctx['sid']}")
+        edits = {"domicile": domicile.strip(), "booking_centre": booking.strip(), "agreement_type": agreement,
+                 "investor_classification": klass, "cka_valid_until": cka.strip() or None, "pep_status": pep,
+                 "tax_forms": [{"form": form_name, "valid_until": tax_until.strip()}] if tax_until.strip() else []}
+        changed = {k: v for k, v in edits.items() if v != (reg.get(k) if k != "tax_forms" else (reg.get(k) or []))
+                   and not (v in ("", None) and reg.get(k) in ("", None))}
+    if not pending:
+        done_footer(ctx, "limits", decision_summary(ctx, "client_limits", "Client limits confirmed"))
+        return
+    allowed = ctx["pending"].allowed_actions
+    with st.container(border=True, key="footer"):
+        left, mid, right = st.columns([3, 1.4, 1], vertical_alignment="bottom")
+        with left:
+            needs_note = bool(offer.escalation_flags)
+            note = st.text_input("Check limits — note" + (" (required: escalation open, say how it is being handled)" if needs_note else " (optional)"),
+                                 key=f"lim_note_{ctx['sid']}", placeholder="e.g. CKA refresh booked for next week; specified products stay off the table until then.")
+            if offer.status == "BLOCKED":
+                st.error("Supply the missing regulatory data in the Regulatory profile tab, then save to re-check.", icon=":material/rule:")
+        with mid:
+            if changed:
+                if st.button("Save changes & re-check", type="primary", icon=":material/refresh:", width="stretch"):
+                    submit_action("regenerate", note or "Advisor updated the regulatory profile.", edits={"regulatory_profile": edits})
+            elif st.button("Confirm limits · Next", type="primary", icon=":material/arrow_forward:", width="stretch",
+                           disabled="approve" not in allowed or (needs_note and not note.strip())):
+                submit_action("approve", note)
+        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
+            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="lim_reject"):
+                submit_action("reject", note)
+
+
+# --------------------------------------------------------------------------------------
+# Page: meeting record (UC3: summary, actions, profile changes, follow-up email, compliance record)
+# --------------------------------------------------------------------------------------
+
+def render_meeting(ctx: dict[str, Any]) -> None:
+    state = ctx["state"]
+    record = state.get("meeting_record")
+    approved = ctx["outcome"] == "APPROVED"
+    page_header(ctx, "meeting", "After the meeting: what was agreed",
+                "OneView drafts; you confirm. Every line links to the transcript, and the client's agreement is never changed automatically.",
+                (pill("PASS", "Confirmed · record saved") if approved else pill("FLAG", "Draft: your confirmation needed")) if record else "")
+    if not record:
+        st.info("The record is drafted from the transcript when the workflow starts.")
+        return
+    pending = ctx["stage"] == "record_approval"
+    open_actions = [a for a in record.actions if a.status == "FLAGGED"]
+    undecided = [c for c in record.profile_changes if c.decision == "PENDING"]
+    tabs = st.tabs(["Summary", f"Actions ({len(record.actions)})", f"Profile changes ({len(record.profile_changes)})",
+                    "Follow-up email", "Compliance checks"])
+    with tabs[0]:
+        left, right = st.columns(2)
+        for col, title, lines in ((left, "What the client said", record.client_said), (right, "Decisions made", record.decisions)):
+            with col, st.container(border=True, height="stretch"):
+                st.markdown(f"**{title}**")
+                if not lines:
+                    st.caption("Nothing recorded.")
+                for line in lines:
+                    refs = ", ".join(str(n) for n in line.source_lines) or "none"
+                    st.markdown(f"- {md(line.text)} {info_pill('transcript line ' + refs)}" + ("" if line.verified else " " + pill("FLAG", "check this line")),
+                                unsafe_allow_html=True)
+    edits: dict[str, Any] = {}
+    with tabs[1]:
+        for a in record.actions:
+            with st.container(border=True):
+                head = f"**{md(a.description)}** " + pill("PASS" if a.status == "CONFIRMED" else "FLAG", a.status.title())
+                st.markdown(head, unsafe_allow_html=True)
+                if a.flag_reason:
+                    st.caption(f"Flagged: {a.flag_reason}")
+                c1, c2 = st.columns(2)
+                owner = c1.text_input("Owner", value=a.owner or "", key=f"own_{a.action_id}_{ctx['sid']}", disabled=not pending)
+                due = c2.text_input("Due", value=a.due_date or "", key=f"due_{a.action_id}_{ctx['sid']}", disabled=not pending)
+                if (owner.strip() or None) != a.owner or (due.strip() or None) != a.due_date:
+                    edits.setdefault("actions", []).append({"action_id": a.action_id, "owner": owner.strip() or None, "due_date": due.strip() or None})
+    with tabs[2]:
+        if not record.profile_changes:
+            st.success("No change in the client's circumstances was spoken.")
+        for c in record.profile_changes:
+            with st.container(border=True):
+                status = c.check.status if c.check else "FLAG"
+                st.markdown(f"**{md(c.label)}**: {md(c.before or '—')} → **{md(c.after)}** " + pill(status, f"Critic: {status}")
+                            + info_pill(c.decision.title()) + info_pill("transcript line " + ", ".join(map(str, c.source_lines))), unsafe_allow_html=True)
+                st.caption(f"“{c.text}”")
+                for line in (c.check.implications if c.check else []):
+                    st.markdown(f"- {md(line)}")
+                for line in (c.check.new_gaps if c.check else []) + [f"Newly blocked: {a}" for a in (c.check.newly_blocked_areas if c.check else [])]:
+                    st.markdown(f"- :orange[{md(line)}]")
+                if pending:
+                    b1, b2, b3 = st.columns([3, 1, 1], vertical_alignment="bottom")
+                    why = b1.text_input("Your reasoning (required unless the Critic passed it)", key=f"chg_note_{c.change_id}_{ctx['sid']}")
+                    if b2.button("Approve update", key=f"chg_ok_{c.change_id}", icon=":material/check:", width="stretch"):
+                        submit_action("approve_change", why, item_id=c.change_id)
+                    if b3.button("Reject", key=f"chg_no_{c.change_id}", icon=":material/close:", width="stretch"):
+                        submit_action("reject_change", why, item_id=c.change_id)
+        st.caption("An approved change updates the client's profile data only. The client's agreement is never changed automatically.")
+    with tabs[3]:
+        subject = st.text_input("Subject", value=record.follow_up_email.subject, key=f"em_sub_{ctx['sid']}", disabled=not pending)
+        body = st.text_area("Draft email (you edit and send it)", value=record.follow_up_email.body, height=200, key=f"em_body_{ctx['sid']}", disabled=not pending)
+        if subject != record.follow_up_email.subject:
+            edits["email_subject"] = subject
+        if body != record.follow_up_email.body:
+            edits["email_body"] = body
+    with tabs[4]:
+        for r in record.compliance_checks:
+            st.markdown(f"{pill(r.outcome)} **{md(r.rule_id)} {md(r.name)}** · {md(r.message)}", unsafe_allow_html=True)
+        st.caption(f"Transcript fingerprint {record.transcript_fingerprint} · {record.transcript_lines} lines · agreement type {record.agreement_type}")
+
+    if approved:
+        with st.container(border=True, key="footer_done"):
+            left, right = st.columns([3, 1.3], vertical_alignment="center")
+            left.markdown(decision_summary(ctx, "record_approval", "Record confirmed") + " · it feeds the next pre-meeting briefing.")
+            with right:
+                render_pdf_download(ctx, "Download compliance record PDF")
+        return
+    if not pending:
+        return
+    allowed = ctx["pending"].allowed_actions
+    with st.container(border=True, key="footer"):
+        left, mid, right = st.columns([3, 1.4, 1], vertical_alignment="bottom")
+        with left:
+            note = st.text_input("Confirm the record — note (printed on the record)", key=f"rec_note_{ctx['sid']}")
+            if open_actions:
+                st.warning(f"{len(open_actions)} action(s) still need an owner and a due date.", icon=":material/rule:")
+            if undecided:
+                st.warning(f"{len(undecided)} profile change(s) still need your decision.", icon=":material/rule:")
+        with mid:
+            if edits:
+                if st.button("Save edits", type="primary", icon=":material/save:", width="stretch"):
+                    submit_action("edit_record", note, edits=edits)
+            elif st.button("Confirm · save record", type="primary", icon=":material/verified:", width="stretch", disabled="approve" not in allowed):
+                submit_action("approve", note)
+        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
+            if st.button("Re-draft from the transcript", icon=":material/refresh:", width="stretch"):
+                submit_action("regenerate", note or "Re-draft.")
+            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="rec_reject"):
                 submit_action("reject", note)
 
 
@@ -997,11 +1220,11 @@ def render_research(ctx: dict[str, Any]) -> None:
     brief = state.get("research_brief")
     raw = state.get("raw_input") or {}
     since = (raw.get("last_review") or {}).get("date")
-    title = "Market landscape since the last review" if uc == PRE_MEETING else "Evidence-backed research brief"
-    subtitle = (f"What changed in markets since {since} that matters for this client; every claim has a dated source."
+    title = "Market landscape: the last 3 months" if uc == PRE_MEETING else "Evidence-backed research brief"
+    subtitle = (f"CIO research first, then news you entered; facts only, no forecasts. Every claim has a dated source (last review: {since or 'none'})."
                 if uc == PRE_MEETING else "Client-relevant findings with quantitative and qualitative signals; every claim has a dated source.")
     stale = [s for s in brief.validated_sources if not s.is_fresh] if brief else []
-    status_html = (pill("FLAG", f"{len(stale)} stale source(s)") if stale else pill("PASS", "All sources ≤ 30 days")) if brief else ""
+    status_html = (pill("FLAG", f"{len(stale)} stale source(s)") if stale else pill("PASS", f"All sources ≤ {brief.window_days} days")) if brief else ""
     page_header(ctx, "research", title, subtitle, status_html)
     if not brief:
         st.info("Research appears after Checkpoint 1 is confirmed.")
@@ -1011,7 +1234,7 @@ def render_research(ctx: dict[str, Any]) -> None:
     if ctx["stage"] != "market_intelligence":
         msg = decision_summary(ctx, "market_intelligence", "Checkpoint 2 · research approved")
         if uc == PRE_MEETING:
-            msg += " · ideas for the brief: **" + ("yes" if state.get("include_ideas") else "no (profile unchanged)") + "**"
+            msg += " · ideas for the brief: **" + ("yes (your choice)" if state.get("include_ideas") else "no") + "**"
         done_footer(ctx, "research", msg)
         return
     changes = state.get("profile_changes") or []
@@ -1022,9 +1245,9 @@ def render_research(ctx: dict[str, Any]) -> None:
                                  placeholder="e.g. Relevant to the home goal. Or: focus more on short-duration bonds.")
             include = None
             if uc == PRE_MEETING:
-                include = st.checkbox(f"Prepare 3 investment ideas for this meeting ({len(changes)} profile change(s) since last review)",
-                                      value=bool(changes), key=f"cp2_ideas_{ctx['sid']}",
-                                      help="On by default only when the client's information changed")
+                include = st.checkbox(f"Also prepare 3 investment ideas for this meeting ({len(changes)} profile change(s) since last review)",
+                                      value=False, key=f"cp2_ideas_{ctx['sid']}",
+                                      help="Off by default: the briefing is facts and points to discuss. Ideas are the Discover workflow")
         with mid:
             label = "Approve · Next" if uc != PRE_MEETING else ("Approve · generate ideas" if include else "Approve · draft brief")
             if st.button(label, type="primary", icon=":material/arrow_forward:", width="stretch"):
@@ -1124,7 +1347,7 @@ def render_event(ctx: dict[str, Any]) -> None:
 
 def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, height: int | str = "stretch") -> None:
     with st.container(border=True, height=height):
-        badges = (pill(status) if status else "") + (info_pill(tag) if tag else "")
+        badges = (pill(status) if status else "") + (info_pill(tag) if tag else "") + info_pill(idea.get("lane", "ALIGNED").title())
         stats = (f"<div class='stats'><div>Action<b>{esc(idea['action'])}</b></div><div>Target weight<b>{idea['target_weight_pct']:.1f}%</b></div>"
                  f"<div>Conviction<b>{esc(idea['conviction'])}</b></div></div>")
         html_block(f"<div class='eyebrow'>Idea {idea['slot_number']} · {esc(idea['portfolio_role'].title())}</div>"
@@ -1779,7 +2002,8 @@ def render_client_home() -> None:
     st.caption("Three advisory moments in the client lifecycle. Each has its own trigger and workflow; a completed one updates the client record for the next.")
     live_blocked = st.session_state.get("mode") == LIVE and not os.environ.get("OPENROUTER_API_KEY")
     last_run = {h["use_case"]: h for h in record["history"]}
-    for col, (key, (verb, label, trigger, icon)) in zip(st.columns(3), USE_CASES.items()):
+    for col, key in zip(st.columns(3), HOME_CASES):
+        verb, label, trigger, icon = USE_CASES[key]
         with col, st.container(border=True, height="stretch"):
             html_block(f"<div class='eyebrow'>{esc(verb)}</div><b style='font-size:1.05rem'>{esc(label)}</b>"
                        f"<div class='usecase-trigger'>{esc(trigger)}</div>")
@@ -1787,10 +2011,16 @@ def render_client_home() -> None:
                 c1, c2 = st.columns([1, 1.3])
                 c1.date_input("Meeting date", value=date.today() + timedelta(days=1), key="uc1_date")
                 c2.text_input("Meeting", value="Quarterly portfolio review", key="uc1_purpose")
-                st.caption("Confirms the profile and shares the market landscape; adds 3 ideas only if the profile changed.")
+                st.caption("Confirms the profile and client limits, then a sourced briefing with the last 3 months' portfolio impact.")
             elif key == ADHOC:
                 st.number_input("New capital to deploy", min_value=0.0, step=10000.0, value=120000.0, key="uc2_amount")
-                st.caption("Generates 3 suitability-checked ideas and an investment memo for sign-off.")
+                st.caption("Three ideas in two lanes (aligned, exploratory), each with its why, checked for fit and eligibility.")
+            elif key == POST_MEETING:
+                st.text_input("Meeting", value="Quarterly portfolio review", key="uc3_purpose")
+                st.text_area("Meeting notes or transcript", key="uc3_transcript", height=68,
+                             value=DEMO_TRANSCRIPTS.get(st.session_state.client_key, ""),
+                             placeholder="Paste the transcript: one line per turn, e.g. 'Rachel: …' / 'Sarah: …'")
+                st.caption("Summary, actions with owners and dates, profile changes for you to approve, draft follow-up email.")
             else:
                 st.selectbox("Market event", list(MARKET_EVENTS), format_func=lambda k: MARKET_EVENTS[k]["title"], key="uc3_event",
                              on_change=lambda: st.session_state.update(uc3_desc=MARKET_EVENTS[st.session_state.uc3_event]["description"]))
@@ -1799,7 +2029,8 @@ def render_client_home() -> None:
             if key in last_run:
                 st.caption(f"Last run {last_run[key]['date']}: {last_run[key]['summary'][:90]}")
             st.button("Start", key=f"start_{key}", icon=icon, type="primary", width="stretch", on_click=start_case, args=(key,),
-                      disabled=live_blocked or (key == ADHOC and not st.session_state.get("uc2_amount")))
+                      disabled=live_blocked or (key == ADHOC and not st.session_state.get("uc2_amount"))
+                      or (key == POST_MEETING and not (st.session_state.get("uc3_transcript") or DEMO_TRANSCRIPTS.get(st.session_state.client_key, "")).strip()))
     if record["history"]:
         with st.expander(f"Client history this session ({len(record['history'])})"):
             st.dataframe(pd.DataFrame([{"Date": h["date"], "Use case": USE_CASES[h["use_case"]][1], "Outcome": h["outcome"], "Summary": h["summary"]}
@@ -1811,7 +2042,7 @@ def render_client_home() -> None:
 # --------------------------------------------------------------------------------------
 
 PAGES = {
-    "profile": render_profile, "research": render_research, "event": render_event, "ideas": render_ideas,
+    "profile": render_profile, "limits": render_limits, "meeting": render_meeting, "research": render_research, "event": render_event, "ideas": render_ideas,
     "suitability": render_suitability, "approval": render_approval, "memo": render_memo, "brief": render_brief,
     "record": render_record, "audit": render_audit,
 }

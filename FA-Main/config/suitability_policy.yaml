@@ -45,3 +45,28 @@ rules:
 # a breach that already existed and is not made worse is a FLAG; a new or worsened breach is a FAIL.
 existing_breach_outcome: FLAG
 worsened_breach_outcome: FAIL
+
+# Client limits layer (deck slide 12): a rule layer that maps what UBS can offer each client BEFORE any
+# briefing or idea is produced. A blocked product is never shown; a gap is listed, never guessed.
+# Illustrative defaults: calibrate against UBS / MAS / SFC distribution rules before any pilot.
+client_limits:
+  required_regulatory_fields: [domicile, booking_centre, agreement_type, investor_classification]
+  agreement_types_with_advice: [Advisory, Discretionary]      # Execution-only: no recommendations at all
+  us_person_domiciles: [US]
+  us_person_blocked_fund_domiciles: [Ireland, Luxembourg]     # non-US funds: US-person distribution / tax limits
+  tax_form_for_us_domiciled_products: {us_person: W-9, other: W-8BEN}
+  specified_product_min_complexity: 2                         # needs a valid CKA (Customer Knowledge Assessment)
+  retail_max_complexity: 2
+  expiring_soon_days: 60                                      # warn (gap) before a CKA / tax form lapses
+  restriction_rules:                                          # client-specific restrictions -> blocked areas
+    no_single_stocks: {instrument_type: Single Stock}
+    no_high_yield: {sub_asset_contains: high yield}
+    no_commodities: {asset_class: Commodities}
+  disclosures:
+    all: Product risk disclosure
+    specified_product: Specified investment product risk disclosure
+    fx: Currency risk disclosure
+    fixed_income: Interest-rate and credit risk disclosure
+
+# UC1 looks back over the last 3 months of CIO research; UC2 ideas need current (R8) research.
+uc1_research_window_days: 90

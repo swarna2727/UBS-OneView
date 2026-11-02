@@ -1,12 +1,18 @@
 """Pure conditional routing and review-action rules for the advisory state graph.
 
-One graph of shared agents serves three use cases, each with its own trigger and path:
-  UC1 pre_meeting:   Profile -> [CP1 confirm] -> Market landscape -> [CP2 review]
-                     -> (profile changed: Ideas -> Critic -> [CP3 approve]) -> Meeting brief -> [CP4 approve] -> PDF
-  UC2 adhoc_request: Profile -> [CP1] -> Research -> [CP2] -> Ideas -> Critic (FAIL: regenerate failed ideas,
-                     max R10 per idea) -> [CP3] -> Memo -> [CP4 final approval] -> PDF
-  UC3 market_event:  Profile -> Event research -> Client impact + rule re-check -> [CP decide]
-                     -> maintain / monitor: decision record PDF; revise: Ideas -> Critic -> [CP3] -> Memo -> [CP4] -> PDF
+One graph of shared agents serves the three OneView use cases (deck slides 2 and 16). The Relationship Manager is
+the human orchestrator: every agent hands a typed output to a checkpoint, and nothing moves on without the RM.
+  UC1 pre_meeting (Prepare):  Client Profile -> [CP verify client data] -> Client Limits -> [CP check limits]
+                     -> Market Intelligence (3-month look-back) -> [CP review sources]
+                     -> (RM opts in to ideas: Opportunity -> Critic -> [CP]) -> Brief & Record -> [CP approve briefing] -> PDF
+  UC2 adhoc_request (Discover): Client Profile -> [CP] -> Client Limits -> [CP] -> Market Intelligence -> [CP]
+                     -> Opportunity (two lanes) -> Fit & Eligibility Critic (FAIL: regenerate only the failed ideas,
+                     max R10 per idea, whole set re-checked) -> [CP keep / edit / drop] -> Brief & Record memo -> [CP] -> PDF
+  UC3 post_meeting (Record):  Client Profile -> Client Limits (silent baseline) -> Brief & Record (summary, actions, email)
+                     -> Fit & Eligibility Critic (profile changes vs limits) -> [CP confirm summary, approve each
+                     profile change, edit email] -> compliance record PDF. The client's agreement is never changed.
+  market_event (kept from the earlier draft, not in the deck): Profile -> Limits (silent) -> Event research -> impact
+                     -> [CP decide] -> maintain / monitor record, or revise: Ideas -> Critic -> [CP] -> Memo -> [CP] -> PDF
 Each review node records its decision in state["review_outcome"]; the routers map it to the next node.
 """
 
@@ -21,9 +27,27 @@ REVIEW_RECOMMENDATIONS = "suitability_review"
 REVIEW_MEMO = "advisor_approval"
 REVIEW_EVENT = "event_decision"
 REVIEW_BRIEF = "brief_approval"
+REVIEW_LIMITS = "client_limits"
+REVIEW_RECORD = "record_approval"
 
-PRE_MEETING, ADHOC_REQUEST, MARKET_EVENT = "pre_meeting", "adhoc_request", "market_event"
-USE_CASES = (PRE_MEETING, ADHOC_REQUEST, MARKET_EVENT)
+PRE_MEETING, ADHOC_REQUEST, MARKET_EVENT, POST_MEETING = "pre_meeting", "adhoc_request", "market_event", "post_meeting"
+USE_CASES = (PRE_MEETING, ADHOC_REQUEST, POST_MEETING, MARKET_EVENT)
+# These use cases compute the offer map without a checkpoint: UC3 needs the baseline to check spoken changes against.
+SILENT_LIMITS = (POST_MEETING, MARKET_EVENT)
+
+# The agent sequence per use case, with the human checkpoints between them (logged at the start of every run).
+ORCHESTRATION = {
+    PRE_MEETING: ["ClientProfileAgent", "CP:client_profile", "ClientLimitsLayer", "CP:client_limits",
+                  "MarketIntelligenceAgent", "CP:market_intelligence", "BriefRecordAgent", "CP:brief_approval"],
+    ADHOC_REQUEST: ["ClientProfileAgent", "CP:client_profile", "ClientLimitsLayer", "CP:client_limits",
+                    "MarketIntelligenceAgent", "CP:market_intelligence", "OpportunityAgent", "FitEligibilityCritic",
+                    "CP:suitability_review", "BriefRecordAgent", "CP:advisor_approval"],
+    POST_MEETING: ["ClientProfileAgent", "ClientLimitsLayer", "BriefRecordAgent", "FitEligibilityCritic", "CP:record_approval"],
+    MARKET_EVENT: ["ClientProfileAgent", "ClientLimitsLayer", "MarketIntelligenceAgent", "CP:event_decision"],
+}
+
+def orchestration_plan(use_case_name: str) -> list:
+    return list(ORCHESTRATION.get(use_case_name, []))
 
 MAX_REGENERATIONS_PER_IDEA = load_policy()["rules"]["R10_max_regenerations_per_idea"]
 
@@ -38,7 +62,8 @@ _ACTION_ALIASES = {
 EDITABLE_PROFILE_FIELDS = [
     "client_id", "name", "goals", "time_horizon_months", "stated_risk_willingness",
     "liquidity_schedule", "total_wealth", "experience_level", "constraints",
-    "raw_holdings", "questionnaire_answers", "base_currency", "advisor_notes", "new_capital_amount"
+    "raw_holdings", "questionnaire_answers", "base_currency", "advisor_notes", "new_capital_amount",
+    "regulatory_profile", "rm_news"
 ]
 
 def use_case(state: AdvisoryState) -> str:
@@ -80,8 +105,28 @@ def allowed_review_actions(stage: str, state: AdvisoryState) -> List[str]:
         # R1: missing mandatory data cannot be approved away; the RM must supply it and regenerate.
         return ["regenerate", "reject"] if missing else ["approve", "regenerate", "reject"]
 
+    if stage == REVIEW_LIMITS:
+        offer_map = state.get("offer_map")
+        # A blocked offer map (missing regulatory data, no advice agreement) cannot be approved away: the RM
+        # supplies the missing data and regenerates. A gap is listed, never guessed.
+        return ["regenerate", "reject"] if offer_map is None or offer_map.status == "BLOCKED" else ["approve", "regenerate", "reject"]
+
     if stage == REVIEW_MARKET:
         return ["approve", "regenerate", "reject"]
+
+    if stage == REVIEW_RECORD:
+        record = state.get("meeting_record")
+        if record is None:
+            return ["regenerate", "reject"]
+        pending = any(c.decision == "PENDING" for c in record.profile_changes)
+        open_actions = any(a.status == "FLAGGED" for a in record.actions)
+        blocked = any(r.outcome in ("FAIL", "BLOCK") for r in record.compliance_checks)
+        gate = []
+        if any(c.decision != "APPROVED" for c in record.profile_changes):
+            gate.append("approve_change")
+        if any(c.decision != "REJECTED" for c in record.profile_changes):
+            gate.append("reject_change")
+        return ([] if pending or open_actions or blocked else ["approve"]) + gate + ["edit_record", "regenerate", "reject"]
 
     if stage == REVIEW_RECOMMENDATIONS:
         assessment = state.get("assessment")
@@ -129,6 +174,10 @@ def resolve_review_outcome(stage: str, human_action: Dict[str, Any]) -> str:
         return action
     if action in ("maintain", "monitor"):
         return "record_decision"
+    if action in ("approve_change", "reject_change"):
+        return "change_approved" if action == "approve_change" else "change_rejected"
+    if action == "edit_record":
+        return "record_edited"
     if action == "revise" and stage == REVIEW_EVENT:
         return "new_ideas"
     if action == "edit_allocation":
@@ -148,14 +197,30 @@ def has_blocking_flags(state: AdvisoryState) -> bool:
     profile = state.get("profile")
     return bool(profile and any(f.severity == "BLOCKING_INTERRUPT" and not f.is_resolved for f in profile.unresolved_flags))
 
-def route_after_client_profile(state: AdvisoryState) -> Literal["review_profile", "market_intelligence"]:
-    """UC3 starts from the confirmed client record, so the profile checkpoint only opens if mandatory data is missing."""
-    if use_case(state) == MARKET_EVENT and not has_blocking_flags(state):
-        return "market_intelligence"
+def route_after_client_profile(state: AdvisoryState) -> Literal["review_profile", "client_limits"]:
+    """UC3 and market events start from the confirmed client record, so the profile checkpoint only opens if mandatory data is missing."""
+    if use_case(state) in SILENT_LIMITS and not has_blocking_flags(state):
+        return "client_limits"
     return "review_profile"
 
-def route_after_profile_review(state: AdvisoryState) -> Literal["market_intelligence", "client_profile", "end_session"]:
-    return {"regenerate": "client_profile", "reject": "end_session"}.get(state.get("review_outcome"), "market_intelligence")
+def route_after_profile_review(state: AdvisoryState) -> Literal["client_limits", "client_profile", "end_session"]:
+    return {"regenerate": "client_profile", "reject": "end_session"}.get(state.get("review_outcome"), "client_limits")
+
+def route_after_client_limits(state: AdvisoryState) -> Literal["review_limits", "market_intelligence", "meeting_record"]:
+    """The limits layer runs before any briefing or idea. UC1/UC2 show it to the RM; UC3 and events use it silently."""
+    uc = use_case(state)
+    if uc == POST_MEETING:
+        return "meeting_record"
+    return "market_intelligence" if uc == MARKET_EVENT else "review_limits"
+
+def route_after_limits_review(state: AdvisoryState) -> Literal["market_intelligence", "client_limits", "end_session"]:
+    return {"regenerate": "client_limits", "reject": "end_session"}.get(state.get("review_outcome"), "market_intelligence")
+
+def route_after_record_review(state: AdvisoryState) -> Literal["finalize_record", "meeting_record", "review_record", "end_session"]:
+    return {
+        "regenerate": "meeting_record", "reject": "end_session",
+        "change_approved": "review_record", "change_rejected": "review_record", "record_edited": "review_record",
+    }.get(state.get("review_outcome"), "finalize_record")
 
 def route_after_market_intelligence(state: AdvisoryState) -> Literal["review_market", "event_impact"]:
     return "event_impact" if use_case(state) == MARKET_EVENT else "review_market"

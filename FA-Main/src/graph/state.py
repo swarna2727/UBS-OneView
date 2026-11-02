@@ -3,7 +3,7 @@
 from typing import TypedDict, Optional, List, Dict, Any, Annotated
 from src.schemas.advisory import (
     ClientAdvisoryProfile, ResearchBrief, CandidateIdeaSet,
-    SuitabilityAssessment, StructuredMemo, MeetingBrief, EventImpact, EventDecisionRecord
+    SuitabilityAssessment, StructuredMemo, MeetingBrief, EventImpact, EventDecisionRecord, OfferMap, MeetingRecord
 )
 
 def append_list(current: List[Any], new_items: List[Any]) -> List[Any]:
@@ -42,14 +42,21 @@ class AdvisoryState(TypedDict, total=False):
     idea_rounds: Annotated[List[Dict[str, Any]], append_list]  # every candidate set with its critic verdicts
     approved_idea_set: Optional[Dict[str, Any]]  # the set the advisor approved for the memo, with the decision
 
-    # Use cases: pre_meeting (UC1), adhoc_request (UC2), market_event (UC3)
+    # Use cases: pre_meeting (UC1 Prepare), adhoc_request (UC2 Discover), post_meeting (UC3 Record); market_event is kept from the earlier draft
     use_case: str
     profile_changes: List[Dict[str, Any]]  # UC1: client facts that differ from the last review
-    include_ideas: bool  # UC1: generate 3 recommendations for the meeting (default: the profile changed)
+    include_ideas: bool  # UC1: the RM opts in to ideas for the meeting (default: no; the brief is facts and points to discuss)
     meeting_brief: Optional[MeetingBrief]
     event_impact: Optional[EventImpact]  # UC3: deterministic client impact and rule re-check
     event_decision: Optional[Dict[str, Any]]  # UC3: maintain / monitor / revise, with rationale and follow-up
     decision_record: Optional[EventDecisionRecord]
+
+    # Client limits layer (UC1/UC2 checkpoint; silent in UC3): what UBS can offer this client
+    offer_map: Optional[OfferMap]
+
+    # UC3 post_meeting: transcript -> summary + actions -> Critic check of profile changes -> RM confirms -> record
+    meeting_record: Optional[MeetingRecord]
+    approved_profile_updates: List[Dict[str, Any]]  # profile changes the RM approved; the agreement itself is never changed
 
     # Governance & Human-In-The-Loop tracking
     advisor_notes: Annotated[List[str], append_list]
