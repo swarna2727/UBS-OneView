@@ -1,0 +1,22 @@
+{
+  "_note": "Illustrative 3-month total-return moves (%) to 2026-10-21 for the offline prototype; replace with the bank's market-data feed.",
+  "window_months": 3,
+  "moves": {
+    "ACWI": 4.8,
+    "AGGG": 1.9,
+    "BIL": 0.9,
+    "GLD": 6.4,
+    "IEF": 2.1,
+    "LQD": 2.6,
+    "MSFT": 7.9,
+    "NESN": -1.4,
+    "NVDA": 11.2,
+    "SPYG": 6.3,
+    "TSM": 9.1,
+    "AZN": 1.7,
+    "HYG": 2.2,
+    "VNQ": 1.1,
+    "IEAC": 1.4,
+    "VYMI": 3.2
+  }
+}

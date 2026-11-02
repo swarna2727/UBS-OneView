@@ -77,6 +77,21 @@
       ],
       "total_wealth": 780000.0,
       "experience_level": "ETF investor"
+    },
+    "regulatory_profile": {
+      "domicile": "Singapore",
+      "booking_centre": "Singapore",
+      "agreement_type": "Advisory",
+      "investor_classification": "Retail",
+      "pep_status": false,
+      "restrictions": [],
+      "cka_valid_until": "2028-03-31",
+      "tax_forms": [
+        {
+          "form": "W-8BEN",
+          "valid_until": "2028-12-31"
+        }
+      ]
     }
   },
   "demo_daniel": {
@@ -150,6 +165,21 @@
       ],
       "total_wealth": 210000.0,
       "experience_level": "Limited"
+    },
+    "regulatory_profile": {
+      "domicile": "Singapore",
+      "booking_centre": "Singapore",
+      "agreement_type": "Advisory",
+      "investor_classification": "Retail",
+      "pep_status": false,
+      "restrictions": [],
+      "cka_valid_until": "2028-03-31",
+      "tax_forms": [
+        {
+          "form": "W-8BEN",
+          "valid_until": "2028-12-31"
+        }
+      ]
     }
   },
   "demo_mdm_lim": {
@@ -234,6 +264,21 @@
       "total_wealth": 1200000.0,
       "experience_level": "Knowledgeable",
       "date": "2026-07-08"
+    },
+    "regulatory_profile": {
+      "domicile": "Singapore",
+      "booking_centre": "Singapore",
+      "agreement_type": "Advisory",
+      "investor_classification": "Retail",
+      "pep_status": false,
+      "restrictions": [],
+      "cka_valid_until": "2028-03-31",
+      "tax_forms": [
+        {
+          "form": "W-8BEN",
+          "valid_until": "2028-12-31"
+        }
+      ]
     }
   },
   "demo_aaron": {
@@ -281,7 +326,22 @@
         "risk_rating": 1
       }
     ],
-    "advisor_notes": "Age 45. Investment horizon not provided."
+    "advisor_notes": "Age 45. Investment horizon not provided.",
+    "regulatory_profile": {
+      "domicile": "Singapore",
+      "booking_centre": "Singapore",
+      "agreement_type": "Advisory",
+      "investor_classification": "Retail",
+      "pep_status": false,
+      "restrictions": [],
+      "cka_valid_until": "2028-03-31",
+      "tax_forms": [
+        {
+          "form": "W-8BEN",
+          "valid_until": "2028-12-31"
+        }
+      ]
+    }
   },
   "balanced_client": {
     "client_id": "CL-88201",
@@ -385,6 +445,21 @@
       "q2_investment_objective": "Balanced capital growth with yield",
       "q3_income_stability": "High stable professional income",
       "q4_loss_tolerance_pct": 15.0
+    },
+    "regulatory_profile": {
+      "domicile": "Singapore",
+      "booking_centre": "Singapore",
+      "agreement_type": "Advisory",
+      "investor_classification": "Retail",
+      "pep_status": false,
+      "restrictions": [],
+      "cka_valid_until": "2028-03-31",
+      "tax_forms": [
+        {
+          "form": "W-8BEN",
+          "valid_until": "2028-12-31"
+        }
+      ]
     }
   },
   "contradictory_client": {
@@ -443,6 +518,21 @@
       "q2_investment_objective": "Maximum aggressive capital appreciation",
       "q3_income_stability": "Variable volatile bonus",
       "q4_loss_tolerance_pct": 30.0
+    },
+    "regulatory_profile": {
+      "domicile": "Singapore",
+      "booking_centre": "Singapore",
+      "agreement_type": "Advisory",
+      "investor_classification": "Retail",
+      "pep_status": false,
+      "restrictions": [],
+      "cka_valid_until": "2028-03-31",
+      "tax_forms": [
+        {
+          "form": "W-8BEN",
+          "valid_until": "2028-12-31"
+        }
+      ]
     }
   },
   "incomplete_client": {

@@ -6,7 +6,7 @@ from src.schemas.tools import Breach
 
 class WorkflowStage(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    stage_key: Literal["client_profile", "market_intelligence", "investment_ideas", "suitability_review", "advisor_approval", "final_memo"]
+    stage_key: Literal["client_profile", "client_limits", "market_intelligence", "investment_ideas", "suitability_review", "advisor_approval", "final_memo"]
     display_name: str
     status: Literal["PENDING", "IN_PROGRESS", "WAITING_HUMAN", "COMPLETED", "FAILED"]
     description: str
@@ -69,10 +69,12 @@ class AdvisorActionRequest(BaseModel):
     action: Literal[
         "approve", "regenerate", "reject", "revise", "override_flag", "edit_allocation", "add_advisor_note",
         "lock_idea", "unlock_idea",
-        "maintain", "monitor",  # UC3 market-event decision ('revise' sends the client to new ideas)
+        "maintain", "monitor",  # market-event decision ('revise' sends the client to new ideas)
+        "approve_change", "reject_change", "edit_record",  # UC3 record: per profile change (item_id), and RM edits to actions / email
         "accept", "resolve_conflict", "abort"
     ]
     idea_id: Optional[str] = None
+    item_id: Optional[str] = None  # UC3: the profile change (change_id) an approve_change / reject_change applies to
     notes: Optional[str] = None
     conflict_resolution: Optional[str] = None
     # 'regenerate' at the profile review: corrected raw intake fields.

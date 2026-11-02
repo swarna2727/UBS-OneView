@@ -107,6 +107,7 @@ class ApprovedInstrument(BaseModel):
     esg_rating: Optional[str] = None
     sector: str = "Diversified"
     instrument_type: str = "Fund"
+    fund_domicile: str = "US"  # legal domicile of the product, used by the client limits layer
 
 class ExposureDelta(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -155,3 +156,20 @@ class RuleResult(BaseModel):
     before_value: Optional[float] = None
     after_value: Optional[float] = None
     threshold_value: Optional[float] = None
+
+
+class HoldingMove(BaseModel):
+    """UC1 portfolio impact: how much one holding moved over the look-back window (facts only)."""
+    model_config = ConfigDict(extra="forbid")
+    ticker: str
+    name: str
+    weight_pct: float
+    move_pct: Optional[float] = None  # None: no price data; listed as a gap, never guessed
+    contribution_pct: Optional[float] = None  # weight x move, in portfolio percentage points
+    source: str = "Bank market data"
+
+class TranscriptLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    line_no: int
+    speaker: str
+    text: str

@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from src.schemas.tools import (
     Holding, StandardizedHoldings, QuantMetrics, SentimentBreakdown, 
-    DocumentSnippet, Breach, RiskMetrics, RuleResult
+    DocumentSnippet, Breach, RiskMetrics, RuleResult, HoldingMove
 )
 
 # ==========================================
@@ -89,6 +89,10 @@ class ResearchBrief(BaseModel):
     findings: List[ResearchFinding] = Field(..., min_length=1)
     key_market_risks: List[str] = Field(..., min_length=1)
     validated_sources: List[DocumentSnippet] = Field(..., min_length=1)
+    portfolio_impact: List[HoldingMove] = Field(default_factory=list)  # UC1: holdings moved over the window (facts only)
+    window_days: int = 30  # look-back used for the freshness limit (UC1: 3 months)
+    external_news_used: bool = False  # external news only by exception; the prototype never uses it
+    rm_news_count: int = 0  # items the RM entered
 
 # ==========================================
 # 3. INVESTMENT IDEA SCHEMAS (Slide 16)
@@ -130,6 +134,9 @@ class InvestmentIdea(BaseModel):
     alternative_considered: str = ""  # AS-7: the alternative the advisor could choose instead
     is_locked: bool = False
     rejection_feedback: Optional[str] = None
+    lane: Literal["ALIGNED", "EXPLORATORY"] = "ALIGNED"  # deck slide 9: slots 1-2 aligned, slot 3 exploratory
+    indicative_amount_range: Optional[List[float]] = None  # [min, max] in the client's base currency
+    required_disclosures: List[str] = Field(default_factory=list)  # attached by the client limits layer
 
 class CandidateIdeaSet(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -164,6 +171,9 @@ class IdeaStatus(BaseModel):
     qualitative_notes: str
     evidence_verified: bool = True
     rule_results: List[RuleResult] = Field(default_factory=list)
+    fit_check: Dict[str, str] = Field(default_factory=dict)  # risk range / horizon / concentration / liquidity -> PASS|FLAG|FAIL
+    eligibility: Dict[str, str] = Field(default_factory=dict)  # client limits: eligible, disclosure, open gaps
+    required_disclosures: List[str] = Field(default_factory=list)
 
 class SuitabilityAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -258,6 +268,9 @@ class MeetingBrief(BaseModel):
     talking_points: List[str]
     questions_for_client: List[str]
     recommendations: List[ExecutiveIdeaGlance] = Field(default_factory=list)  # only when the profile changed
+    portfolio_impact: List[HoldingMove] = Field(default_factory=list)  # facts only: what moved and by how much
+    limits_summary: List[str] = Field(default_factory=list)  # what UBS can offer this client, gaps, disclosures
+    open_actions: List[str] = Field(default_factory=list)  # carried from the last meeting's compliance record
     sources: List[str] = Field(default_factory=list)
     compliance_checks: List[RuleResult] = Field(default_factory=list)
     advisor_signature_block: str = "Pending Relationship Manager approval."
@@ -315,3 +328,151 @@ class StructuredMemo(BaseModel):
     consistency_hash: str
     compliance_checks: List[RuleResult] = Field(default_factory=list)  # R9 wording + consistency validator
     advisor_approved: bool = False
+
+
+# ==========================================
+# 7. CLIENT LIMITS LAYER: WHAT UBS CAN OFFER (deck slide 12)
+# ==========================================
+
+class OfferedProduct(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ticker: str
+    name: str
+    required_disclosures: List[str] = Field(default_factory=list)
+
+class BlockedArea(BaseModel):
+    """A category of product the client cannot be offered. Individual blocked products are never named to the RM."""
+    model_config = ConfigDict(extra="forbid")
+    area: str
+    reason: str
+
+class LimitGap(BaseModel):
+    """Missing or lapsed regulatory data. Listed for the RM to resolve, never guessed."""
+    model_config = ConfigDict(extra="forbid")
+    code: Literal["MISSING_REGULATORY_FIELD", "CKA_MISSING", "CKA_EXPIRED", "CKA_EXPIRING", "TAX_FORM_MISSING",
+                  "TAX_FORM_EXPIRED", "TAX_FORM_EXPIRING", "PEP_REVIEW", "NO_ADVICE_AGREEMENT"]
+    message: str
+    resolution: str
+
+class OfferMap(BaseModel):
+    """Structured output of the client limits layer: what UBS can offer this client."""
+    model_config = ConfigDict(extra="forbid")
+    client_id: str
+    status: Literal["CLEAR", "GAPS", "ESCALATE", "BLOCKED"]
+    regulatory_summary: Dict[str, str] = Field(default_factory=dict)
+    eligible_products: List[OfferedProduct] = Field(default_factory=list)
+    required_disclosures: List[str] = Field(default_factory=list)
+    blocked_areas: List[BlockedArea] = Field(default_factory=list)
+    gaps: List[LimitGap] = Field(default_factory=list)
+    escalation_flags: List[str] = Field(default_factory=list)
+    # Internal only: the Critic and the Opportunity Agent use it; the workspace never renders blocked tickers.
+    blocked_tickers: List[str] = Field(default_factory=list)
+
+    @property
+    def eligible_tickers(self) -> List[str]:
+        return [p.ticker for p in self.eligible_products]
+
+    def rm_view(self) -> Dict[str, Any]:
+        """The map as shown to the RM: blocked areas and gaps, never the blocked products themselves."""
+        return self.model_dump(exclude={"blocked_tickers"})
+
+# ==========================================
+# 8. UC3: AFTER THE MEETING, NOTES / ACTIONS / COMPLIANCE RECORD (deck slides 13-15, 23)
+# ==========================================
+
+class RecordLine(BaseModel):
+    """One factual line of the summary, traced to the transcript lines it comes from."""
+    model_config = ConfigDict(extra="forbid")
+    text: str
+    source_lines: List[int] = Field(default_factory=list)
+    verified: bool = True  # False: a cited line is missing, so the RM must check it
+
+class CircumstanceChange(BaseModel):
+    """A change in the client's circumstances spoken in the meeting. Extracted, not yet applied."""
+    model_config = ConfigDict(extra="forbid")
+    field: str  # income | employment | time_horizon_months | stated_risk_willingness | domicile | booking_centre | liquidity_need | other
+    label: str
+    before: str = ""
+    after: str
+    text: str
+    source_lines: List[int] = Field(default_factory=list)
+
+class ExtractedAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    description: str
+    owner: Optional[str] = None
+    due_date: Optional[str] = None
+    amount: Optional[str] = None
+    source_lines: List[int] = Field(default_factory=list)
+
+class MeetingExtraction(BaseModel):
+    """What the Brief & Record Agent's model extracts from a transcript (before deterministic tracing and checks)."""
+    model_config = ConfigDict(extra="forbid")
+    client_said: List[RecordLine] = Field(default_factory=list)
+    decisions: List[RecordLine] = Field(default_factory=list)
+    changes: List[CircumstanceChange] = Field(default_factory=list)
+    actions: List[ExtractedAction] = Field(default_factory=list)
+    email_subject: str
+    email_body: str
+
+class RecordAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action_id: str
+    description: str
+    owner: Optional[str] = None
+    due_date: Optional[str] = None
+    amount: Optional[str] = None
+    status: Literal["CONFIRMED", "FLAGGED"]
+    flag_reason: str = ""
+    source_lines: List[int] = Field(default_factory=list)
+
+class ProfileChangeCheck(BaseModel):
+    """The Fit & Eligibility Critic's check of a spoken profile change against client limits and the risk band."""
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["PASS", "FLAG", "FAIL"]
+    implications: List[str] = Field(default_factory=list)
+    new_gaps: List[str] = Field(default_factory=list)
+    newly_blocked_areas: List[str] = Field(default_factory=list)
+    escalation_flags: List[str] = Field(default_factory=list)
+
+class ProfileChangeProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    change_id: str
+    field: str
+    label: str
+    before: str
+    after: str
+    text: str
+    source_lines: List[int] = Field(default_factory=list)
+    check: Optional[ProfileChangeCheck] = None
+    decision: Literal["PENDING", "APPROVED", "REJECTED"] = "PENDING"
+    decision_notes: str = ""
+
+class FollowUpEmail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subject: str
+    body: str
+    edited_by_rm: bool = False
+
+class MeetingRecord(BaseModel):
+    """UC3 output: confirmed summary, agreed actions, draft follow-up email and the compliance record."""
+    model_config = ConfigDict(extra="forbid")
+    record_id: str
+    created_at: str
+    client_name: str
+    client_id: str
+    meeting_date: str
+    meeting_purpose: str
+    agreement_type: str
+    transcript_fingerprint: str
+    transcript_lines: int
+    client_said: List[RecordLine] = Field(default_factory=list)
+    decisions: List[RecordLine] = Field(default_factory=list)
+    actions: List[RecordAction] = Field(default_factory=list)
+    profile_changes: List[ProfileChangeProposal] = Field(default_factory=list)
+    follow_up_email: FollowUpEmail
+    compliance_checks: List[RuleResult] = Field(default_factory=list)
+    agreement_changed: bool = False  # invariant: the client's agreement is never changed automatically
+    rm_confirmed: bool = False
+    advisor_signature_block: str = "Pending Relationship Manager confirmation."
+    pdf_artifact_path: Optional[str] = None
