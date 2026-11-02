@@ -1,12 +1,12 @@
 # UBS Human-Led Multi-Agent Financial Advisory System
 
-A human-led multi-agent investment advisory application for UBS financial advisors (Relationship Managers), built with **LangGraph**, **Pydantic v2**, **OpenRouter**, **FastAPI** and **Streamlit**. It follows the *Personalized Financial Advisory (AAFS v2)* design: the app is the advisor's decision workspace, and the PDF memo is the final advisory artifact.
+A human-led multi-agent investment advisory application for UBS financial advisors (Relationship Managers), built with **LangGraph**, **Pydantic v2**, **OpenRouter**, **FastAPI** and **Streamlit**. It implements the *UBS OneView* design (AFC × UBS · IS4000, Prism draft 2): three moments around every client meeting, one agentic workflow, the Relationship Manager (RM) as the human orchestrator. The app is the advisor's decision workspace; PDFs are the final artifacts.
 
 ---
 
 ## 1. Design Principles
 
-1. **Clear role boundaries**: five agents, each owning one kind of reasoning, hand off typed Pydantic objects.
+1. **Clear role boundaries**: five agents plus a rule layer, each owning one kind of work, hand off typed Pydantic objects. Agents reason, tools calculate or retrieve, controls constrain.
 2. **Human accountability by design**: the advisor confirms inputs, reviews research, decides on recommendations and approves the memo. No PDF exists before advisor sign-off.
 3. **Evidence before recommendation**: every market claim carries a source and publication date; sources older than 30 days are excluded (R8).
 4. **Deterministic control where possible**: risk scores, exposures, allocation totals and every suitability rule run in pure Python (`src/tools/`, linted to never import LLM code). Models handle language, relevance and synthesis.
@@ -14,54 +14,89 @@ A human-led multi-agent investment advisory application for UBS financial adviso
 
 ---
 
-## 2. Use Cases: Three Triggers, One Set of Agents
+## 2. Use Cases: Three Moments, One Set of Agents
 
-The use cases are connected in the client lifecycle (prepare → recommend → reassess) but each has its own trigger and its own path through the LangGraph graph. The use case is set when a session starts (`use_case` in the intake payload; the API defaults to `adhoc_request`).
+The RM is the **human orchestrator**: every agent hands a typed output to a checkpoint, and nothing moves on without the RM. Each use case has its own trigger and path through one LangGraph graph; set `use_case` in the intake payload (the API defaults to `adhoc_request`). The agent sequence per use case is written to the run log as `orchestration` (`CP:` marks an RM checkpoint).
 
 | Use case | Trigger | Path | Checkpoints | Output |
 |---|---|---|---|---|
-| **UC1 Prepare** · `pre_meeting` | “I'm meeting the client tomorrow” (a quarterly review; a simulated calendar prompt on the landing page shows the future-state trigger) | Profile (with the changes since `last_review`) → market landscape since the last review → **only if the profile changed**: ideas → critic → approval → meeting brief | CP1 confirm profile · CP2 review research (choose whether to add ideas; on by default when the profile changed) · CP3 lock in each idea (if any) · CP4 approve brief | Meeting brief PDF: profile to confirm, changes, portfolio risks, market landscape, talking points, questions, ideas (if any), with charts |
-| **UC2 Recommend** · `adhoc_request` | “The client has S$120k to deploy” | New capital added as cash → research → ideas → critic (FAIL ideas regenerated, passing ideas locked) → approval → memo | CP1 confirm inputs · CP2 research · CP3 lock in each idea · CP4 sign off memo | 3-page investment memo PDF with allocation, risk-band and stress charts |
-| **UC3 Reassess** · `market_event` | “Markets just moved” (event preset + description) | Client record → event research → deterministic client impact + rule re-check → advisor decision | Decide: **maintain** / **monitor** (follow-up trigger required) / **revise** (→ ideas → critic → CP3 → memo → CP4) | Decision record PDF with the impact chart, or a revised memo |
+| **UC1 Prepare** · `pre_meeting` | "I'm meeting Sarah tomorrow. What should we discuss?" | Client Profile → **Client Limits** → Market Intelligence (last 3 months, CIO research first, RM-entered news) → Brief & Record. Ideas only if the RM opts in | Verify client data · Check limits · Review sources · Approve briefing | Briefing PDF: profile and changes, **portfolio impact** (which holdings moved, by how much: facts only), CIO views with sources, what UBS can offer, open actions from the last meeting, points and questions |
+| **UC2 Discover** · `adhoc_request` | "What could suit Sarah, and why?" (S$120k to deploy) | Client Profile → Client Limits → Market Intelligence → **Opportunity Agent** (two lanes) → **Fit & Eligibility Critic** (FAIL: regenerate only the failed idea, then re-check the whole set) → Brief & Record memo | Verify client data · Check limits · Review sources · Keep / edit / lock each idea · Sign off memo | 3-page memo PDF. Ideas: 2 aligned + 1 exploratory, each with why, sources, risks to raise, indicative range, fit check, eligibility and disclosures |
+| **UC3 Record** · `post_meeting` | "What did we agree, and is it on record?" (upload notes or transcript in `transcript`) | Client Profile → Client Limits (silent baseline) → Brief & Record (summary, actions, email) → Fit & Eligibility Critic (profile changes vs limits and risk band) | Confirm summary and actions · approve **each** profile change · edit the email · confirm | Compliance record PDF; approved profile updates (`approved_profile_updates`); the record feeds the next briefing via `previous_meeting_record`. **The client's agreement is never changed automatically** |
 
-Within one browser session the client record carries forward: an approved UC1 brief becomes the new `last_review`, and approved UC2/UC3 trades are assumed executed, so the next workflow starts from the updated portfolio.
+`market_event` (Reassess) from the earlier draft still runs through the API but is not part of the deck and is not offered in the Streamlit app. Within one browser session the client record carries forward: an approved UC1 brief becomes the new `last_review`, approved UC2 trades are assumed executed, and a confirmed UC3 record feeds the next UC1 briefing.
 
-### UC2 workflow and checkpoints (UC1 and UC3 reuse these nodes)
+### Orchestration
 
 ```mermaid
 flowchart TD
-    START([Advisor enters client]) --> CP[1. Client Profile Agent]
-    CP --> R1{{"Advisor: confirm inputs / resolve conflicts"}}
+    RM([Relationship Manager · human orchestrator]) --> CP[Client Profile Agent]
+    CP --> R1{{"CP: verify client data"}}
     R1 -->|"Regenerate with edited fields"| CP
-    R1 -->|"Approve"| MI[2. Market Intelligence Agent]
-    MI --> R2{{"Advisor: inspect research and sources"}}
-    R2 -->|"Regenerate with feedback"| MI
-    R2 -->|"Approve"| IG[3. Investment Idea Agent]
-    IG --> SC[4. Suitability Critic + rule engine]
-    SC -->|"FAIL, retries left (R10)"| SEL[Lock passing ideas, regenerate failed ones]
-    SEL --> IG
-    SC -->|"PASS / FLAG / FAIL escalated"| R3{{"Advisor: recommendation review"}}
-    R3 -->|"Revise idea / regenerate all"| IG
-    R3 -->|"Edit allocation (unlocks that idea)"| SC
-    R3 -->|"Lock in each idea (FLAG: note required); 3 of 3 locked"| MF[5. Memo Formatter Agent]
-    MF --> R4{{"Advisor: final approval"}}
-    R4 -->|"Regenerate memo"| MF
-    R4 -->|"Revise idea"| IG
-    R4 -->|"Edit allocation"| SC
-    R4 -->|"Approve"| PDF[Generate PDF] --> DONE([APPROVED])
-    R1 & R2 & R3 & R4 -->|"Reject"| REJ([REJECTED])
+    R1 -->|"Approve"| CL[Client Limits layer · rules, no LLM]
+    CL --> R2{{"CP: check limits<br/>(UC1 / UC2)"}}
+    R2 -->|"Regenerate with regulatory data"| CL
+    R2 -->|"Approve (escalations need a note)"| MI[Market Intelligence Agent]
+    MI --> R3{{"CP: review sources"}}
+    R3 -->|"Regenerate with feedback"| MI
+    R3 -->|"UC1 (no ideas)"| BR[Brief & Record Agent: briefing]
+    R3 -->|"UC2"| OA[Opportunity Agent: aligned, aligned, exploratory]
+    OA --> FE[Fit & Eligibility Critic + Portfolio Risk Engine]
+    FE -->|"FAIL, retries left (R10): lock passing ideas, regenerate failed ones"| OA
+    FE -->|"PASS / FLAG / FAIL escalated"| R4{{"CP: keep / edit / lock each idea"}}
+    R4 -->|"Revise one idea / regenerate"| OA
+    R4 -->|"Edit allocation"| FE
+    R4 -->|"3 of 3 locked"| BR2[Brief & Record Agent: memo]
+    BR --> R5{{"CP: approve briefing"}} --> PDF1[PDF]
+    BR2 --> R6{{"CP: sign off memo"}} --> PDF2[PDF]
+    CL -.->|"UC3 (silent baseline)"| BRR[Brief & Record Agent: summary + actions + email]
+    BRR --> CR[Fit & Eligibility Critic: each profile change vs limits]
+    CR --> R7{{"CP: confirm summary, approve each profile change, edit email"}}
+    R7 -->|"Approve"| REC[Compliance record PDF + approved profile updates]
+    R1 & R2 & R3 & R4 & R5 & R6 & R7 -->|"Reject"| REJ([REJECTED])
 ```
 
 | Checkpoint | Advisor actions | Notes |
 |---|---|---|
 | Client profile | `approve`, `regenerate` (with `edits` to the intake fields), `reject` | Approve is unavailable while mandatory fields are missing (R1). Approving resolves flags such as R5 with the advisor's note. |
-| Research brief | `approve`, `regenerate` (notes become feedback), `reject` | Advisor can inspect every source and its date. |
-| Recommendations | `lock_idea` / `unlock_idea` (per idea, no common accept button; a FLAG set needs a `notes` rationale, a FAIL idea can never be locked; the memo is drafted when all three are locked), `revise` (one idea via `idea_id`, others locked), `edit_allocation`, `regenerate` (all ideas), `reject` | A FAIL can never be approved. FAILed ideas are regenerated automatically up to 2 times per idea before reaching the advisor (R10). An edited allocation is re-validated and returned to the advisor, never auto-regenerated. |
-| Final approval | `approve` (generates the PDF), `regenerate`, `revise`, `edit_allocation`, `reject` | Approve is unavailable if the memo fails R9 wording or the consistency check. |
-| Market-event decision (UC3) | `maintain`, `monitor` (`edits.follow_up` required), `revise` | Notes are required. The impact tool suggests a decision; the advisor makes it. A market event never places a trade. |
-| Meeting brief (UC1) | `approve` (generates the PDF), `regenerate`, `reject` | Approve is unavailable if the brief fails the R9 wording check. |
+| Client limits (UC1, UC2) | `approve`, `regenerate` (`edits.regulatory_profile` supplies missing data), `reject` | A `BLOCKED` offer map (missing regulatory data, or an agreement with no advice) cannot be approved. Approving with open escalation flags (PEP, expired CKA) needs a `notes` entry on how they are handled. |
+| Research brief | `approve`, `regenerate` (notes become feedback), `reject` | The RM sees every source, its date and whether it is CIO research or RM-entered. UC1 `approve` takes `edits.include_ideas` (default false). |
+| Recommendations (UC2) | `lock_idea` / `unlock_idea` (per idea, no common accept button; a FLAG needs `notes`; a FAIL can never be locked), `revise` (one idea via `idea_id`), `edit_allocation`, `regenerate`, `reject` | FAILed ideas are regenerated automatically up to 2 times per idea before reaching the RM (R10). An idea blocked by client limits is never shown (see below). |
+| Final approval (UC2) / Briefing (UC1) | `approve` (generates the PDF), `regenerate`, `revise`, `edit_allocation`, `reject` | Approve is unavailable if the document fails R9 wording, the consistency check or (UC1) S1 sourcing. |
+| Meeting record (UC3) | `approve_change` / `reject_change` (with `item_id` = the change id; approving a change the Critic flagged needs `notes`), `edit_record` (`edits.actions[]` with `action_id`, `owner`, `due_date`, `description`; `edits.email_subject` / `edits.email_body`), `approve`, `regenerate`, `reject` | `approve` is available only when every profile change is decided, no action is still flagged and no check FAILs. |
+| Market-event decision (earlier draft) | `maintain`, `monitor` (`edits.follow_up` required), `revise` | A market event never places a trade. |
 
 `add_advisor_note` can be sent at any time; it is logged but never acts as a review decision. Advisor notes and feedback are passed to models as quoted data, not instructions.
+
+### Idea lanes, and what is never shown
+
+- **Two lanes** (`lane` on every idea): slots 1 and 2 are `ALIGNED` (build on the current portfolio); slot 3 is `EXPLORATORY` (labelled, within client limits). Set by code, not the model. Each idea also carries `indicative_amount_range`, `required_disclosures`, the why, sources and risks.
+- **Selective regeneration**: a failed idea is regenerated alone, the passing ideas are locked and passed to the Opportunity Agent as context, and the **whole set is re-checked** for fit and eligibility.
+- **Blocked ideas**: the Opportunity Agent is only given eligible products. If an idea still breaches client limits (rule E1) it is FAILed and regenerated; if it ever reaches the RM (R10 escalation) its product is withheld: name, ticker, text and any mention in the payload, history or lineage are replaced (`src/graph/redaction.py`). Idea ids are opaque handles that do not encode the product. The offer map shown to the RM lists blocked *areas* and gaps, never blocked products.
+
+---
+
+## 2b. Client Limits: What UBS Can Offer (`src/tools/client_limits.py`, `client_limits:` in the policy)
+
+A rule layer, not an AI judgement. It reads `regulatory_profile` from the intake and maps it against the product universe **before** any briefing or idea. Output (`OfferMap`): eligible products with required disclosures, blocked areas, gaps, escalation flags and a status (`CLEAR` / `GAPS` / `ESCALATE` / `BLOCKED`).
+
+```json
+"regulatory_profile": {"domicile": "Singapore", "booking_centre": "Singapore", "agreement_type": "Advisory",
+  "investor_classification": "Retail", "pep_status": false, "restrictions": ["no_high_yield"],
+  "cka_valid_until": "2028-03-31", "tax_forms": [{"form": "W-8BEN", "valid_until": "2028-12-31"}]}
+```
+
+| Input | Effect |
+|---|---|
+| Missing `domicile`, `booking_centre`, `agreement_type` or `investor_classification` | Gap listed, status `BLOCKED`, nothing offered (never guessed) |
+| `agreement_type` Execution-only | No recommendations: `BLOCKED` |
+| US person (`domicile: US`) | Non-US-domiciled funds blocked |
+| CKA missing / expired | Specified products (complexity ≥ 2) blocked, gap listed, escalation flag. Expiring within 60 days: gap only |
+| US-domiciled products | Need a valid W-9 (US person) or W-8BEN; missing or expired blocks them |
+| `pep_status` | Gap and escalation flag; the RM documents the handling at the limits checkpoint |
+| `restrictions` (`no_single_stocks`, `no_high_yield`, `no_commodities`) | That area is blocked |
+
+Illustrative thresholds: calibrate against UBS / MAS / SFC distribution rules before any pilot. In UC3 the Critic reuses the layer to test a spoken change (e.g. a move of domicile): it re-runs the offer map with the change applied to a copy and reports newly blocked areas, gaps and escalations; income, employment and horizon changes are checked against the risk band or flagged as a capacity change.
 
 ---
 
@@ -79,23 +114,29 @@ flowchart TD
 | R8 | Every cited source retrieved and within the freshness limit | 30 days | FAIL missing, FLAG stale |
 | R9 | Prohibited wording ("guaranteed", "risk-free"); negated uses allowed | any match | FAIL |
 | R10 | Automatic regenerations of the same idea | max 2 | Escalate to advisor |
+| E1 | Client limits: product is in the client's offer map | not eligible | FAIL (never shown to the RM) |
 | L1 | Liquid assets cover liquidity needs due within 24 months | 1.0x | FAIL (FLAG if existing, not worsened) |
 
-Thresholds are illustrative defaults held in configuration and must be calibrated against UBS suitability policy before any pilot. A portfolio-level FAIL is attributed to the smallest set of ideas whose removal fixes it, so only those slots are regenerated.
+Thresholds are illustrative defaults held in configuration and must be calibrated against UBS suitability policy before any pilot. Passing risk is not the same as being eligible or suitable: E1 is independent of R4. A portfolio-level FAIL is attributed to the smallest set of ideas whose removal fixes it, so only those slots are regenerated.
 
 ---
 
-## 4. The Five Agents
+## 4. The Agents
 
-| Agent | Role | Deterministic tools |
+| Agent (deck name · code) | Role and design boundary | Deterministic tools |
 |---|---|---|
-| Client Profile (`client_profile.py`) | Standardise advisor inputs, compute risk band (lower of willingness and capacity), flag gaps and conflicts | `required_field_validator`, `risk_profile_calculator`, `portfolio_parser` |
-| Market Intelligence (`market_intelligence.py`) | Retrieve and synthesise client-relevant research with sources and dates | `retrieval_rag_tool`, `source_freshness_validator`, `quantitative_analysis_tool`, `sentiment_analysis_tool` |
-| Investment Idea (`investment_idea.py`) | Three complementary ideas from the approved universe, each with role, conviction, risks, invalidation trigger and alternative considered | `approved_product_universe_tool`, `portfolio_exposure_calculator` |
-| Suitability Critic (`suitability_critic.py`) | PASS / FLAG / FAIL per idea and overall from the rule engine | `suitability_rule_engine` |
-| Memo Formatter (`memo_formatter.py`) | Formats approved artifacts only: the 3-page memo (UC2, UC3 revise), the meeting brief (UC1) and the decision record (UC3); restates guarantee requests as targets; R9 and consistency checks | `memo_consistency_validator`, `citation_source_mapper`, PDF renderers with charts (`memo_tools.py`, `pdf_charts.py`) |
+| **Client Profile** · `client_profile.py` | Turns advisor-verified inputs, notes and portfolio data into a structured Client Advisory Profile; detects missing or conflicting data. Never invents missing high-stakes client information | `required_field_validator`, `risk_profile_calculator`, `portfolio_parser` |
+| **Client Limits layer** · `client_limits.py` (no LLM) | Maps what UBS can offer: eligible products, disclosures, blocked areas, gaps, escalations. A blocked product is never shown; a gap is listed, never guessed. Shared by UC1 and UC2 | `client_limits_engine`, product universe, document-date checks |
+| **Market Intelligence** · `market_intelligence.py` | Turns CIO research and RM-entered news into dated, sourced evidence; CIO first, external news only by exception (never used in the prototype); UC1 adds the 3-month portfolio impact. Reports facts and sources; does not decide suitability or go beyond the evidence | `retrieval_rag_tool`, `source_freshness_validator`, `quantitative_analysis_tool`, `sentiment_analysis_tool`, `portfolio_impact_tool` |
+| **Opportunity Agent** · `investment_idea.py` (`OpportunityAgent`) | Ideas for discussion in two lanes, each with the why, sources and risks. Cannot approve its own ideas, show blocked products or bypass checks | `approved_product_universe_tool` (narrowed to the offer map), `portfolio_exposure_calculator` |
+| **Fit & Eligibility Critic** · `suitability_critic.py` (`FitEligibilityCriticAgent`) + Portfolio Risk Engine | Independently tests each idea and the resulting portfolio: fit check (risk range, horizon, concentration, liquidity), eligibility (client limits, disclosures, open gaps), PASS / FLAG / FAIL. In UC3 it checks each spoken profile change. Tools calculate and apply limits; the Critic interprets; neither can be overridden by the Opportunity Agent | `suitability_rule_engine` (R1-R10, L1, E1), `profile_change_limits_check` |
+| **Brief & Record Agent** · `memo_formatter.py` (`BriefRecordAgent`) | Ingests approved material only. UC1 briefing and UC2 memo; UC3 factual summary, actions with owners and dates, draft follow-up email and compliance record, every line linked to transcript lines. Records what was said; cannot add advice, invent facts or change a client's agreement | `transcript_parser`, `lines_support_amounts` (trace + check), `citation_source_mapper`, `memo_consistency_validator`, content lock (`apply_record_edits`), PDF renderers |
 
-Deterministic UC tools: `profile_change_detector` (UC1, changes since the last review), `with_new_capital` (UC2, new money held as cash), `market_event_impact` (UC3, contribution by holding, drifted-portfolio rule re-check and a suggested decision) and `stress_impact` (`src/tools/event_tools.py`). Event shocks and stress scenarios are illustrative and must be calibrated before a pilot.
+UC3 checks (deterministic, after the model drafts): every summary line must cite transcript lines that exist and any figure in it must appear in them (T1, else FLAG); an action without an owner, a due date or a source, or with an amount not in its cited lines, is FLAGGED for the RM (A1); the email and summary are checked for prohibited wording (R9); the agreement is never changed (C1). UC1 adds S1: every point is sourced and dated, or approval is blocked.
+
+Earlier class names (`InvestmentIdeaAgent`, `SuitabilityCriticAgent`, `MemoFormatterAgent`) remain as aliases. Per-agent model overrides use the new names, e.g. `OPENROUTER_MODEL_OPPORTUNITYAGENT`, `OPENROUTER_MODEL_FITELIGIBILITYCRITIC`, `OPENROUTER_MODEL_BRIEFRECORDAGENT`.
+
+Deterministic UC tools: `profile_change_detector` (UC1, changes since the last review), `with_new_capital` (UC2, new money held as cash), `market_event_impact` (market event, contribution by holding, drifted-portfolio rule re-check and a suggested decision) and `stress_impact` (`src/tools/event_tools.py`). Event shocks and stress scenarios are illustrative and must be calibrated before a pilot.
 
 ---
 
@@ -106,7 +147,7 @@ The Streamlit workspace has two run modes, chosen on the landing page. **Offline
 ```bash
 export OPENROUTER_API_KEY=...
 export OPENROUTER_MODEL=anthropic/claude-sonnet-4.5             # default model for every agent
-export OPENROUTER_MODEL_INVESTMENTIDEAAGENT=openai/gpt-4.1      # optional per-agent override
+export OPENROUTER_MODEL_OPPORTUNITYAGENT=openai/gpt-4.1      # optional per-agent override
 ```
 
 Agent outputs are validated against their Pydantic schema; invalid output is retried once with the validation errors, then the agent raises `LLMUnavailableError` ("data unavailable") instead of guessing. The model and prompt version of every agent call are written to the run log.
@@ -131,19 +172,21 @@ python -m pytest tests/ -v                                       # offline test 
 ### Advisor workspace (Streamlit)
 
 1. **Landing page**: pick the run mode (offline stubs or live OpenRouter), then open a client or enter a new one. A simulated calendar card ("Quarterly review — Sarah Tan, tomorrow") previews the future-state trigger for UC1. In live mode, client details are sent to the model provider and use credits.
-2. **Client home**: "What do you need today?" with one card per use case (meeting date for UC1, amount for UC2, event preset and description for UC3) and the client's history in this session.
-3. **Workspace**: the left panel lists only the steps of the active workflow; optional branches (UC1 ideas, UC3 revise) appear once taken. Each step is one page: labelled tabs show the intermediate output, and the advisor checkpoint sits at the bottom of the page with the button to the next page. Steps not reached yet are locked; amber marks the checkpoint waiting for you.
+2. **Client home**: "What do you need today?" with the three deck moments, Prepare, Discover and Record (meeting date for UC1, amount for UC2, notes or transcript for UC3; a demo transcript is pre-filled for Sarah), and the client's history in this session.
+3. **Workspace**: the left panel lists only the steps of the active workflow; optional branches (UC1 ideas) appear once taken. Each step is one page: labelled tabs show the intermediate output, and the advisor checkpoint sits at the bottom of the page with the button to the next page. Steps not reached yet are locked; amber marks the checkpoint waiting for you.
 
 | Page | Intermediate output (tabs) | Checkpoint at the bottom |
 |---|---|---|
 | Client profile | Field form with required fields (*) as a control, changes since the last review (UC1), exposure donuts and risk band, flags and rules | CP1: save changes & re-check, confirm, or reject. Confirm is disabled while a required field is missing (R1) |
-| Market landscape / Research | Findings with sources, risk/return and Sharpe charts, sentiment, source age vs the 30-day limit | CP2: approve (UC1: add 3 ideas or not), re-run with feedback, reject |
-| Event & client impact (UC3) | What changed, contribution by holding, suitability re-check, advice under review | Decide: maintain / monitor / revise |
+| Client limits (UC1, UC2) | What UBS can offer (eligible products with disclosures), blocked areas, gaps and escalations, the editable regulatory profile | Check limits: confirm (escalations need a note), save regulatory changes & re-check, or reject. Confirm is disabled while the offer map is blocked |
+| Market landscape / Research | Findings with sources, risk/return and Sharpe charts, sentiment, source age vs the window (UC1: 3 months; UC2: 30 days) | CP2: approve (UC1: add 3 ideas or not, off by default), re-run with feedback, reject |
+| Event & client impact (market event, API only) | What changed, contribution by holding, suitability re-check, advice under review | Decide: maintain / monitor / revise |
 | Candidate ideas | **Candidate idea set** per round, rationale, proposed weights, lock/regenerate grid with critic feedback | Next page |
 | Suitability check | **System-checked suitable set**: verdicts, before → after vs rule limits, exposure shift and stress, rule matrix | Next page |
 | Advisor approval | **Human-approved set**: checked set, approved set, idea lineage | CP3: lock in each idea (a FLAG needs a note; the set moves on once all three are locked), revise one idea, edit allocation, regenerate, reject |
 | Memo (UC2, UC3 revise) / Meeting brief (UC1) | **Memo formatting**: memo pages or brief sections | CP4: approve → PDF download |
-| Decision record (UC3) | Decision, rationale, follow-up, impact chart | PDF download |
+| Meeting record (UC3) | Summary lines with transcript-line links, actions with owner and due date (flagged ones editable), each profile change with the Critic's check and approve / reject, the editable follow-up email, compliance checks | Confirm · save record (disabled until every change is decided and no action is flagged), re-draft, reject → PDF download |
+| Decision record (market event, API only) | Decision, rationale, follow-up, impact chart | PDF download |
 | Audit & performance | Decision timeline, latency per agent call, tokens and estimated cost, notes, raw run log | – |
 
 The idea-set lineage is kept in graph state: `idea_rounds` stores every candidate set with the critic's verdicts and what triggered it (initial, automatic regeneration, advisor revision, allocation edit), and `approved_idea_set` stores the set once the advisor has locked in all three ideas at CP3. The memo is formatted from that set.
@@ -152,7 +195,7 @@ The idea-set lineage is kept in graph state: `idea_rounds` stores every candidat
 
 | Client | Profile | Control shown |
 |---|---|---|
-| Sarah Tan, 35 | Illustrative S$800k portfolio, moderate, S$300k home down-payment goal in 8 years; 45% global equities (ACWI), 30% investment-grade bonds (AGGG), 15% cash/MMF, 10% gold. Last review (Jul 2026) had a 10-year horizon | Demo client for all three use cases. UC1: the horizon change is detected, so 3 ideas are added to the brief. UC2 (S$120k): Idea 2 (high yield) fails R4, Ideas 1 and 3 are locked and only Idea 2 is regenerated. UC3: rates shock → suggested *monitor* |
+| Sarah Tan, 35 | Illustrative S$800k portfolio, moderate, S$300k home down-payment goal in 8 years; 45% global equities (ACWI), 30% investment-grade bonds (AGGG), 15% cash/MMF, 10% gold. Last review (Jul 2026) had a 10-year horizon | Demo client for all three use cases. UC1: the horizon change is listed in the briefing for confirmation (ideas are opt-in). UC2 (S$120k): Idea 2 (high yield) fails R4, Ideas 1 and 3 are locked and only Idea 2 is regenerated; with an expired CKA the same idea is also blocked by client limits and never shown. UC3: the demo transcript (`data/samples/meeting_transcripts.json`) yields three actions (one flagged: no due date) and two spoken changes (new job, salary) that the Critic flags for the RM |
 | Daniel, 29 | S$220k, "comfortable with high risk", S$180k deposit in 15 months | R5 willingness vs capacity: band lowered to Conservative. The first candidate set over-allocates growth (SPYG 30%), so the critic FAILs it on R4/R6/L1, locks the other two ideas and regenerates only slot 2 |
 | Mdm Lim, 62 | S$1.2M, low-moderate risk, retiring in 3 years, wants a "guaranteed 6%" | Memo restates the request as a target and states returns cannot be guaranteed (R9) |
 | Aaron, 45 | S$400k, moderate, no horizon given | R1 blocks the workflow until the horizon is supplied |
@@ -185,4 +228,6 @@ python -m src.evaluation.run --out reports/baseline_vs_multi_agent.md
 - `tests/integration/test_stress_cases.py`: the six stress cases of slide 33 end to end (liquidity vs willingness, concentration, guarantee wording, missing risk data, stale research, selective revision).
 - `tests/unit/test_evaluation.py`: evaluation metrics and the baseline-vs-multi-agent harness.
 - `tests/integration/test_trajectories.py`: full trajectory with PDF only after approval; automatic regeneration then R10 escalation; a FAIL never reaches the memo; selective revision locks other ideas; allocation edits re-validated; FLAG needs a documented exception; demo-client controls; audit log contents; idea-set lineage (candidate → checked → locked-in set, cleared again after a revision).
-- `tests/integration/test_use_cases.py`: UC1 with and without profile changes (and the advisor override), UC2 new capital and selective regeneration, UC3 maintain/monitor validation, the decision record and the revise path, R1 still blocking UC3, unknown use case rejected.
+- `tests/integration/test_use_cases.py`: UC1 four checkpoints (and the RM opting in to ideas), UC2 new capital and selective regeneration, market-event maintain/monitor validation, the decision record and the revise path, R1 still blocking, unknown use case rejected.
+- `tests/unit/test_client_limits.py`: the limits layer (domicile, CKA, tax forms, PEP, restrictions, missing data, agreement type) and spoken-change checks.
+- `tests/integration/test_oneview_workflow.py`: the orchestration plan, the limits checkpoint, two lanes with fit and eligibility checks, a blocked idea regenerated and never shown (also after R10 escalation), RM news and 3-month sources, portfolio impact, the record feeding the next briefing, and UC3 end to end (flagged action, unclear amount, untraceable line, guarantee wording, spoken change vs limits, RM approval, agreement unchanged).
