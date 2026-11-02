@@ -252,9 +252,23 @@ def evaluate_idea_rules(
     idea: Any,
     research_brief: Any,
     approved_tickers: set,
-    reference_date_iso: str = DEFAULT_REFERENCE_DATE
+    reference_date_iso: str = DEFAULT_REFERENCE_DATE,
+    offer_map: Any = None
 ) -> List[RuleResult]:
     results: List[RuleResult] = []
+
+    # E1 Client limits: an idea outside what UBS can offer this client is blocked and never shown to the RM.
+    # The message deliberately does not name the product.
+    if offer_map is not None:
+        eligible = idea.ticker.upper() in {t.upper() for t in offer_map.eligible_tickers}
+        blocked = idea.ticker.upper() in {t.upper() for t in offer_map.blocked_tickers} or not eligible
+        if blocked:
+            outcome, msg = "FAIL", "Blocked by client limits: this product cannot be offered to this client."
+        else:
+            # Client-level escalations (PEP, expired CKA) were acknowledged by the RM at the limits checkpoint.
+            offered = next(p for p in offer_map.eligible_products if p.ticker.upper() == idea.ticker.upper())
+            outcome, msg = "PASS", "Eligible for this client. Required: " + "; ".join(offered.required_disclosures) + "."
+        results.append(RuleResult(rule_id="E1", name="Client limits (eligibility)", idea_id=idea.idea_id, outcome=outcome, message=msg))
 
     # R2 Approved universe
     in_universe = idea.ticker.upper() in approved_tickers
@@ -342,10 +356,11 @@ def suitability_rule_engine(
     ideas: List[Any],
     research_brief: Any,
     approved_tickers: set,
-    reference_date_iso: str = DEFAULT_REFERENCE_DATE
+    reference_date_iso: str = DEFAULT_REFERENCE_DATE,
+    offer_map: Any = None
 ) -> Dict[str, Any]:
     """
-    Evaluate R1-R10 for a candidate idea set.
+    Evaluate R1-R10 and E1 (client limits, when an offer map is given) for a candidate idea set.
     Returns portfolio-level results, per-idea results (idea rules plus portfolio FAILs the
     idea contributes to), before/after RiskMetrics and the after-holdings.
     """
@@ -359,7 +374,7 @@ def suitability_rule_engine(
     )
 
     per_idea: Dict[str, List[RuleResult]] = {
-        i.idea_id: evaluate_idea_rules(i, research_brief, approved_tickers, reference_date_iso) for i in ideas
+        i.idea_id: evaluate_idea_rules(i, research_brief, approved_tickers, reference_date_iso, offer_map) for i in ideas
     }
 
     # Attribute each portfolio-level FAIL to the ideas that individually push that metric the wrong way.
