@@ -46,6 +46,8 @@ def test_balanced_client_full_trajectory_pdf_only_after_approval(balanced_client
     assert view.pending_review.output["client_id"] == "CL-88201"
 
     act(service, sid, action="approve")
+    assert service.get_pending_review(sid)["stage"] == "client_limits"
+    act(service, sid, action="approve")
     assert service.get_pending_review(sid)["stage"] == "market_intelligence"
 
     # Ideas go straight to the critic; the advisor next sees the validated set.
@@ -83,7 +85,7 @@ def test_contradictory_client_flags_capacity_conflict_at_profile(contradictory_c
                conflict_resolution="Constrained to Conservative given the 12-month capital call.")
     state = service.get_state(sid)
     assert all(f.is_resolved for f in state["profile"].unresolved_flags)
-    assert view.pending_review.stage == "market_intelligence"
+    assert view.pending_review.stage == "client_limits"
 
 def _always_failing_idea_set():
     """An idea set the fake LLM returns on every call: slot 2 always breaches US concentration (R7)."""
@@ -218,7 +220,7 @@ def test_idea_lineage_candidate_checked_approved(sample_profiles):
     approve_until(service, sid, "suitability_review")
     rounds = service.get_state(sid)["idea_rounds"]
     assert [r["trigger"]["source"] for r in rounds] == ["initial", "auto_regeneration"]
-    assert rounds[0]["overall_status"] == "FAIL" and rounds[0]["statuses"]["IDEA-SPYG-02"] == "FAIL"
+    assert rounds[0]["overall_status"] == "FAIL" and next(v for k, v in rounds[0]["statuses"].items() if "-S2-" in k) == "FAIL"
     assert rounds[1]["trigger"]["slots"] == [2] and rounds[1]["overall_status"] == "PASS"
     assert [i["ticker"] for i in rounds[1]["ideas"]][::2] == [i["ticker"] for i in rounds[0]["ideas"]][::2]  # slots 1, 3 locked
     assert service.get_state(sid).get("approved_idea_set") is None
@@ -307,14 +309,14 @@ def test_run_log_captures_inputs_versions_rules_and_decisions(balanced_client_da
     events = [e["event"] for e in log]
     assert events[0] == "run_started" and log[0]["inputs"]["client_id"] == "CL-88201" and log[0]["policy_version"]
     agent_events = [e for e in log if e["event"] == "agent_output"]
-    assert {e["agent"] for e in agent_events} >= {"ClientProfileAgent", "MarketIntelligenceAgent", "InvestmentIdeaAgent",
-                                                  "SuitabilityCriticAgent", "MemoFormatterAgent"}
+    assert {e["agent"] for e in agent_events} >= {"ClientProfileAgent", "ClientLimitsLayer", "MarketIntelligenceAgent",
+                                                  "OpportunityAgent", "FitEligibilityCritic", "BriefRecordAgent"}
     assert all(e["model"] == "offline-deterministic" and e["prompt_version"] for e in agent_events)
     market = next(e for e in agent_events if e["agent"] == "MarketIntelligenceAgent")
     assert market["output"]["validated_sources"][0]["published_at"]
     assert "rule_results" in events and "pdf_generated" in events and events[-1] == "run_ended"
     assert [e["stage"] for e in log if e["event"] == "advisor_decision"] == [
-        "client_profile", "market_intelligence", "suitability_review", "suitability_review", "suitability_review", "advisor_approval"
+        "client_profile", "client_limits", "market_intelligence", "suitability_review", "suitability_review", "suitability_review", "advisor_approval"
     ]
 
 

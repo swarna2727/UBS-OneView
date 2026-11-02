@@ -17,6 +17,12 @@ def act(service, sid, **kwargs):
     return service.execute_action(sid, AdvisorActionRequest(**kwargs))
 
 
+def by_slot(idea_round):
+    """The critic's status per slot for one idea round (idea ids are opaque handles)."""
+    slots = {i["idea_id"]: i["slot_number"] for i in idea_round["ideas"]}
+    return {slots[k]: v for k, v in idea_round["statuses"].items()}
+
+
 def lock_all(service, sid):
     """CP3: the advisor locks in each idea individually; the last lock-in moves the set on."""
     view = None
@@ -29,33 +35,39 @@ def client(sample_profiles, key, **extra):
     return {**copy.deepcopy(sample_profiles[key]), **extra}
 
 
-def test_pre_meeting_changed_profile_generates_ideas_then_brief(sample_profiles):
-    """UC1: a change since the last review routes through ideas and the critic before the meeting brief."""
+def test_pre_meeting_four_checkpoints_then_brief_with_facts(sample_profiles):
+    """UC1: verify client data -> check limits -> review sources -> approve briefing. Facts only; no ideas by default."""
     service = new_service()
     sid = "uc1_changed"
     service.start_session(client(sample_profiles, "demo_sarah", use_case="pre_meeting"), session_id=sid)
     changes = service.get_state(sid)["profile_changes"]
     assert {c["field"] for c in changes} >= {"time_horizon_months", "goals"}
+    assert [service.get_pending_review(sid)["stage"]] == ["client_profile"]
     act(service, sid, action="approve")
-    view = act(service, sid, action="approve")  # include_ideas defaults to True because the profile changed
-    assert view.pending_review.stage == "suitability_review"
-    view = lock_all(service, sid)
+    assert service.get_pending_review(sid)["stage"] == "client_limits"
+    act(service, sid, action="approve")
+    assert service.get_pending_review(sid)["stage"] == "market_intelligence"
+    view = act(service, sid, action="approve")  # a changed profile no longer adds ideas by itself
     assert view.pending_review.stage == "brief_approval"
-    brief = service.get_state(sid)["meeting_brief"]
-    assert len(brief.recommendations) == 3 and brief.profile_changes
+    state = service.get_state(sid)
+    brief = state["meeting_brief"]
+    assert brief.recommendations == [] and brief.profile_changes and state.get("candidate_ideas") is None
+    assert brief.portfolio_impact and brief.limits_summary  # what moved, and what UBS can offer
+    assert state["research_brief"].window_days == 90 and state["research_brief"].external_news_used is False
+    assert {c.rule_id: c.outcome for c in brief.compliance_checks} == {"R9": "PASS", "S1": "PASS"}
     assert service.get_pdf_path(sid) is None  # no PDF before approval
     view = act(service, sid, action="approve", notes="Approved for tomorrow.")
     assert view.outcome == "APPROVED" and os.path.exists(service.get_pdf_path(sid))
     assert service.get_state(sid).get("memo") is None  # the brief replaces the investment memo
 
 
-def test_pre_meeting_unchanged_profile_skips_ideas(sample_profiles):
-    """UC1: no change since the last review -> straight from research to the brief, no recommendations."""
+def test_pre_meeting_unchanged_profile_has_no_recommendations(sample_profiles):
     service = new_service()
     sid = "uc1_unchanged"
     service.start_session(client(sample_profiles, "demo_mdm_lim", use_case="pre_meeting"), session_id=sid)
     assert service.get_state(sid)["profile_changes"] == []
     act(service, sid, action="approve", notes="Confirmed.")
+    act(service, sid, action="approve")
     view = act(service, sid, action="approve")
     assert view.pending_review.stage == "brief_approval"
     state = service.get_state(sid)
@@ -63,13 +75,17 @@ def test_pre_meeting_unchanged_profile_skips_ideas(sample_profiles):
     assert all(c.outcome == "PASS" for c in state["meeting_brief"].compliance_checks)  # R9: no 'guaranteed' wording
 
 
-def test_pre_meeting_advisor_can_request_ideas_without_changes(sample_profiles):
+def test_pre_meeting_advisor_can_opt_in_to_ideas(sample_profiles):
     service = new_service()
     sid = "uc1_override"
-    service.start_session(client(sample_profiles, "demo_mdm_lim", use_case="pre_meeting"), session_id=sid)
+    service.start_session(client(sample_profiles, "demo_sarah", use_case="pre_meeting"), session_id=sid)
+    act(service, sid, action="approve")
     act(service, sid, action="approve")
     view = act(service, sid, action="approve", edits={"include_ideas": True})
     assert view.pending_review.stage == "suitability_review"
+    view = lock_all(service, sid)
+    assert view.pending_review.stage == "brief_approval"
+    assert len(service.get_state(sid)["meeting_brief"].recommendations) == 3
 
 
 def test_adhoc_request_adds_capital_and_regenerates_only_failed_idea(sample_profiles):
@@ -80,10 +96,11 @@ def test_adhoc_request_adds_capital_and_regenerates_only_failed_idea(sample_prof
     profile = service.get_state(sid)["profile"]
     assert profile.total_wealth == 920000.0 and profile.new_capital_amount == 120000.0
     assert abs(sum(h.weight_pct for h in profile.parsed_holdings) - 100) < 0.01
-    act(service, sid, action="approve")
-    act(service, sid, action="approve")
+    act(service, sid, action="approve")  # confirm client data
+    act(service, sid, action="approve")  # check limits
+    act(service, sid, action="approve")  # review sources
     rounds = service.get_state(sid)["idea_rounds"]
-    assert rounds[0]["statuses"] == {"IDEA-ACWI-01": "PASS", "IDEA-HYG-02": "FAIL", "IDEA-GLD-03": "PASS"}
+    assert by_slot(rounds[0]) == {1: "PASS", 2: "FAIL", 3: "PASS"}
     assert rounds[1]["trigger"] == {"source": "auto_regeneration", "slots": [2]} and rounds[1]["overall_status"] == "PASS"
     assert [h["rules"] for h in service.get_state(sid)["regeneration_history"]] == [["R4"]]
 

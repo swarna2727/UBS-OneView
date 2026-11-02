@@ -43,8 +43,9 @@ def test1_high_willingness_with_one_year_liquidity_need_flags_conflict_and_caps_
     assert view.pending_review.stage == "client_profile"
     assert profile.near_term_liquidity_need > 0
 
-    act(service, sid, action="approve")
-    act(service, sid, action="approve")
+    act(service, sid, action="approve")  # confirm client data
+    act(service, sid, action="approve")  # check limits
+    act(service, sid, action="approve")  # review sources
     assessment = service.get_state(sid)["assessment"]
     growth = sum(i.target_weight_pct for i in service.get_state(sid)["candidate_ideas"].ideas if i.portfolio_role == "GROWTH")
     assert growth <= 30.0 or assessment.overall_status != "PASS"

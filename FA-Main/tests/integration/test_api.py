@@ -17,7 +17,7 @@ def test_create_session_endpoint(balanced_client_data):
     data = response.json()
     assert "session_id" in data
     assert data["client_id"] == "CL-88201"
-    assert len(data["workflow_stages"]) == 6
+    assert len(data["workflow_stages"]) == 7  # profile, limits, research, opportunities, fit & eligibility, memo, sign-off
     assert "center_panel" in data
     assert "right_panel" in data
 
@@ -75,6 +75,10 @@ def test_streaming_endpoints_report_progress_then_checkpoint(balanced_client_dat
     assert evs[0]["event"] == "session_started"
     assert [e["node"] for e in evs if e["event"] == "node_completed"] == ["client_profile"]
     assert evs[-1]["event"] == "checkpoint" and evs[-1]["view"]["pending_review"]["stage"] == "client_profile"
+
+    resp = client.post("/sessions/stream_test/actions/stream", json={"action": "approve"})
+    nodes = [e["node"] for e in events(resp) if e["event"] == "node_completed"]
+    assert "client_limits" in nodes and "market_intelligence" not in nodes  # the RM checks limits before any research
 
     resp = client.post("/sessions/stream_test/actions/stream", json={"action": "approve"})
     nodes = [e["node"] for e in events(resp) if e["event"] == "node_completed"]

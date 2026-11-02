@@ -1,7 +1,8 @@
-"""LangGraph orchestration layer for the human-led multi-agent advisory system.
+"""LangGraph orchestration layer for the human-led multi-agent advisory system (UBS OneView).
 
-One graph of five shared agents; the use case (pre-meeting review, ad-hoc request, market event) is set
-when the session starts and the routers in routing.py send each one down its own path."""
+One graph of shared agents under a human orchestrator, the Relationship Manager: Client Profile, Client Limits,
+Market Intelligence, Opportunity, Fit & Eligibility Critic and Brief & Record. The use case (Prepare, Discover,
+Record) is set when the session starts and the routers in routing.py send each one down its own path."""
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -14,24 +15,30 @@ from pydantic import BaseModel
 from src.graph.state import AdvisoryState
 from src.graph.routing import (
     REVIEW_PROFILE, REVIEW_MARKET, REVIEW_RECOMMENDATIONS, REVIEW_MEMO, REVIEW_EVENT, REVIEW_BRIEF,
-    PRE_MEETING, MARKET_EVENT,
+    REVIEW_LIMITS, REVIEW_RECORD, PRE_MEETING, MARKET_EVENT, POST_MEETING,
     EDITABLE_PROFILE_FIELDS, MAX_REGENERATIONS_PER_IDEA, use_case,
     allowed_review_actions, resolve_review_outcome, effective_locked_ids, failed_slots, is_escalated,
     route_after_client_profile, route_after_profile_review, route_after_market_intelligence,
+    route_after_client_limits, route_after_limits_review, route_after_record_review,
     route_after_market_review, route_after_critic, route_after_event_review, route_after_brief_review,
     route_after_recommendation_review, route_after_memo_review
 )
 from src.agents.client_profile import ClientProfileAgent
+from src.agents.client_limits import ClientLimitsAgent
 from src.agents.market_intelligence import MarketIntelligenceAgent
-from src.agents.investment_idea import InvestmentIdeaAgent, InvestmentIdeaAgentInputs
-from src.agents.suitability_critic import SuitabilityCriticAgent, SuitabilityCriticInputs
-from src.agents.memo_formatter import MemoFormatterAgent, MemoFormatterInputs, MeetingBriefInputs, DecisionRecordInputs
+from src.agents.investment_idea import OpportunityAgent, InvestmentIdeaAgentInputs
+from src.agents.suitability_critic import FitEligibilityCriticAgent, SuitabilityCriticInputs, ProfileChangeInputs
+from src.agents.memo_formatter import (
+    BriefRecordAgent, MemoFormatterInputs, MeetingBriefInputs, DecisionRecordInputs, MeetingRecordInputs, apply_record_edits
+)
+from src.graph.redaction import withheld_tickers, blocked_by_limits, redact_ideas, mask_tickers
 from src.audit.run_log import RunLog
 from src.schemas.advisory import InvestmentIdea, CandidateIdeaSet
 from src.tools.event_tools import market_event_impact
-from src.tools.memo_tools import pdf_memo_renderer, meeting_brief_renderer, decision_record_renderer
+from src.tools.memo_tools import pdf_memo_renderer, meeting_brief_renderer, decision_record_renderer, meeting_record_renderer
 from src.tools.pdf_charts import portfolio_change_charts, profile_charts, event_charts
 from src.tools.profile_tools import profile_change_detector, risk_profile_calculator
+from src.tools.risk_engine import load_policy
 from src.llm.base import LLMClientProtocol
 
 PDF_DIR = "data/pipeline_data"
@@ -50,10 +57,11 @@ def checkpoint_serializer() -> JsonPlusSerializer:
 def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_log: Optional[RunLog] = None):
     """Factory creating bound node functions for the advisory workflow."""
     profile_agent = ClientProfileAgent(llm_client)
+    limits_agent = ClientLimitsAgent(llm_client)
     market_agent = MarketIntelligenceAgent(llm_client)
-    idea_agent = InvestmentIdeaAgent(llm_client)
-    critic_agent = SuitabilityCriticAgent(llm_client)
-    memo_agent = MemoFormatterAgent(llm_client)
+    idea_agent = OpportunityAgent(llm_client)
+    critic_agent = FitEligibilityCriticAgent(llm_client)
+    memo_agent = BriefRecordAgent(llm_client)
     log = run_log or RunLog()
 
     def _agent_audit(state: AdvisoryState, stage: str, agent, output, **extra: Any) -> List[Dict[str, Any]]:
@@ -63,14 +71,17 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
 
     def _request_review(stage: str, agent_name: str, reason: str, output: Any, state: AdvisoryState, **extra: Any) -> Dict[str, Any]:
         """Pause the graph so the RM can inspect an agent's output and approve, regenerate or reject it."""
-        resume_val = interrupt({
+        payload = {
             "stage": stage,
             "agent": agent_name,
             "reason": reason,
-            "output": output.model_dump() if output is not None else None,
+            # The offer map is shown without the blocked products themselves (rm_view); everything else as dumped.
+            "output": (output.rm_view() if hasattr(output, "rm_view") else output.model_dump()) if output is not None else None,
             "allowed_actions": allowed_review_actions(stage, state),
             **extra
-        })
+        }
+        # An idea blocked by client limits is never shown: mask its product anywhere in what the RM sees.
+        resume_val = interrupt(mask_tickers(payload, withheld_tickers(state)))
         return resume_val if isinstance(resume_val, dict) else {"action": str(resume_val)}
 
     def _review_audit(state: AdvisoryState, stage: str, human_action: Dict[str, Any], outcome: str) -> List[Dict[str, Any]]:
@@ -199,7 +210,10 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
     # ------------------------------------------------------------------
 
     def node_market_intelligence(state: AdvisoryState) -> Dict[str, Any]:
-        brief = market_agent.run(state["profile"], feedback=state.get("market_feedback"), focus=_research_focus(state))
+        raw = state.get("raw_input", {})
+        window = load_policy()["uc1_research_window_days"] if use_case(state) == PRE_MEETING else None  # UC1: last 3 months of CIO research
+        brief = market_agent.run(state["profile"], feedback=state.get("market_feedback"), focus=_research_focus(state),
+                                 window_days=window, rm_news=raw.get("rm_news"))
         return {
             "research_brief": brief,
             "current_stage": "market_intelligence",
@@ -218,9 +232,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         outcome = resolve_review_outcome(REVIEW_MARKET, human_action)
         update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
         if outcome == "approve" and use_case(state) == PRE_MEETING:
-            # Default: new recommendations only when the client's profile changed; the advisor can override.
-            default = bool(state.get("profile_changes"))
-            update["include_ideas"] = bool((human_action.get("edits") or {}).get("include_ideas", default))
+            # The briefing is facts and points to discuss; ideas belong to UC2. The RM may still opt in.
+            update["include_ideas"] = bool((human_action.get("edits") or {}).get("include_ideas", False))
         if outcome == "regenerate":
             update["market_feedback"] = human_action.get("notes")
         elif outcome == "reject":
@@ -248,7 +261,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             rejected_slots=regenerate_slots,
             feedback=state.get("idea_feedback"),
             use_case=use_case(state),
-            use_case_context=_idea_context(state)
+            use_case_context=_idea_context(state),
+            offer_map=state.get("offer_map")
         ))
         feedback = state.get("idea_feedback") or ""
         if not regenerate_slots:
@@ -272,7 +286,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         assessment = critic_agent.run(SuitabilityCriticInputs(
             profile=state["profile"],
             candidate_ideas=state["candidate_ideas"],
-            research_brief=state["research_brief"]
+            research_brief=state["research_brief"],
+            offer_map=state.get("offer_map")
         ))
         audit = _agent_audit(state, "suitability_critic", critic_agent, assessment, overall_status=assessment.overall_status)
         log.record(state.get("session_id", "default_session"), "rule_results",
@@ -286,7 +301,9 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             "round": len(state.get("idea_rounds") or []) + 1,
             "timestamp": datetime.now().isoformat(),
             "trigger": trigger,
-            "ideas": state["candidate_ideas"].model_dump(mode="json")["ideas"],
+            # a product blocked by client limits is withheld even from the lineage the RM can browse
+            "ideas": redact_ideas(state["candidate_ideas"].model_dump(mode="json")["ideas"],
+                                  blocked_by_limits(assessment, state["candidate_ideas"])),
             "statuses": {ie.idea_id: ie.status for ie in assessment.idea_evaluations},
             "overall_status": assessment.overall_status,
             "risk_score_after": assessment.after_metrics.after_risk_score
@@ -322,6 +339,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             "rules": sorted({r.rule_id for r in ie.rule_results if r.outcome in ("FAIL", "BLOCK")}),
             "reason": ie.qualitative_notes
         } for ie in assessment.idea_evaluations if ie.slot_number in slots]
+        hidden = blocked_by_limits(assessment, state["candidate_ideas"])
+        history = mask_tickers(history, hidden)  # an idea blocked by client limits is never shown, even as a replaced idea
         return {
             "locked_idea_ids": locked,
             "regenerate_slots": slots,
@@ -351,7 +370,7 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             }[status]
         human_action = _request_review(
             REVIEW_RECOMMENDATIONS, "Suitability Critic Agent", reason, assessment, state,
-            candidate_ideas=state["candidate_ideas"].model_dump()["ideas"] if state.get("candidate_ideas") else [],
+            candidate_ideas=redact_ideas(state["candidate_ideas"].model_dump()["ideas"], withheld_tickers(state)) if state.get("candidate_ideas") else [],
             locked_idea_ids=effective_locked_ids(state),
             escalated=escalated,
             regeneration_history=state.get("regeneration_history") or []
@@ -386,7 +405,46 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         return update
 
     # ------------------------------------------------------------------
-    # UC3: client impact of a market event + advisor decision
+    # Understand | Client limits layer: what UBS can offer this client, then the RM's "check limits" checkpoint
+    # ------------------------------------------------------------------
+
+    def node_client_limits(state: AdvisoryState) -> Dict[str, Any]:
+        offer_map = limits_agent.run(state.get("raw_input", {}))
+        return {
+            "offer_map": offer_map,
+            "current_stage": REVIEW_LIMITS,
+            "audit_trail": _agent_audit(state, "client_limits", limits_agent, offer_map, limits_status=offer_map.status,
+                                        gaps=len(offer_map.gaps), escalations=len(offer_map.escalation_flags))
+        }
+
+    def node_review_limits(state: AdvisoryState) -> Dict[str, Any]:
+        """UC1 checkpoint 'check limits': the RM confirms what UBS can offer this client and resolves flagged gaps."""
+        offer_map = state.get("offer_map")
+        reason = {
+            "BLOCKED": "Eligibility cannot be confirmed: resolve the gaps below (supply the missing regulatory data) and regenerate.",
+            "ESCALATE": "Escalation flags are open. Confirm what UBS can offer this client and document how they are being handled.",
+            "GAPS": "Gaps are listed below. Confirm what UBS can offer this client; resolve a gap by supplying the data and regenerating.",
+            "CLEAR": "Confirm what UBS can offer this client before research and ideas begin.",
+        }[offer_map.status] if offer_map else "Client limits unavailable."
+        human_action = _request_review(REVIEW_LIMITS, "Client Limits Layer", reason, offer_map, state,
+                                       editable_fields=["regulatory_profile"],
+                                       raw_input={"regulatory_profile": state.get("raw_input", {}).get("regulatory_profile") or {}})
+        outcome = resolve_review_outcome(REVIEW_LIMITS, human_action)
+        update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
+        if outcome == "approve" and offer_map and offer_map.escalation_flags:
+            update["advisor_notes"] = [f"Limits escalation acknowledged: {human_action.get('notes') or ''}"]
+        elif outcome == "regenerate":
+            edits = (human_action.get("edits") or {}).get("regulatory_profile")
+            if isinstance(edits, dict):
+                raw = state.get("raw_input", {})
+                update["raw_input"] = {**raw, "regulatory_profile": {**(raw.get("regulatory_profile") or {}), **edits}}
+        elif outcome == "reject":
+            update["rejected_at_stage"] = REVIEW_LIMITS
+        update["audit_trail"] = _review_audit(state, REVIEW_LIMITS, human_action, outcome)
+        return update
+
+    # ------------------------------------------------------------------
+    # Market event (earlier draft): client impact of a market event + advisor decision
     # ------------------------------------------------------------------
 
     def node_event_impact(state: AdvisoryState) -> Dict[str, Any]:
@@ -444,6 +502,75 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         }
 
     # ------------------------------------------------------------------
+    # UC3 Record: transcript -> summary + actions -> Critic check -> RM confirms -> compliance record
+    # ------------------------------------------------------------------
+
+    def node_meeting_record(state: AdvisoryState) -> Dict[str, Any]:
+        raw = state.get("raw_input", {})
+        meeting = raw.get("meeting") or {}
+        offer_map = state.get("offer_map")
+        record = memo_agent.run(MeetingRecordInputs(
+            profile=state["profile"], transcript=raw.get("transcript", ""),
+            agreement_type=(offer_map.regulatory_summary.get("agreement_type") if offer_map else None) or "not provided",
+            meeting_date=meeting.get("date", ""), meeting_purpose=meeting.get("purpose", "Client meeting")))
+        return {
+            "meeting_record": record, "pdf_path": None, "current_stage": REVIEW_RECORD,
+            "audit_trail": _agent_audit(state, "meeting_record", memo_agent, record, record_id=record.record_id,
+                                        actions=len(record.actions), profile_changes=len(record.profile_changes))
+        }
+
+    def node_check_profile_changes(state: AdvisoryState) -> Dict[str, Any]:
+        """Trace + check: the Critic tests each spoken profile change against client limits and the risk band."""
+        record = state["meeting_record"]
+        checked = critic_agent.run(ProfileChangeInputs(state.get("raw_input", {}), record.profile_changes))
+        return {
+            "meeting_record": record.model_copy(update={"profile_changes": checked}),
+            "audit_trail": _agent_audit(state, "profile_change_check", critic_agent, checked,
+                                        statuses={c.change_id: c.check.status for c in checked if c.check})
+        }
+
+    def node_review_record(state: AdvisoryState) -> Dict[str, Any]:
+        """RM confirms the summary -> approves each profile change -> edits the follow-up email."""
+        record = state["meeting_record"]
+        human_action = _request_review(
+            REVIEW_RECORD, "Brief & Record Agent + Fit & Eligibility Critic",
+            "Confirm the summary and actions, decide each profile change and edit the follow-up email. "
+            "Nothing is saved or applied before your approval; the client's agreement is never changed automatically.",
+            record, state)
+        outcome = resolve_review_outcome(REVIEW_RECORD, human_action)
+        update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
+        if outcome in ("change_approved", "change_rejected"):
+            decision = "APPROVED" if outcome == "change_approved" else "REJECTED"
+            changes = [c.model_copy(update={"decision": decision, "decision_notes": human_action.get("notes") or ""})
+                       if c.change_id == human_action.get("item_id") else c for c in record.profile_changes]
+            update["meeting_record"] = record.model_copy(update={"profile_changes": changes})
+        elif outcome == "record_edited":
+            update["meeting_record"] = apply_record_edits(record, human_action.get("edits") or {})
+        elif outcome == "reject":
+            update["rejected_at_stage"] = REVIEW_RECORD
+        update["audit_trail"] = _review_audit(state, REVIEW_RECORD, human_action, outcome)
+        return update
+
+    def node_finalize_record(state: AdvisoryState) -> Dict[str, Any]:
+        """After the RM's approval: save the compliance record and release the approved profile updates."""
+        session_id = state.get("session_id", "default_session")
+        record = state["meeting_record"]
+        notes = (state.get("human_action") or {}).get("notes")
+        record = record.model_copy(update={
+            "rm_confirmed": True, "agreement_changed": False,
+            "advisor_signature_block": f"Confirmed by Relationship Manager on {datetime.now().strftime('%d-%b-%Y %H:%M')}."
+                                       + (f" Note: {notes}" if notes else "")})
+        pdf_path = meeting_record_renderer(record, f"{PDF_DIR}/{session_id}_meeting_record.pdf")
+        record = record.model_copy(update={"pdf_artifact_path": pdf_path})
+        updates = [{"change_id": c.change_id, "field": c.field, "label": c.label, "before": c.before, "after": c.after,
+                    "notes": c.decision_notes} for c in record.profile_changes if c.decision == "APPROVED"]
+        log.record(session_id, "pdf_generated", record_id=record.record_id, pdf_path=pdf_path)
+        log.record(session_id, "profile_updates_approved", updates=updates, agreement_changed=False)
+        return {"meeting_record": record, "pdf_path": pdf_path, "approved_profile_updates": updates,
+                "audit_trail": [{"stage": "finalize_record", "timestamp": datetime.now().isoformat(),
+                                 "pdf_path": pdf_path, "approved_profile_updates": len(updates)}]}
+
+    # ------------------------------------------------------------------
     # UC1: meeting brief + approval -> PDF
     # ------------------------------------------------------------------
 
@@ -457,7 +584,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             review_period=f"since last review on {since}" if since else "first review on record",
             changes=state.get("profile_changes") or [],
             ideas=state.get("candidate_ideas") if approved else None,
-            assessment=state.get("assessment") if approved else None))
+            assessment=state.get("assessment") if approved else None,
+            offer_map=state.get("offer_map"), previous_record=raw.get("previous_meeting_record")))
         return {
             "meeting_brief": brief, "pdf_path": None, "current_stage": REVIEW_BRIEF,
             "audit_trail": _agent_audit(state, "meeting_brief", memo_agent, brief, brief_id=brief.brief_id)
@@ -574,6 +702,12 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
     return {
         "client_profile": node_client_profile,
         "review_profile": node_review_profile,
+        "client_limits": node_client_limits,
+        "review_limits": node_review_limits,
+        "meeting_record": node_meeting_record,
+        "check_profile_changes": node_check_profile_changes,
+        "review_record": node_review_record,
+        "finalize_record": node_finalize_record,
         "market_intelligence": node_market_intelligence,
         "review_market": node_review_market,
         "investment_ideas": node_investment_ideas,
@@ -610,13 +744,36 @@ def build_advisory_graph(
     builder.add_edge(START, "client_profile")
     builder.add_conditional_edges("client_profile", route_after_client_profile, {
         "review_profile": "review_profile",
-        "market_intelligence": "market_intelligence"
+        "client_limits": "client_limits"
     })
     builder.add_conditional_edges("review_profile", route_after_profile_review, {
-        "market_intelligence": "market_intelligence",
+        "client_limits": "client_limits",
         "client_profile": "client_profile",
         "end_session": "end_session"
     })
+
+    # Client limits layer: what UBS can offer, before any briefing or idea. UC1/UC2 checkpoint it; UC3 goes on to the record.
+    builder.add_conditional_edges("client_limits", route_after_client_limits, {
+        "review_limits": "review_limits",
+        "market_intelligence": "market_intelligence",
+        "meeting_record": "meeting_record"
+    })
+    builder.add_conditional_edges("review_limits", route_after_limits_review, {
+        "market_intelligence": "market_intelligence",
+        "client_limits": "client_limits",
+        "end_session": "end_session"
+    })
+
+    # UC3 Record: summary + actions -> Critic checks profile changes -> RM confirms -> compliance record.
+    builder.add_edge("meeting_record", "check_profile_changes")
+    builder.add_edge("check_profile_changes", "review_record")
+    builder.add_conditional_edges("review_record", route_after_record_review, {
+        "finalize_record": "finalize_record",
+        "meeting_record": "meeting_record",
+        "review_record": "review_record",
+        "end_session": "end_session"
+    })
+    builder.add_edge("finalize_record", "end_session")
 
     builder.add_conditional_edges("market_intelligence", route_after_market_intelligence, {
         "review_market": "review_market",
