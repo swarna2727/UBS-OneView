@@ -213,20 +213,39 @@ The idea-set lineage is kept in graph state: `idea_rounds` stores every candidat
 | `GET` | `/sessions/{id}/audit` | Audit trail and full run log |
 | `GET` | `/health` | Health check |
 
-### Evaluation (slides 30-33)
+### Evaluation (deck slides 24-27)
 
 ```bash
-python -m src.evaluation.run --out reports/baseline_vs_multi_agent.md
+python -m src.evaluation.scorecard --out reports/oneview_evaluation.md --json reports/oneview_evaluation.json
+python -m src.evaluation.run --out reports/baseline_vs_multi_agent.md     # the specialist-vs-single-LLM hypothesis only
 ```
 
-`src/evaluation/` scores a single-LLM baseline (`baseline.py`) and the multi-agent workflow on the same client with deterministic metrics (`metrics.py`): suitability violations delivered, unsupported claims, personalization (sensitivity of the idea set to changed client inputs), explainability (the five AS-7 questions), output consistency over repeat runs, latency and LLM calls as a cost proxy. Without `OPENROUTER_API_KEY` the scripted offline model is used, which verifies the harness but says nothing about model quality; the report says so.
+The scorecard runs the system as a scripted RM through all three use cases and scores it at the deck's three levels, with the deck's four methods. It exits 1 if any deterministic check fails, so it can gate a build. Judge scores never gate.
+
+| Level (slide 24) | What is checked | Module |
+|---|---|---|
+| **Component**: did each part work? | Schema validation (every agent output in the run log re-validates); calculation accuracy (risk scores, portfolio impact, offer-map partition recomputed independently); source validity (dated, inside the window, everything cited was retrieved, RM news labelled, no external news) | `components.py` |
+| **Output quality**: were the outputs good? | Fit and eligibility (delivered ideas pass an independent rule-engine re-run incl. E1), personalisation, grounding, explainability, and the per-use-case questions of slide 25 | `quality.py`, `metrics.py`, `judge.py` |
+| **Workflow**: did it behave correctly? | Correct routing (expected agent / checkpoint order, no wrong agents), selective regeneration (only the failed slot changes, completed upstream stages never rerun), escalation and checkpoints (no PDF before the RM's approval, R10 limit, agreement never changed) | `trajectory.py` |
+
+Per use case (slide 25): **UC1** source and date on each point, impact matches the data, no unsupported claims; **UC2** each idea has a why, blocked products not shown anywhere the RM can see, two lanes labelled; **UC3** summary matches the transcript, actions have owner and date, no change without RM approval.
+
+**Stress tests (slide 26)**, `stress.py`: missing mandatory field → BLOCK; product blocked by domicile → NOT SHOWN; unsupported market claim → BLOCK; PEP flag or expired CKA → ESCALATE + LIST GAP; unclear amount in transcript → FLAG FOR RM; spoken change in circumstances → RM APPROVES UPDATE. Each builds the hostile case, runs the real workflow and compares the observed outcome with the required one. A crashing case counts as a failure.
+
+**Performance and cost (slide 27)**, `performance.py`: end-to-end agent latency, LLM calls per run, estimated cost per run (from reported token usage; `n/a` when the model reports none, never invented; the prices are assumptions), latency by Research / Ideas / Checks / Record, and how many idea generations selective regeneration saved.
+
+**LLM-as-judge**, `judge.py`: `LLMJudge` scores a rubric (ideas: personalisation, grounding, explanation clarity; record: faithfulness, no added advice, completeness) through any `LLMClientProtocol`; use a different model from the one that wrote the output. Offline, `HeuristicJudge` scores the same rubric from text features: it verifies the harness, not model quality, and the report says so. Without `OPENROUTER_API_KEY` the scripted model is used: the deterministic checks then verify the system's controls, not model quality.
+
+The single-LLM baseline comparison (`src/evaluation/baseline.py`, `harness.py`) is unchanged and is included in the scorecard as the slide 18 hypothesis.
 
 ### Tests
 
 - `tests/unit/test_risk_engine.py`: every rule R1-R10 and L1, existing-vs-worsened outcomes, idea attribution.
 - `tests/unit/test_openrouter_client.py`: schema validation, retry on invalid output, fail-safe error, per-agent models.
-- `tests/integration/test_stress_cases.py`: the six stress cases of slide 33 end to end (liquidity vs willingness, concentration, guarantee wording, missing risk data, stale research, selective revision).
+- `tests/integration/test_stress_cases.py`: six hardening cases from the earlier draft (liquidity vs willingness, concentration, guarantee wording, missing risk data, stale research, selective revision) end to end (liquidity vs willingness, concentration, guarantee wording, missing risk data, stale research, selective revision).
 - `tests/unit/test_evaluation.py`: evaluation metrics and the baseline-vs-multi-agent harness.
+- `tests/unit/test_eval_checks.py`: the evaluators are tested too. Every component, quality, workflow, judge and performance check passes on a healthy run and is shown to FAIL when its defect is seeded (corrupt output, wrong figure, leaked blocked product, reordered trajectory, PDF before approval, unapproved profile update).
+- `tests/integration/test_eval_suite.py`: the deck's six stress tests (one parametrised test each), the full scorecard on all three use cases, the report sections and the CLI exit code.
 - `tests/integration/test_trajectories.py`: full trajectory with PDF only after approval; automatic regeneration then R10 escalation; a FAIL never reaches the memo; selective revision locks other ideas; allocation edits re-validated; FLAG needs a documented exception; demo-client controls; audit log contents; idea-set lineage (candidate → checked → locked-in set, cleared again after a revision).
 - `tests/integration/test_use_cases.py`: UC1 four checkpoints (and the RM opting in to ideas), UC2 new capital and selective regeneration, market-event maintain/monitor validation, the decision record and the revise path, R1 still blocking, unknown use case rejected.
 - `tests/unit/test_client_limits.py`: the limits layer (domicile, CKA, tax forms, PEP, restrictions, missing data, agreement type) and spoken-change checks.
