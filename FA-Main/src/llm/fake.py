@@ -8,7 +8,7 @@ from src.schemas.advisory import (
     ResearchBrief, CandidateIdeaSet, InvestmentIdea, AllocationRange,
     SuitabilityAssessment, IdeaStatus, StructuredMemo,
     MemoPage1Executive, MemoPage2IdeaDetail, MemoPage3PortfolioView,
-    ExecutiveIdeaGlance, ResearchFinding
+    ExecutiveIdeaGlance, ResearchFinding, MeetingExtraction, RecordLine, CircumstanceChange, ExtractedAction
 )
 from src.schemas.tools import QuantMetrics, SentimentBreakdown, DocumentSnippet, RiskMetrics
 
@@ -54,6 +54,8 @@ class FakeAdvisoryLLMClient:
             return self._build_fake_candidate_ideas(user_prompt) # type: ignore
         elif response_model == StructuredMemo:
             return self._build_fake_memo(user_prompt) # type: ignore
+        elif response_model == MeetingExtraction:
+            return self._build_fake_extraction(user_prompt) # type: ignore
         else:
             raise ValueError(f"No mock response generator for model {model_name}")
 
@@ -385,6 +387,52 @@ class FakeAdvisoryLLMClient:
             complementarity_thesis=f"Income, growth and stability roles across {', '.join(i.ticker for i in ideas)}, funded from the cash buffer.",
             generation_round=1 + max(self._slot_attempts.values())
         )
+
+    # Offline stand-in for the Brief & Record model: simple, transparent heuristics over "[n] Speaker: text" lines.
+    _DUE = re.compile(r"\bby\s+((?:next\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow|end of (?:the )?\w+|\d{1,2}\s+\w+)|\b(next week|next month)\b", re.I)
+    _COMMIT = re.compile(r"\b(I'll|I will|I can|let me)\s+(?:also\s+)?(.+)", re.I)
+
+    def _build_fake_extraction(self, user_prompt: str) -> MeetingExtraction:
+        client_match = re.search(r"CLIENT: (.+?) \(", user_prompt)
+        client = client_match.group(1) if client_match else "Client"
+        first = client.split()[0].lower()
+        rows = [(int(n), sp.strip(), tx.strip()) for n, sp, tx in re.findall(r"^\[(\d+)\] ([^:]+): (.*)$", user_prompt, re.M)]
+        said, decisions, changes, actions = [], [], [], []
+        for n, speaker, text in rows:
+            is_client = speaker.lower().startswith(first)
+            low = text.lower()
+            if is_client and re.search(r"\b(want|plan|worried|concern|prefer|like to|comfortable|job|salary|income|moving|relocat)\b", low):
+                said.append(RecordLine(text=f"{client.split()[0]} said: {text}", source_lines=[n]))
+            if re.search(r"\b(agreed|decided|settled|we'll keep|we will keep)\b", low):
+                decisions.append(RecordLine(text=text, source_lines=[n]))
+            if is_client and re.search(r"\b(salary|income|pay)\b", low):
+                changes.append(CircumstanceChange(field="income", label="Income", after="May change from next month (amount not stated)",
+                                                  text=text, source_lines=[n]))
+            if is_client and re.search(r"\b(new job|resign|laid off|promotion|started a|joined)\b", low):
+                changes.append(CircumstanceChange(field="employment", label="Employment", after="New job accepted", text=text, source_lines=[n]))
+            if is_client and re.search(r"\b(moving to|relocat\w+ to)\s+([A-Z][a-z]+)", text):
+                place = re.search(r"\b(?:moving to|relocat\w+ to)\s+([A-Z][a-z]+)", text).group(1)
+                changes.append(CircumstanceChange(field="domicile", label="Domicile", after=place, text=text, source_lines=[n]))
+            for sentence in re.split(r"(?<=[.!?])\s+", text):
+                m = self._COMMIT.search(sentence)
+                if not m:
+                    continue
+                clause = m.group(2).rstrip(".!? ")
+                due = self._DUE.search(clause)
+                clause_no_due = clause[:due.start()].strip() if due else clause
+                other = "the RM" if is_client else client.split()[0]
+                clause_no_due = re.sub(r"\byou\b", other, clause_no_due, flags=re.I)
+                clause_no_due = re.sub(r"\bmy\b", "their" if is_client else "the RM's", clause_no_due, flags=re.I)
+                money = re.search(r"(?:S\$|US\$|\$)\s?\d[\d,]*(?:\.\d+)?\s?[kKmM]?", clause)
+                actions.append(ExtractedAction(
+                    description=f"{speaker} to {clause_no_due}", owner=speaker,
+                    due_date=(due.group(1) or due.group(2)).capitalize() if due else None,
+                    amount=money.group(0) if money else None, source_lines=[n]))
+        steps = "\n".join(f"- {a.description}" + (f" (by {a.due_date})" if a.due_date else "") for a in actions) or "- No actions were agreed."
+        return MeetingExtraction(
+            client_said=said, decisions=decisions, changes=changes, actions=actions,
+            email_subject="Follow-up from our meeting",
+            email_body=f"Dear {client.split()[0]},\n\nThank you for meeting with me. As discussed, the agreed next steps are:\n{steps}\n\nKind regards,\nYour Relationship Manager")
 
     def _build_fake_memo(self, user_prompt: str) -> StructuredMemo:
         return StructuredMemo(

@@ -112,6 +112,17 @@ def meeting_brief_renderer(brief: Any, output_path: str, charts: Optional[List[A
         story += [Spacer(1, 4), _table(rows, [150, 185, 185])]
     story += [Paragraph("2. Portfolio and risks", s["section"]), Paragraph(brief.portfolio_summary, s["body"]),
               *_bullets(brief.portfolio_risks, s["body"])]
+    if brief.portfolio_impact:
+        rows = [[Paragraph(f"<b>{h}</b>", s["bold"]) for h in ("Holding", "Weight", "3-month move", "Contribution")]]
+        rows += [[Paragraph(f"<b>{m.ticker}</b> {m.name}", s["body"]), Paragraph(f"{m.weight_pct:.1f}%", s["body"]),
+                  Paragraph(f"{m.move_pct:+.1f}%" if m.move_pct is not None else "no data", s["body"]),
+                  Paragraph(f"{m.contribution_pct:+.2f} pp" if m.contribution_pct is not None else "-", s["body"])]
+                 for m in brief.portfolio_impact]
+        story += [Spacer(1, 4), _table(rows, [250, 70, 100, 100])]
+    if brief.limits_summary:
+        story += [Paragraph("What UBS can offer this client", s["section"]), *_bullets(brief.limits_summary, s["body"])]
+    if brief.open_actions:
+        story += [Paragraph("Open actions from the last meeting", s["section"]), *_bullets(brief.open_actions, s["body"])]
     story += [KeepTogether([c, Spacer(1, 6)]) for c in (charts or [])]
     story += [Paragraph("3. Market landscape this period", s["section"]), *_bullets(brief.market_developments, s["body"])]
     if brief.recommendations:
@@ -327,4 +338,36 @@ def pdf_memo_renderer(structured_memo: StructuredMemo, output_path: str, charts:
     story.append(Paragraph(f"<b>Sign-off Block:</b> {p3.advisor_signature_block}", bold_body))
 
     doc.build(story)
+    return output_path
+
+
+def meeting_record_renderer(record: Any, output_path: str) -> str:
+    """UC3: the compliance record of a client meeting: summary, actions, profile decisions and the follow-up email."""
+    s = _pdf_styles()
+    story: List[Any] = [
+        Paragraph("UBS ONEVIEW · MEETING COMPLIANCE RECORD", s["title"]),
+        Paragraph(f"<b>Client:</b> {record.client_name} ({record.client_id}) &nbsp;|&nbsp; <b>Meeting:</b> {record.meeting_date}, "
+                  f"{record.meeting_purpose} &nbsp;|&nbsp; <b>Agreement:</b> {record.agreement_type}", s["bold"]),
+        Paragraph(f"Record {record.record_id} &nbsp;|&nbsp; transcript {record.transcript_fingerprint} ({record.transcript_lines} lines)", s["body"]),
+        Paragraph("1. What the client said", s["section"]),
+        *_bullets([f"{l.text} [lines {', '.join(map(str, l.source_lines)) or 'none'}]" for l in record.client_said], s["body"]),
+        Paragraph("2. Decisions made", s["section"]),
+        *_bullets([f"{l.text} [lines {', '.join(map(str, l.source_lines)) or 'none'}]" for l in record.decisions], s["body"]),
+    ]
+    rows = [[Paragraph(f"<b>{h}</b>", s["bold"]) for h in ("Action", "Owner", "Due", "Status")]]
+    rows += [[Paragraph(a.description, s["body"]), Paragraph(a.owner or "-", s["body"]), Paragraph(a.due_date or "-", s["body"]),
+              Paragraph(a.status + (f": {a.flag_reason}" if a.flag_reason else ""), s["body"])] for a in record.actions]
+    story += [Paragraph("3. Agreed actions", s["section"]), _table(rows, [230, 80, 80, 130])]
+    if record.profile_changes:
+        rows = [[Paragraph(f"<b>{h}</b>", s["bold"]) for h in ("Change", "Before", "Now", "Critic check", "RM decision")]]
+        rows += [[Paragraph(c.label, s["body"]), Paragraph(c.before or "-", s["body"]), Paragraph(c.after, s["body"]),
+                  Paragraph(c.check.status if c.check else "-", s["body"]), Paragraph(c.decision, s["body"])] for c in record.profile_changes]
+        story += [Paragraph("4. Profile changes (applied only when the RM approves)", s["section"]), _table(rows, [110, 100, 110, 70, 130])]
+    story += [Paragraph("5. Follow-up email (draft)", s["section"]), Paragraph(f"<b>{record.follow_up_email.subject}</b>", s["body"]),
+              *[Paragraph(line, s["body"]) for line in record.follow_up_email.body.split("\n")],
+              Paragraph("6. Compliance checks", s["section"]),
+              *_bullets([f"{c.rule_id} {c.name}: {c.outcome}. {c.message}" for c in record.compliance_checks], s["body"]),
+              Spacer(1, 8), Paragraph(f"<b>Advisor confirmation:</b> {record.advisor_signature_block}", s["bold"]),
+              Paragraph("The client's agreement was not changed by this record." if not record.agreement_changed else "", s["body"])]
+    _doc(output_path).build(story)
     return output_path
