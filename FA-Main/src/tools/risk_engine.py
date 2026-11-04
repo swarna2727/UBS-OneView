@@ -54,6 +54,13 @@ def near_term_liquidity_need(profile: Any) -> float:
     window = _rule("L1_liquidity_coverage").get("window_months", 24)
     return sum(e.amount for e in getattr(profile, "liquidity_schedule", []) if e.due_months <= window)
 
+def risk_points(score: float) -> int:
+    """A 1-5 risk score on the 0-100 scale the RM sees (deck slide 19). Rules compare on the 1-5 scale; this is display only."""
+    return int(round((score - 1.0) * 25.0))
+
+def risk_band_points(band: List[float]) -> str:
+    return f"{risk_points(band[0])}-{risk_points(band[1])}"
+
 def portfolio_metrics(holdings: List[Holding], profile: Any) -> Dict[str, Any]:
     """Deterministic metrics the rules are evaluated on."""
     r6, r7 = _rule("R6_short_horizon_growth"), _rule("R7_concentration")
@@ -172,8 +179,8 @@ def evaluate_portfolio_rules(
     results.append(RuleResult(
         rule_id="R4", name="Portfolio risk within client band", metric="risk_score", outcome=outcome,
         before_value=before["risk_score"], after_value=after["risk_score"], threshold_value=band_max,
-        message=f"Portfolio risk score {before['risk_score']:.2f} -> {after['risk_score']:.2f} "
-                f"vs {profile.calculated_risk_tier} band ceiling {band_max:.2f}."
+        message=f"Portfolio risk {risk_points(before['risk_score'])} -> {risk_points(after['risk_score'])} (0-100) "
+                f"vs {profile.calculated_risk_tier} band {risk_band_points(profile.risk_score_range)}."
     ))
 
     # R6 Growth-asset cap for short horizons

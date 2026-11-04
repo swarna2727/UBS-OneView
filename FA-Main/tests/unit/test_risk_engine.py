@@ -174,3 +174,10 @@ def test_r3_overdrawn_cash_blames_largest_purchase():
     engine = run(make_profile(thin_cash), [idea(1, "LQD", 3), idea(2, "IEAC", 8), idea(3, "GLD", 2)])
     assert result(engine["portfolio_results"], "R3").outcome == "FAIL"
     assert [i for i in ("I1-LQD", "I2-IEAC", "I3-GLD") if idea_outcome(engine, i) == "FAIL"] == ["I2-IEAC"]
+
+
+def test_risk_is_shown_on_a_0_to_100_scale():
+    """Deck slide 19: the RM sees portfolio risk on 0-100; the rules keep comparing on the 1-5 scale."""
+    from src.tools.risk_engine import risk_band_points, risk_points
+    assert (risk_points(1.0), risk_points(3.0), risk_points(5.0)) == (0, 50, 100)
+    assert risk_band_points([1.8, 2.6]) == "20-40"

@@ -5,8 +5,8 @@
     "publisher": "UBS Chief Investment Office",
     "published_at": "2026-10-10T08:00:00Z",
     "retrieved_at": "2026-10-15T10:00:00Z",
-    "text": "UBS CIO maintains an overweight stance on high-quality Fixed Income (US Investment Grade Corporates and European credit), noting attractive real yields of 2.3% and solid balance sheets. In Equities, we recommend a barbell strategy pairing AI infrastructure leaders (TSM, MSFT, NVDA) with defensive quality dividend payers (NESN, AZN). Core sovereign duration offers essential asymmetric hedging against growth slowdown.",
-    "tickers": ["MSFT", "NVDA", "LQD", "NESN", "AZN", "TSM", "IEF", "IEAC"],
+    "text": "UBS CIO maintains an overweight stance on high-quality Fixed Income (US Investment Grade Corporates and European credit), noting attractive real yields of 2.3% and solid balance sheets. In Equities, we recommend a barbell strategy pairing AI infrastructure leaders (TSM, MSFT, NVDA) with defensive quality dividend payers (NESN, AZN). Core sovereign duration offers essential asymmetric hedging against growth slowdown. The CIO moderate-risk reference mix holds 40% in fixed income; short-duration investment grade corporates (VCSH) capture most of the carry with limited sensitivity to rate moves.",
+    "tickers": ["MSFT", "NVDA", "LQD", "NESN", "AZN", "TSM", "IEF", "IEAC", "VCSH"],
     "asset_classes": ["Equities", "Fixed Income"],
     "macro_themes": ["Quality Yield", "AI Infrastructure", "Defensive Growth", "Geopolitical Hedging"]
   },
@@ -16,8 +16,8 @@
     "publisher": "UBS Chief Investment Office",
     "published_at": "2026-10-14T09:30:00Z",
     "retrieved_at": "2026-10-16T11:00:00Z",
-    "text": "Enterprise cloud monetization and generative AI inference workloads continue to drive high-margin backlog expansions for MSFT and TSM. Forward P/E multiples reflect premium valuations (28x-32x), warranting phased entry or volatility-gated position sizing rather than unhedged momentum allocation.",
-    "tickers": ["MSFT", "TSM", "NVDA"],
+    "text": "Enterprise cloud monetization and generative AI inference workloads continue to drive high-margin backlog expansions for MSFT and TSM. Forward P/E multiples reflect premium valuations (28x-32x), warranting phased entry or volatility-gated position sizing rather than unhedged momentum allocation. For diversified investors, a thematic robotics and AI fund (BOTZ) gives exposure to the theme without single-stock concentration.",
+    "tickers": ["MSFT", "TSM", "NVDA", "BOTZ"],
     "asset_classes": ["Equities"],
     "macro_themes": ["Cloud Monetization", "Semiconductor Cycle"]
   },

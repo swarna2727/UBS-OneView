@@ -12,6 +12,8 @@ from reportlab.graphics.charts.piecharts import Pie
 from reportlab.graphics.shapes import Drawing, Line, Rect, String
 from reportlab.lib import colors
 
+from src.tools.risk_engine import risk_points
+
 BEFORE = colors.HexColor("#86b6ef")
 AFTER = colors.HexColor("#1c5cab")
 SERIES = [colors.HexColor(c) for c in ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")]
@@ -62,23 +64,26 @@ def before_after_bars(title: str, categories: List[str], before: List[float], af
 
 
 def risk_band(title: str, band: Sequence[float], points: Dict[str, float], width: float = WIDTH, height: float = 95) -> Drawing:
-    """The client's risk band on a 1-5 scale with markers for willingness, capacity and portfolio scores."""
+    """The client's risk band on the 0-100 scale the RM sees, with markers for willingness, capacity and portfolio scores.
+
+    Inputs are 1-5 scores (what the rules use); they are converted for display."""
     d = Drawing(width, height)
     _title(d, title, height)
     x0, x1, y = 120, width - 100, 32
-    scale = lambda v: x0 + (min(max(v, 1.0), 5.0) - 1.0) / 4.0 * (x1 - x0)
+    scale = lambda v: x0 + min(max(v, 0), 100) / 100.0 * (x1 - x0)
     d.add(Line(x0, y, x1, y, strokeColor=MUTED, strokeWidth=0.6))
-    for tick in range(1, 6):
+    for tick in range(0, 101, 20):
         d.add(Line(scale(tick), y - 3, scale(tick), y + 3, strokeColor=MUTED, strokeWidth=0.6))
         d.add(String(scale(tick), y - 13, str(tick), fontName="Helvetica", fontSize=7, fillColor=MUTED, textAnchor="middle"))
-    d.add(Rect(scale(band[0]), y + 6, scale(band[1]) - scale(band[0]), 14, fillColor=colors.HexColor("#cde2fb"), strokeColor=None))
-    d.add(String(scale(band[0]), y + 23, f"Applied band {band[0]:.1f}-{band[1]:.1f}", fontName="Helvetica", fontSize=7, fillColor=MUTED))
-    d.add(String(0, y + 9, "Risk score", fontName="Helvetica", fontSize=7, fillColor=MUTED))
+    lo, hi = risk_points(band[0]), risk_points(band[1])
+    d.add(Rect(scale(lo), y + 6, scale(hi) - scale(lo), 14, fillColor=colors.HexColor("#cde2fb"), strokeColor=None))
+    d.add(String(scale(lo), y + 23, f"Applied band {lo}-{hi}", fontName="Helvetica", fontSize=7, fillColor=MUTED))
+    d.add(String(0, y + 9, "Risk (0-100)", fontName="Helvetica", fontSize=7, fillColor=MUTED))
     items = []
     for i, (label, value) in enumerate(points.items()):
         color = SERIES[i % len(SERIES)]
-        d.add(Rect(scale(value) - 3, y + 10, 6, 6, fillColor=color, strokeColor=colors.white))
-        items.append((color, f"{label} {value:.2f}"))
+        d.add(Rect(scale(risk_points(value)) - 3, y + 10, 6, 6, fillColor=color, strokeColor=colors.white))
+        items.append((color, f"{label} {risk_points(value)}"))
     _legend(d, width - 95, height - 20, items)
     return d
 

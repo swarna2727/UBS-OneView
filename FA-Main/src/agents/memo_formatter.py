@@ -14,7 +14,7 @@ from src.schemas.advisory import (
 from src.schemas.tools import RuleResult
 from src.tools.event_tools import stress_impact
 from src.tools.memo_tools import memo_consistency_validator, citation_source_mapper
-from src.tools.risk_engine import prohibited_wording, portfolio_metrics
+from src.tools.risk_engine import prohibited_wording, portfolio_metrics, risk_points, risk_band_points
 from src.tools.transcript_tools import transcript_parser, transcript_fingerprint, index_lines, lines_support_amounts
 from src.llm.base import LLMClientProtocol
 
@@ -197,15 +197,15 @@ class BriefRecordAgent(BaseAdvisoryAgent[Any, Any]):
         summary = [
             f"Objective: {'; '.join(goals)}.",
             f"Horizon {p.time_horizon_months} months; stated risk willingness '{p.stated_risk_willingness}', applied band "
-            f"{p.calculated_risk_tier} ({p.risk_score_range[0]:.1f}-{p.risk_score_range[1]:.1f}).",
+            f"{p.calculated_risk_tier} ({risk_band_points(p.risk_score_range)} on a 0-100 risk scale).",
             f"Investable assets {money(p.total_wealth, cur)}; near-term liquidity need {money(p.near_term_liquidity_need, cur)}.",
             f"Experience: {p.experience_level}.",
         ]
         risks = []
         if m["risk_score"] > p.risk_score_range[1]:
-            risks.append(f"Portfolio risk score {m['risk_score']:.2f} is above the {p.calculated_risk_tier} ceiling of {p.risk_score_range[1]:.2f}.")
+            risks.append(f"Portfolio risk {risk_points(m['risk_score'])} is above the {p.calculated_risk_tier} band of {risk_band_points(p.risk_score_range)}.")
         else:
-            risks.append(f"Portfolio risk score {m['risk_score']:.2f} is within the {p.calculated_risk_tier} band (ceiling {p.risk_score_range[1]:.2f}).")
+            risks.append(f"Portfolio risk {risk_points(m['risk_score'])} is within the {p.calculated_risk_tier} band of {risk_band_points(p.risk_score_range)}.")
         top_class, top_pct = max(p.current_asset_class_weights.items(), key=lambda kv: kv[1], default=("None", 0.0))
         if top_pct >= 40:
             risks.append(f"Largest exposure: {top_class} at {top_pct:.0f}% of the portfolio.")
@@ -263,7 +263,7 @@ class BriefRecordAgent(BaseAdvisoryAgent[Any, Any]):
             brief_id=f"BRIEF-{uuid.uuid4().hex[:8].upper()}", created_at=datetime.now().isoformat(),
             client_name=p.name, client_id=p.client_id, meeting_purpose=inputs.meeting_purpose, review_period=inputs.review_period,
             profile_summary=summary, profile_changes=changes,
-            portfolio_summary=f"Current mix: {mix}. Risk score {m['risk_score']:.2f} on a 1-5 scale.",
+            portfolio_summary=f"Current mix: {mix}. Portfolio risk {risk_points(m['risk_score'])} on a 0-100 scale.",
             portfolio_risks=risks, market_developments=developments, talking_points=talking, questions_for_client=questions,
             recommendations=recs, sources=sources, portfolio_impact=brief.portfolio_impact,
             limits_summary=limits_summary, open_actions=open_actions,
@@ -330,8 +330,8 @@ class BriefRecordAgent(BaseAdvisoryAgent[Any, Any]):
         open_items = [b.message for b in assessment.detected_breaches]
         page3 = MemoPage3PortfolioView(
             portfolio_level_impact_narrative=(
-                f"Portfolio risk score moves from {before.after_risk_score:.2f} to {after.after_risk_score:.2f} "
-                f"against the {profile.calculated_risk_tier} band ceiling of {profile.risk_score_range[1]:.2f}. "
+                f"Portfolio risk moves from {risk_points(before.after_risk_score)} to {risk_points(after.after_risk_score)} (0-100) "
+                f"against the {profile.calculated_risk_tier} band of {risk_band_points(profile.risk_score_range)}. "
                 f"Growth assets {before.growth_asset_pct:.1f}% -> {after.growth_asset_pct:.1f}%; "
                 f"largest single instrument {after.max_single_stock_ticker} at {after.max_single_stock_pct:.1f}%. "
                 f"Suitability review: {assessment.overall_status}."

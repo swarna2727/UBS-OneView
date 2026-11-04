@@ -135,5 +135,41 @@
     "effective_duration": 0.15,
     "yield_to_maturity": 0.048,
     "beta": 0.01
+  },
+  "COCO": {
+    "annualized_return_1y": 0.095,
+    "annualized_return_3y": 0.052,
+    "annualized_volatility": 0.112,
+    "sharpe_ratio": 0.42,
+    "max_drawdown": 0.215,
+    "momentum_12_1": 0.081,
+    "effective_duration": 3.9,
+    "yield_to_maturity": 0.071,
+    "credit_spread_bps": 390,
+    "beta": 0.48
+  },
+  "VCSH": {
+    "annualized_return_1y": 0.061,
+    "annualized_return_3y": 0.024,
+    "annualized_volatility": 0.032,
+    "sharpe_ratio": 0.38,
+    "max_drawdown": 0.041,
+    "momentum_12_1": 0.057,
+    "effective_duration": 2.6,
+    "yield_to_maturity": 0.046,
+    "credit_spread_bps": 70,
+    "beta": 0.08
+  },
+  "BOTZ": {
+    "annualized_return_1y": 0.214,
+    "annualized_return_3y": 0.092,
+    "annualized_volatility": 0.262,
+    "sharpe_ratio": 0.63,
+    "max_drawdown": 0.298,
+    "momentum_12_1": 0.176,
+    "forward_pe": 27.0,
+    "pb_ratio": 4.1,
+    "dividend_yield": 0.002,
+    "beta": 1.31
   }
 }

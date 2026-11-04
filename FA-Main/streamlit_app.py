@@ -32,7 +32,7 @@ from src.schemas.workspace import AdvisorActionRequest
 from src.tools.event_tools import MARKET_EVENTS, stress_impact
 from src.tools.exposure import portfolio_exposure_calculator
 from src.tools.profile_tools import profile_change_detector, required_field_validator, risk_profile_calculator
-from src.tools.risk_engine import evaluate_profile_rules, load_policy
+from src.tools.risk_engine import evaluate_profile_rules, load_policy, risk_band_points, risk_points
 
 load_dotenv()
 
@@ -548,33 +548,36 @@ def before_after_bars(frame: pd.DataFrame, title: str, height: int = 220) -> alt
 
 def metric_vs_limit(rule: Any, unit: str = "") -> alt.Chart:
     """One rule as a small multiple: before and after bars against the rule's limit line."""
-    frame = pd.DataFrame([{"Portfolio": "Before", "Value": rule.before_value}, {"Portfolio": "After", "Value": rule.after_value}])
-    limit = rule.threshold_value
+    show = risk_points if rule.metric == "risk_score" else (lambda v: v)
+    num = ".0f" if rule.metric == "risk_score" else ".2f"
+    frame = pd.DataFrame([{"Portfolio": "Before", "Value": show(rule.before_value)}, {"Portfolio": "After", "Value": show(rule.after_value)}])
+    limit = show(rule.threshold_value)
     domain_max = max(frame["Value"].max(), limit) * 1.25 or 1
     bars = alt.Chart(frame).mark_bar(cornerRadiusEnd=4).encode(
         y=alt.Y("Portfolio:N", sort=["Before", "After"], title=None, scale=alt.Scale(paddingInner=0.3)),
         x=alt.X("Value:Q", title=unit or None, scale=alt.Scale(domain=[0, domain_max])),
         color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Before", "After"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=None),
-        tooltip=["Portfolio", alt.Tooltip("Value:Q", format=".2f")])
-    labels = bars.mark_text(align="left", dx=4, color=MUTED).encode(text=alt.Text("Value:Q", format=".2f"), color=alt.value(MUTED))
+        tooltip=["Portfolio", alt.Tooltip("Value:Q", format=num)])
+    labels = bars.mark_text(align="left", dx=4, color=MUTED).encode(text=alt.Text("Value:Q", format=num), color=alt.value(MUTED))
     rule_line = alt.Chart(pd.DataFrame([{"Limit": limit}])).mark_rule(strokeDash=[4, 3], color=STATUS_COLORS["FAIL"], strokeWidth=2).encode(
-        x="Limit:Q", tooltip=[alt.Tooltip("Limit:Q", format=".2f", title="Limit")])
+        x="Limit:Q", tooltip=[alt.Tooltip("Limit:Q", format=num, title="Limit")])
     return alt.layer(bars, labels, rule_line, title=f"{STATUS_ICONS.get(rule.outcome, '')} {rule.rule_id} · {rule.name}").properties(height=120)
 
 
 def risk_scale_chart(points: list[dict[str, Any]], band: list[float]) -> alt.Chart:
-    frame = pd.DataFrame(points)
+    """Scores come in on the rules' 1-5 scale and are plotted on the 0-100 scale the RM sees."""
+    frame = pd.DataFrame([{**p, "Score": risk_points(p["Score"])} for p in points])
     order = list(frame["Measure"]) + ["Applied band"]
     y_scale = alt.Scale(domain=order)
-    band_rect = alt.Chart(pd.DataFrame([{"lo": band[0], "hi": band[1], "y": "Applied band"}])).mark_bar(color="#cde2fb", cornerRadius=4).encode(
-        x=alt.X("lo:Q", scale=alt.Scale(domain=[1, 5]), title="Risk score (1 = lowest, 5 = highest)"), x2="hi:Q",
+    band_rect = alt.Chart(pd.DataFrame([{"lo": risk_points(band[0]), "hi": risk_points(band[1]), "y": "Applied band"}])).mark_bar(color="#cde2fb", cornerRadius=4).encode(
+        x=alt.X("lo:Q", scale=alt.Scale(domain=[0, 100]), title="Risk (0 = lowest, 100 = highest)"), x2="hi:Q",
         y=alt.Y("y:N", scale=y_scale, title=None, axis=alt.Axis(labelLimit=160)),
         tooltip=[alt.Tooltip("lo:Q", title="Band from"), alt.Tooltip("hi:Q", title="Band to")])
     dots = alt.Chart(frame).mark_point(filled=True, size=170, stroke="#ffffff", strokeWidth=2).encode(
         x="Score:Q", y=alt.Y("Measure:N", scale=y_scale),
         color=alt.Color("Measure:N", scale=alt.Scale(domain=list(frame["Measure"]), range=SERIES[:len(frame)]), legend=None),
-        tooltip=["Measure", alt.Tooltip("Score:Q", format=".2f")])
-    labels = dots.mark_text(dx=14, align="left", color=MUTED).encode(text=alt.Text("Score:Q", format=".2f"), color=alt.value(MUTED))
+        tooltip=["Measure", alt.Tooltip("Score:Q", format=".0f")])
+    labels = dots.mark_text(dx=14, align="left", color=MUTED).encode(text=alt.Text("Score:Q", format=".0f"), color=alt.value(MUTED))
     return alt.layer(band_rect, dots, labels).properties(height=46 * len(order) + 40)
 
 
@@ -823,14 +826,14 @@ def render_profile_generation(profile: Any, raw: dict[str, Any]) -> None:
         st.markdown("**3 · Risk-profile calculator**  \nDeterministic, not the LLM")
         try:
             risk = risk_profile_calculator(raw)
-            st.metric("Risk willingness", f"{risk.willingness_score:.1f} / 5")
-            st.metric("Risk capacity", f"{risk.capacity_score:.1f} / 5")
+            st.metric("Risk willingness", f"{risk_points(risk.willingness_score)} / 100")
+            st.metric("Risk capacity", f"{risk_points(risk.capacity_score)} / 100")
             st.metric("Band (lower of the two)", risk.risk_tier)
         except Exception as exc:
             st.info(f"The risk band cannot be calculated yet: {exc}")
     with steps[3], st.container(border=True, height="stretch"):
         st.markdown("**4 · Standardised profile**  \nWhat the downstream agents receive")
-        st.json({"risk_tier": profile.calculated_risk_tier, "risk_score_range": profile.risk_score_range,
+        st.json({"risk_tier": profile.calculated_risk_tier, "risk_band_0_100": risk_band_points(profile.risk_score_range),
                  "time_horizon_months": profile.time_horizon_months, "near_term_liquidity_need": profile.near_term_liquidity_need,
                  "asset_class_weights": profile.current_asset_class_weights,
                  "unresolved_flags": [f.code for f in profile.unresolved_flags]}, expanded=True)
@@ -1289,7 +1292,7 @@ def render_event(ctx: dict[str, Any]) -> None:
         with right:
             a, b = st.columns(2)
             a.metric("Estimated portfolio move", f"{impact.portfolio_move_pct:+.2f}%")
-            b.metric("Risk score", f"{impact.risk_score_after:.2f}", f"{impact.risk_score_after - impact.risk_score_before:+.2f}", delta_color="inverse")
+            b.metric("Portfolio risk (0-100)", risk_points(impact.risk_score_after), risk_points(impact.risk_score_after) - risk_points(impact.risk_score_before), delta_color="inverse")
             st.markdown("**Key market risks**")
             st.markdown("\n".join(f"- {md(r)}" for r in brief.key_market_risks))
     with tabs[1]:
@@ -1464,13 +1467,14 @@ def render_suitability(ctx: dict[str, Any]) -> None:
     with tabs[1]:
         m = assessment.after_metrics
         a, b, c, d = st.columns(4)
-        a.metric("Portfolio risk score", f"{m.after_risk_score:.2f}", f"{m.risk_score_delta:+.2f} vs before", delta_color="inverse")
-        b.metric("Band ceiling", f"{profile.risk_score_range[1]:.2f}", profile.calculated_risk_tier, delta_color="off", delta_arrow="off")
+        a.metric("Portfolio risk (0-100)", risk_points(m.after_risk_score),
+                 f"{risk_points(m.after_risk_score) - risk_points(m.before_risk_score):+d} vs before", delta_color="inverse")
+        b.metric("Client band", risk_band_points(profile.risk_score_range), profile.calculated_risk_tier, delta_color="off", delta_arrow="off")
         c.metric("Growth assets", f"{m.growth_asset_pct:.1f}%")
         d.metric("Liquidity coverage (L1)", "No near-term need" if m.liquidity_coverage_ratio >= 999 else f"{m.liquidity_coverage_ratio:.2f}x")
         comparable = [r for r in assessment.rule_results if r.before_value is not None and r.after_value is not None
                       and r.threshold_value is not None and not (r.metric == "liquidity_ratio" and r.after_value >= 999)]
-        units = {"risk_score": "risk score", "growth_pct": "% of portfolio", "liquidity_ratio": "coverage (x)"}
+        units = {"risk_score": "risk (0-100)", "growth_pct": "% of portfolio", "liquidity_ratio": "coverage (x)"}
         if comparable:
             cols = st.columns(min(len(comparable), 3))
             for i, rule in enumerate(comparable):
@@ -1537,7 +1541,7 @@ def render_approval(ctx: dict[str, Any]) -> None:
         with right:
             html_block(f"<div class='callout'><b>Critic</b><br>{esc(assessment.critic_notes)}</div>")
             m = assessment.after_metrics
-            st.metric("Proposed portfolio risk", f"{m.after_risk_score:.2f}", f"band ceiling {state['profile'].risk_score_range[1]:.2f}", delta_color="off", delta_arrow="off")
+            st.metric("Proposed portfolio risk (0-100)", risk_points(m.after_risk_score), f"client band {risk_band_points(state['profile'].risk_score_range)}", delta_color="off", delta_arrow="off")
     with tabs[1]:
         if not approved:
             st.info("No set has been approved yet. Lock in all three ideas to approve the set that is formatted next.")
@@ -1752,10 +1756,19 @@ def render_brief(ctx: dict[str, Any]) -> None:
             for line in brief.market_developments:
                 with st.container(border=True):
                     st.markdown(md(line))
+    selecting = not approved and ctx["stage"] == "brief_approval"
     with tabs[3]:
         left, right = st.columns(2)
         with left, st.container(border=True, height="stretch"):
-            st.markdown("**Talking points**\n" + "\n".join(f"{i + 1}. {md(t)}" for i, t in enumerate(brief.talking_points)))
+            if selecting:
+                # Checkpoint 4 (deck slide 3): the RM selects the points to raise; only those go into the PDF.
+                st.markdown("**Talking points** · tick the points to raise with the client")
+                for i, t in enumerate(brief.talking_points):
+                    st.checkbox(md(t), value=True, key=f"cp4b_pt_{ctx['sid']}_{i}")
+            else:
+                st.markdown("**Talking points**\n" + "\n".join(f"{i + 1}. {md(t)}" for i, t in enumerate(brief.talking_points)))
+                if brief.points_not_raised:
+                    st.caption(f"{len(brief.points_not_raised)} drafted point(s) not selected by the RM (kept on the audit record).")
         with right, st.container(border=True, height="stretch"):
             st.markdown("**Questions for the client**\n" + "\n".join(f"- {md(q)}" for q in brief.questions_for_client))
     if brief.recommendations:
@@ -1778,10 +1791,13 @@ def render_brief(ctx: dict[str, Any]) -> None:
     allowed = ctx["pending"].allowed_actions
     with st.container(border=True, key="footer"):
         left, mid, right = st.columns([3, 1.4, 1], vertical_alignment="bottom")
-        note = left.text_input("Checkpoint 4 · Approve the brief — note (printed on the brief)", key=f"cp4b_note_{ctx['sid']}")
+        selected = [t for i, t in enumerate(brief.talking_points) if st.session_state.get(f"cp4b_pt_{ctx['sid']}_{i}", True)]
+        note = left.text_input(f"Checkpoint 4 · Approve the brief with {len(selected)} of {len(brief.talking_points)} talking points "
+                               "— note (printed on the brief)", key=f"cp4b_note_{ctx['sid']}")
         with mid:
-            if st.button("Approve · generate PDF", type="primary", icon=":material/verified:", width="stretch", disabled="approve" not in allowed):
-                submit_action("approve", note)
+            if st.button("Approve · generate PDF", type="primary", icon=":material/verified:", width="stretch",
+                         disabled="approve" not in allowed or not selected):
+                submit_action("approve", note, edits={"talking_points": selected})
         with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
             if st.button("Regenerate the brief (needs a note)", icon=":material/refresh:", width="stretch", disabled=not note.strip()):
                 submit_action("regenerate", note)

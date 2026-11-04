@@ -9,6 +9,7 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from src.schemas.advisory import StructuredMemo
+from src.tools.risk_engine import risk_points
 
 def memo_consistency_validator(critic_output: Any, memo_content: Any) -> bool:
     """
@@ -152,7 +153,7 @@ def decision_record_renderer(record: Any, impact: Any, output_path: str, charts:
         Spacer(1, 6),
         Paragraph("1. What changed", s["section"]), Paragraph(impact.event_description, s["body"]),
         Paragraph("2. Client impact", s["section"]),
-        Paragraph(f"{impact.rationale} Portfolio risk score {impact.risk_score_before:.2f} -> {impact.risk_score_after:.2f}.", s["body"]),
+        Paragraph(f"{impact.rationale} Portfolio risk {risk_points(impact.risk_score_before)} -> {risk_points(impact.risk_score_after)} (0-100).", s["body"]),
     ]
     story += [KeepTogether([c, Spacer(1, 6)]) for c in (charts or [])]
     rows = [[Paragraph(f"<b>{h}</b>", s["bold"]) for h in ("Rule", "Outcome", "Detail")]]

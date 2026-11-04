@@ -266,6 +266,7 @@ class MeetingBrief(BaseModel):
     portfolio_risks: List[str]
     market_developments: List[str]
     talking_points: List[str]
+    points_not_raised: List[str] = Field(default_factory=list)  # drafted points the RM chose not to raise (kept for audit)
     questions_for_client: List[str]
     recommendations: List[ExecutiveIdeaGlance] = Field(default_factory=list)  # only when the profile changed
     portfolio_impact: List[HoldingMove] = Field(default_factory=list)  # facts only: what moved and by how much

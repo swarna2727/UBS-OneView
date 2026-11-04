@@ -1,6 +1,7 @@
 """Trajectory tests for the three use cases: separate triggers and paths over the same agents (layer T)."""
 
 import copy
+import json
 import os
 import pytest
 from src.api.service import AdvisorySessionService
@@ -88,8 +89,27 @@ def test_pre_meeting_advisor_can_opt_in_to_ideas(sample_profiles):
     assert len(service.get_state(sid)["meeting_brief"].recommendations) == 3
 
 
+def test_pre_meeting_rm_selects_the_points_to_raise(sample_profiles):
+    """UC1 checkpoint 4 (deck slide 3): only the talking points the RM selects go into the approved brief."""
+    service = new_service()
+    sid = "uc1_select"
+    service.start_session(client(sample_profiles, "demo_sarah", use_case="pre_meeting"), session_id=sid)
+    for _ in range(3):
+        act(service, sid, action="approve")
+    drafted = service.get_state(sid)["meeting_brief"].talking_points
+    assert len(drafted) >= 2
+    with pytest.raises(ValueError, match="talking points"):
+        act(service, sid, action="approve", edits={"talking_points": []})
+    with pytest.raises(ValueError, match="talking points"):
+        act(service, sid, action="approve", edits={"talking_points": ["A point the RM typed in"]})
+    view = act(service, sid, action="approve", edits={"talking_points": drafted[:1]})
+    brief = service.get_state(sid)["meeting_brief"]
+    assert view.outcome == "APPROVED" and brief.talking_points == drafted[:1] and brief.points_not_raised == drafted[1:]
+
+
 def test_adhoc_request_adds_capital_and_regenerates_only_failed_idea(sample_profiles):
-    """UC2: new capital is held as cash; Idea 2 fails R4, Ideas 1 and 3 are locked, only slot 2 is regenerated."""
+    """UC2 (deck slides 8, 9, 31): two aligned ideas and one exploratory. Idea 2 is blocked by client limits (E1),
+    Ideas 1 and 3 are locked and only Idea 2 is regenerated, as short-duration investment-grade bonds."""
     service = new_service()
     sid = "uc2_sarah"
     service.start_session(client(sample_profiles, "demo_sarah", use_case="adhoc_request", new_capital_amount=120000.0), session_id=sid)
@@ -99,10 +119,15 @@ def test_adhoc_request_adds_capital_and_regenerates_only_failed_idea(sample_prof
     act(service, sid, action="approve")  # confirm client data
     act(service, sid, action="approve")  # check limits
     act(service, sid, action="approve")  # review sources
-    rounds = service.get_state(sid)["idea_rounds"]
+    state = service.get_state(sid)
+    rounds = state["idea_rounds"]
     assert by_slot(rounds[0]) == {1: "PASS", 2: "FAIL", 3: "PASS"}
     assert rounds[1]["trigger"] == {"source": "auto_regeneration", "slots": [2]} and rounds[1]["overall_status"] == "PASS"
-    assert [h["rules"] for h in service.get_state(sid)["regeneration_history"]] == [["R4"]]
+    assert [h["rules"] for h in state["regeneration_history"]] == [["E1"]]
+    ideas = {i.slot_number: i for i in state["candidate_ideas"].ideas}
+    assert [ideas[s].lane for s in (1, 2, 3)] == ["ALIGNED", "ALIGNED", "EXPLORATORY"]
+    assert ideas[2].ticker == "VCSH" and ideas[2].indicative_amount_range == [30000.0, 40000.0]
+    assert "COCO" not in json.dumps(service.get_pending_review(sid), default=str)  # the blocked product is never shown
 
 
 def test_market_event_monitor_records_decision_without_trades(sample_profiles):

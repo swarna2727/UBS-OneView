@@ -11,7 +11,7 @@ from src.graph.state import AdvisoryState
 from src.schemas.workspace import AdvisorWorkspaceView, AdvisorActionRequest
 from src.api.views import build_workspace_view
 from src.graph.routing import (
-    normalize_action, ADHOC_REQUEST, POST_MEETING, USE_CASES, REVIEW_EVENT, REVIEW_LIMITS, REVIEW_RECORD, orchestration_plan
+    normalize_action, ADHOC_REQUEST, POST_MEETING, USE_CASES, REVIEW_BRIEF, REVIEW_EVENT, REVIEW_LIMITS, REVIEW_RECORD, orchestration_plan
 )
 from src.llm.base import LLMClientProtocol
 from src.llm.openrouter import default_llm_client
@@ -196,6 +196,11 @@ class AdvisorySessionService:
                 raise ValueError("Approving a profile change the Critic flagged must document the RM's reasoning in 'notes'.")
         if stage == REVIEW_RECORD and action == "edit_record" and not isinstance(action_request.edits, dict):
             raise ValueError("edit_record needs 'edits' with actions (action_id, owner, due_date, description) and/or email_subject / email_body.")
+        if stage == REVIEW_BRIEF and action == "approve" and "talking_points" in (action_request.edits or {}):
+            selected = action_request.edits["talking_points"]
+            drafted = (pending_review.get("output") or {}).get("talking_points") or []
+            if not isinstance(selected, list) or not selected or not set(selected) <= set(drafted):
+                raise ValueError("edits.talking_points must select at least one of the drafted talking points, unchanged.")
         if action == "monitor" and not str((action_request.edits or {}).get("follow_up", "")).strip():
             raise ValueError("A 'monitor' decision needs a follow-up trigger or date in edits.follow_up.")
         if action in ("lock_idea", "unlock_idea"):

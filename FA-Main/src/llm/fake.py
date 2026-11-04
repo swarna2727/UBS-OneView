@@ -261,33 +261,48 @@ class FakeAdvisoryLLMClient:
     }
 
     # (ticker, instrument_id, name, target %, role, thesis, why now, client fit, risks, invalidation, conviction,
-    #  alternative, evidence, action); a slot's later entries are used when that slot is regenerated.
+    #  alternative, evidence, action[, (min %, max %)]); a slot's later entries are used when that slot is regenerated.
+    # The optional range narrows the default +/-50% band so the indicative amount matches the deck's idea card.
     SARAH_POOLS = {
+        # Deck slides 8, 9 and 31: Idea 1 aligned (diversified equity), Idea 2 aligned (investment-grade bonds),
+        # Idea 3 exploratory (a new theme). Idea 2 first proposes AT1 CoCo bonds, a complex product a retail client
+        # cannot be offered: the critic fails it on client limits (E1), Ideas 1 and 3 are locked and only Idea 2 is
+        # regenerated, as short-duration investment-grade bonds (S$30-40k of the S$120k).
         "adhoc_request": {
-            1: [("ACWI", "EQ-ACWI", "iShares MSCI ACWI ETF", 45.0, "GROWTH",
-                 "Broad global equity exposure compounds long-term growth without adding single-market risk.",
+            1: [("ACWI", "EQ-ACWI", "iShares MSCI ACWI ETF", 44.5, "GROWTH",
+                 "Increase diversified global equity exposure, which compounds long-term growth without adding single-market risk.",
                  "Global earnings revisions have stabilised and valuations outside the US remain below their long-run average.",
                  "Puts part of the S$120k to work for the 8-year home goal while keeping equities near Sarah's existing 45% mix.",
                  ["Equity drawdown", "Currency translation risk"], "Global earnings revisions turn negative for two quarters.",
-                 "Medium", "A US-only growth fund (rejected: adds single-market concentration).", ["SRC-UBS-CIO-2026-101"], "ADD")],
-            2: [("HYG", "FI-USHY", "iShares iBoxx $ High Yield Corporate Bond ETF", 12.0, "STABILITY",
-                 "High-yield credit offers a higher running yield than investment-grade bonds.",
-                 "All-in yields on high-yield credit remain elevated.",
+                 "Medium", "A US-only growth fund (rejected: adds single-market concentration).", ["SRC-UBS-CIO-2026-101"], "ADD",
+                 (43.0, 46.0))],
+            2: [("COCO", "FI-AT1", "WisdomTree AT1 CoCo Bond UCITS ETF", 3.8, "STABILITY",
+                 "Bank capital bonds add a higher running yield to the bond allocation.",
+                 "AT1 yields remain elevated after the last spread widening.",
                  "Adds income to the portfolio from part of the new capital.",
-                 ["Default risk", "Equity-like drawdowns in a recession"], "High-yield spreads widen above 450bps.",
-                 "Low", "Investment-grade bonds (lower yield).", ["SRC-UBS-CIO-2026-101"], "ADD"),
-                ("IEF", "FI-US10Y", "iShares 7-10 Year Treasury Bond ETF", 6.0, "STABILITY",
-                 "High-quality government bonds dampen equity drawdowns and lock in attractive real yields.",
-                 "Policy rates are expected to ease gradually, which supports intermediate Treasuries.",
-                 "Adds a stabiliser that fits Sarah's Moderate band, replacing the high-yield idea the critic rejected.",
-                 ["Duration volatility if inflation re-accelerates"], "Fed signals renewed hikes.",
-                 "Medium", "High-yield credit (rejected: breaches the risk band).", ["SRC-FED-MINUTES-2026-09"], "ADD"),
-                ("IEAC", "FI-EUCORP", "iShares Core Euro Corporate Bond UCITS ETF", 6.0, "STABILITY",
+                 ["Write-down or conversion risk", "Equity-like drawdowns in a banking stress"], "AT1 spreads widen above 500bps.",
+                 "Low", "Senior investment-grade bonds (lower yield).", ["SRC-UBS-CIO-2026-101"], "ADD", (3.26, 4.35)),
+                ("VCSH", "FI-SDIG", "Vanguard Short-Term Corporate Bond ETF", 3.8, "STABILITY",
+                 "Add short-duration investment-grade bonds: bonds are 30% of Sarah's portfolio, below the 40% in the CIO's moderate-risk reference mix.",
+                 "CIO view: quality fixed income is favoured while rate expectations ease; short duration keeps most of the carry with limited rate sensitivity.",
+                 "Fits Sarah's 8-year goal: stability for a home down payment.",
+                 ["Interest-rate moves can lower bond prices", "Maturing bonds may be reinvested at lower rates"],
+                 "CIO turns negative on investment-grade credit.", "Medium",
+                 "Longer-dated government bonds (more sensitive to rate moves).", ["SRC-UBS-CIO-2026-101"], "ADD", (3.26, 4.35)),
+                ("IEAC", "FI-EUCORP", "iShares Core Euro Corporate Bond UCITS ETF", 3.8, "STABILITY",
                  "European investment-grade credit adds carry with moderate duration.",
                  "ECB easing supports spread compression.", "A lower-risk stabiliser within the Moderate band.",
                  ["Credit spread widening", "EUR currency risk"], "Euro area IG spreads above 180bps.",
-                 "Medium", "US Treasuries.", ["SRC-EURO-CREDIT-2026-10"], "ADD")],
-            3: [("GLD", "CM-GOLD", "SPDR Gold Shares", 11.0, "DIVERSIFICATION",
+                 "Medium", "US Treasuries.", ["SRC-EURO-CREDIT-2026-10"], "ADD", (3.26, 4.35))],
+            3: [("BOTZ", "EQ-BOTZ", "Global X Robotics & Artificial Intelligence ETF", 2.5, "GROWTH",
+                 "Explore robotics and AI as a new theme for Sarah, through a small, clearly labelled position.",
+                 "CIO research: AI workloads keep driving demand, and a diversified thematic fund avoids single-stock concentration.",
+                 "Kept to about 2-3% of the portfolio so the exploratory theme cannot move Sarah outside her Moderate band.",
+                 ["Thematic funds can fall sharply when growth expectations reset", "Concentrated in technology",
+                  "Currency translation risk"], "CIO turns negative on AI investment for two quarters.", "Low",
+                 "A broad global technology fund (too close to the existing ACWI exposure).", ["SRC-UBS-CIO-2026-102"], "ADD",
+                 (2.0, 3.0)),
+                ("GLD", "CM-GOLD", "SPDR Gold Shares", 11.0, "DIVERSIFICATION",
                  "Gold diversifies equity and rate risk and has low correlation with the rest of the portfolio.",
                  "Central-bank buying continues to support demand.",
                  "A small top-up keeps the diversifier at about one tenth of the larger portfolio.",
@@ -346,7 +361,7 @@ class FakeAdvisoryLLMClient:
             self._slot_attempts = {1: 0, 2: 0, 3: 0}
 
         # Sarah is the demo client for all three use cases, so her offline ideas follow the use case.
-        # UC2 (deploy S$120k): Idea 2 first proposes high-yield credit as "stability"; the critic fails it on R4,
+        # UC2 (deploy S$120k): Idea 2 first proposes a product her client limits block; the critic fails it on E1,
         # locks Ideas 1 and 3 and regenerates only Idea 2. The critic remains the authority on every set.
         use_case = re.search(r"ADVISORY USE CASE: (\w+)", user_prompt)
         sarah_pool = self.SARAH_POOLS.get(use_case.group(1) if use_case else "") if "Client: Sarah Tan (CL-DEMO-001)" in user_prompt else None
@@ -369,15 +384,16 @@ class FakeAdvisoryLLMClient:
             if daniel_first_round and slot == 2:
                 (ticker, inst, name, weight, role, thesis, why_now, fit, risks, trigger,
                  conviction, alternative, evidence) = daniel_growth
-            action = "ADD"
+            action, (low, high) = "ADD", (round(weight * 0.5, 1), round(weight * 1.5, 1))
             if sarah_pool:
                 options = sarah_pool[slot]
                 (ticker, inst, name, weight, role, thesis, why_now, fit, risks, trigger,
-                 conviction, alternative, evidence, action) = options[min(self._slot_attempts[slot], len(options) - 1)]
+                 conviction, alternative, evidence, action, *band) = options[min(self._slot_attempts[slot], len(options) - 1)]
+                low, high = band[0] if band else (round(weight * 0.5, 1), round(weight * 1.5, 1))
             ideas.append(InvestmentIdea(
                 idea_id=f"IDEA-{ticker}-{slot:02d}", slot_number=slot, instrument_id=inst, ticker=ticker, name=name,
                 action=action, target_weight_pct=weight,
-                allocation_range=AllocationRange(min_pct=round(weight * 0.5, 1), max_pct=round(weight * 1.5, 1), target_pct=weight),
+                allocation_range=AllocationRange(min_pct=low, max_pct=high, target_pct=weight),
                 funding_source_ticker="BIL", portfolio_role=role, thesis=thesis, why_now=why_now,
                 client_fit_rationale=fit, key_risks=risks, invalidation_trigger=trigger,
                 cited_evidence_ids=evidence, conviction=conviction, alternative_considered=alternative

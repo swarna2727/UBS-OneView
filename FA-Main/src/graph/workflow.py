@@ -602,6 +602,14 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         update: Dict[str, Any] = {"human_action": human_action, "review_outcome": outcome}
         if human_action.get("notes"):
             update["advisor_notes"] = [f"Meeting brief note: {human_action['notes']}"]
+        selected = (human_action.get("edits") or {}).get("talking_points")
+        if outcome == "approve" and selected is not None:
+            # The RM selects the points to raise (deck slide 3, checkpoint 4). Drafted text is kept as written;
+            # points left out stay on the brief record for audit but not in the PDF's talking points.
+            brief = state["meeting_brief"]
+            update["meeting_brief"] = brief.model_copy(update={
+                "talking_points": [t for t in brief.talking_points if t in selected],
+                "points_not_raised": [t for t in brief.talking_points if t not in selected]})
         if outcome == "reject":
             update["rejected_at_stage"] = REVIEW_BRIEF
         update["audit_trail"] = _review_audit(state, REVIEW_BRIEF, human_action, outcome)
