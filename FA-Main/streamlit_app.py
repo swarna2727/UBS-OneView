@@ -71,13 +71,13 @@ EXPERIENCE_OPTIONS = ["New investor", "Limited", "ETF investor", "Knowledgeable"
 
 # Workflow steps per use case: key, label, checkpoint (None = output page, no advisor decision).
 STEPS = {
-    PRE_MEETING: [("profile", "Client profile", "CP1"), ("limits", "Client limits", "Limits"), ("research", "Market landscape", "CP2"),
-                  ("ideas", "Opportunities", None), ("suitability", "Fit & eligibility", None),
-                  ("approval", "Lock in ideas", "CP3"), ("brief", "Meeting brief", "CP4")],
-    ADHOC: [("profile", "Client inputs", "CP1"), ("limits", "Client limits", "Limits"), ("research", "Research", "CP2"),
-            ("ideas", "Opportunities", None), ("suitability", "Fit & eligibility", None),
-            ("approval", "Keep / edit ideas", "CP3"), ("memo", "Memo & sign-off", "CP4")],
-    POST_MEETING: [("profile", "Client profile", None), ("meeting", "Meeting record", "Record")],
+    PRE_MEETING: [("profile", "Profile", "CP1"), ("limits", "Limits", "Limits"), ("research", "Market", "CP2"),
+                  ("ideas", "Ideas", None), ("suitability", "Checks", None),
+                  ("approval", "Lock ideas", "CP3"), ("brief", "Brief", "CP4")],
+    ADHOC: [("profile", "Profile", "CP1"), ("limits", "Limits", "Limits"), ("research", "Research", "CP2"),
+            ("ideas", "Ideas", None), ("suitability", "Checks", None),
+            ("approval", "Lock ideas", "CP3"), ("memo", "Memo", "CP4")],
+    POST_MEETING: [("profile", "Profile", None), ("meeting", "Record", "Record")],
     EVENT: [("profile", "Client profile", None), ("event", "Event impact", "Decide"),
             ("ideas", "Candidate ideas", None), ("suitability", "Suitability check", None),
             ("approval", "Advisor approval", "CP3"), ("memo", "Memo & sign-off", "CP4"), ("record", "Decision record", None)],
@@ -98,7 +98,7 @@ st.html("""
   header[data-testid="stHeader"] { background: transparent; }
   header[data-testid="stHeader"], header[data-testid="stHeader"] * { pointer-events: none !important; }
   header[data-testid="stHeader"] button, header[data-testid="stHeader"] button * { pointer-events: auto !important; }
-  [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: .9rem; }
+  [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: 1.1rem; }
   h1, h2, h3, h4 { font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; letter-spacing: -0.02em; color: var(--ink); }
   h2 { font-size: 1.3rem !important; font-weight: 600; padding: 0 !important; margin: 0 !important; }
   h4 { font-size: .95rem !important; font-weight: 600; padding: .2rem 0 0 !important; margin: 0 0 .2rem !important; }
@@ -106,7 +106,7 @@ st.html("""
   /* cards: every bordered container is a white rounded card with a soft shadow */
   [class*="st-key-card_"], .st-key-footer, .st-key-footer_done {
     background: #fff; border: 1px solid #efefec !important; border-radius: 14px !important;
-    box-shadow: 0 1px 2px rgba(20, 20, 20, .04), 0 6px 18px rgba(20, 20, 20, .04); }
+    box-shadow: 0 1px 2px rgba(20, 20, 20, .04), 0 6px 18px rgba(20, 20, 20, .04); padding: 1.1rem 1.25rem !important; }
   .st-key-footer { border-left: 3px solid var(--brand-red) !important; }
   .st-key-footer_done { border-left: 3px solid #0ca30c !important; }
   [data-testid="stExpander"] details { border: 1px solid var(--line); border-radius: 10px; background: #fff; }
@@ -145,7 +145,7 @@ st.html("""
   .client-chip b { font-size: .88rem; }
 
   /* top bar on every workflow page */
-  .topbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; padding: .2rem 0 .4rem; border-bottom: 1px solid var(--line); }
+  .topbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; padding: .2rem 0 .7rem; border-bottom: 1px solid var(--line); margin-bottom: .3rem; }
   .topbar .title { font-size: 1.3rem; font-weight: 600; letter-spacing: -.02em; }
 
   /* status pills */
@@ -255,6 +255,12 @@ def card(height: int | str | None = None) -> Any:
     return st.container(border=True, key=f"card_{next(_CARD_IDS)}", **kwargs)
 
 
+def merge_tabs(names: list[str], layout: list[int]) -> list[Any]:
+    """At most three tabs; layout maps each content section, in order, to a tab."""
+    tabs = st.tabs(names)
+    return [tabs[i] for i in layout]
+
+
 def html_block(markup: str) -> None:
     st.markdown(markup, unsafe_allow_html=True)
 
@@ -312,7 +318,7 @@ def visible_steps(ctx: dict[str, Any]) -> list[tuple[str, str, str | None]]:
             if key == "record" and decision not in ("MAINTAIN", "MONITOR"):
                 continue
         steps.append((key, label, cp))
-    return steps + [("audit", "Audit & performance", None)]
+    return steps + [("audit", "Audit", None)]
 
 
 def nav_status(key: str, ctx: dict[str, Any]) -> str:
@@ -722,17 +728,17 @@ def page_header(ctx: dict[str, Any], key: str, title: str, subtitle: str, status
     cp = next((c for k, _, c in STEPS[ctx["use_case"]] if k == key), None)
     position = f"Step {steps.index(key) + 1} of {len(steps)} · " if key in steps else ""
     checkpoint = f" · Checkpoint {cp[2:]}" if cp and cp.startswith("CP") else (" · Advisor decision" if cp else "")
-    html_block(f"<div class='topbar'><div><div class='eyebrow'>{esc(position + PAGE_ROLES[key] + checkpoint)}</div>"
-               f"<div class='title'>{esc(title)}</div></div><div>{status_html}</div></div>")
+    label = next((lbl for k, lbl, _ in visible_steps(ctx) if k == key), title)
+    html_block(f"<div class='topbar'><div class='title'>{esc(label)}</div><div>{status_html}</div></div>")
 
 
 def lineage_strip(state: dict[str, Any], active: str, final_label: str) -> None:
     counts = idea_lineage(state)
     steps = [
-        ("ideas", "Candidate set", f"{counts['generated']} ideas"),
-        ("suitability", "System-checked set", f"{counts['checked']}/3 suitable"),
-        ("approval", "Human-approved set", f"{counts['approved']}/3" if counts["approved"] else "pending"),
-        ("final", final_label, f"{counts['final']} ideas" if counts["final"] else "pending"),
+        ("ideas", "Candidates", str(counts["generated"])),
+        ("suitability", "Checked", f"{counts['checked']}/3"),
+        ("approval", "Approved", f"{counts['approved']}/3" if counts["approved"] else "—"),
+        ("final", final_label, str(counts["final"]) if counts["final"] else "—"),
     ]
     parts = []
     order = [k for k, *_ in steps]
@@ -762,16 +768,16 @@ def done_footer(ctx: dict[str, Any], current: str, message: str) -> None:
         left.markdown(md(message))
         target = next_step(ctx, current)
         if target:
-            right.button(f"Next: {target[1]}", icon=":material/arrow_forward:", type="primary", width="stretch",
+            right.button("Next", icon=":material/arrow_forward:", type="primary", width="stretch", help=target[1],
                          on_click=go, args=(target[0],), key=f"next_{current}")
 
 
 def decision_summary(ctx: dict[str, Any], stage: str, label: str) -> str:
     rows = checkpoint_decisions(ctx["state"], stage)
     if not rows:
-        return f"{label} not reached yet."
+        return "Not reached"
     last = rows[-1]
-    return f"✓ **{label}** · decision **{last['Decision']}** at {last['Time']}" + (f" · “{last['Advisor note']}”" if last["Advisor note"] else "")
+    return f"✓ **{last['Decision']}** · {last['Time']}"
 
 
 # --------------------------------------------------------------------------------------
@@ -805,11 +811,11 @@ def render_sidebar(ctx: dict[str, Any]) -> None:
                 f".st-key-nav_{k} button {{ border-color: #fab219 !important; box-shadow: inset 3px 0 0 #fab219; }}" for k in action_keys
             ) + "</style>")
         if ctx["outcome"] == "APPROVED":
-            st.success("Workflow complete · PDF ready", icon=":material/verified:")
+            st.success("Complete", icon=":material/verified:")
         elif ctx["outcome"] == "REJECTED":
-            st.error("Workflow rejected", icon=":material/block:")
+            st.error("Rejected", icon=":material/block:")
         html_block("<span class='side-label'>Navigate</span>")
-        st.button("Back to client", icon=":material/arrow_back:", on_click=back_to_client, width="stretch", key="nav_back")
+        st.button("Client home", icon=":material/arrow_back:", on_click=back_to_client, width="stretch", key="nav_back")
         st.button("All clients", icon=":material/groups:", on_click=reset_to_client_list, width="stretch", key="nav_all_clients")
         html_block(user_chip())
 
@@ -872,33 +878,38 @@ def profile_form(ctx: dict[str, Any], raw: dict[str, Any], editable: bool) -> tu
     k = lambda name: f"pf_{sid}_{name}"
     left, right = st.columns(2)
     with left:
-        goals = st.text_area("Investment objective(s) * — one per line", value="\n".join(raw.get("goals") or []), height=80,
+        goals = st.text_area("Goals *", value="\n".join(raw.get("goals") or []), height=80,
                              key=k("goals"), disabled=not editable)
         c1, c2 = st.columns(2)
-        horizon = c1.number_input("Time horizon (months) *", min_value=0, step=6, value=int(raw.get("time_horizon_months") or 0),
+        horizon = c1.number_input("Horizon (months) *", min_value=0, step=6, value=int(raw.get("time_horizon_months") or 0),
                                   key=k("horizon"), disabled=not editable, help="0 = not recorded (R1 blocks the workflow)")
-        wealth = c2.number_input("Investable wealth *", min_value=0.0, step=10000.0, value=float(raw.get("total_wealth") or 0),
+        wealth = c2.number_input("Wealth *", min_value=0.0, step=10000.0, value=float(raw.get("total_wealth") or 0),
                                  key=k("wealth"), disabled=not editable)
         risk_opts = RISK_OPTIONS if raw.get("stated_risk_willingness") in RISK_OPTIONS else [raw.get("stated_risk_willingness") or "Moderate"] + RISK_OPTIONS
         exp_opts = EXPERIENCE_OPTIONS if raw.get("experience_level") in EXPERIENCE_OPTIONS else [raw.get("experience_level") or "ETF investor"] + EXPERIENCE_OPTIONS
         c1, c2 = st.columns(2)
-        risk = c1.selectbox("Risk willingness *", risk_opts, index=risk_opts.index(raw.get("stated_risk_willingness") or risk_opts[0]),
+        risk = c1.selectbox("Risk *", risk_opts, index=risk_opts.index(raw.get("stated_risk_willingness") or risk_opts[0]),
                             key=k("risk"), disabled=not editable)
-        experience = c2.selectbox("Investment experience", exp_opts, index=exp_opts.index(raw.get("experience_level") or exp_opts[0]),
+        experience = c2.selectbox("Experience", exp_opts, index=exp_opts.index(raw.get("experience_level") or exp_opts[0]),
                                   key=k("exp"), disabled=not editable)
         capital = None
         if uc == ADHOC:
-            capital = st.number_input("New capital to deploy *", min_value=0.0, step=10000.0, value=float(raw.get("new_capital_amount") or 0),
+            capital = st.number_input("New capital *", min_value=0.0, step=10000.0, value=float(raw.get("new_capital_amount") or 0),
                                       key=k("capital"), disabled=not editable, help="Added to the portfolio as cash; the ideas deploy it")
     with right:
-        st.caption("Liquidity needs * — planned cash needs (an empty table means none)")
-        liquidity = st.data_editor(pd.DataFrame(raw.get("liquidity_schedule") or [], columns=["due_months", "amount", "purpose"]),
+        schedule = raw.get("liquidity_schedule") or []
+        positions = raw.get("raw_holdings") or []
+        st.metric("Holdings *", f"{len(positions)} positions", f"{sum(float(h.get('weight_pct') or 0) for h in positions):.0f}% allocated",
+                  delta_color="off", delta_arrow="off")
+        liq_label = (f"Liquidity * · {len(schedule)}" if schedule else "Liquidity * · none")
+        with st.expander(liq_label, expanded=False):
+          liquidity = st.data_editor(pd.DataFrame(raw.get("liquidity_schedule") or [], columns=["due_months", "amount", "purpose"]),
                                    num_rows="dynamic", hide_index=True, width="stretch", height=110, key=k("liq"), disabled=not editable,
                                    column_config={"due_months": st.column_config.NumberColumn("Due (months)", min_value=1),
                                                   "amount": st.column_config.NumberColumn("Amount", min_value=0.0, format="%.0f"),
                                                   "purpose": st.column_config.TextColumn("Purpose")})
-        st.caption("Holdings * — weights must total 100%")
-        holdings = st.data_editor(pd.DataFrame(_norm_holdings(raw.get("raw_holdings") or [])), num_rows="dynamic", hide_index=True,
+        with st.expander("Holdings *"):
+          holdings = st.data_editor(pd.DataFrame(_norm_holdings(raw.get("raw_holdings") or [])), num_rows="dynamic", hide_index=True,
                                   width="stretch", height=180, key=k("hold"), disabled=not editable,
                                   column_config={"weight_pct": st.column_config.NumberColumn("Weight %", min_value=0.0, max_value=100.0, format="%.1f"),
                                                  "risk_rating": st.column_config.NumberColumn("Risk 1–5", min_value=1, max_value=5)})
@@ -968,21 +979,20 @@ def render_profile(ctx: dict[str, Any]) -> None:
     raw = state.get("raw_input") or {}
     pending = ctx["stage"] == "client_profile"
     open_flags = [f for f in (profile.unresolved_flags if profile else []) if not f.is_resolved]
-    status_html = pill("FLAG", f"{len(open_flags)} flag(s) to resolve") if open_flags else pill("PASS", "No open flags")
+    status_html = pill("FLAG", f"{len(open_flags)} flags") if open_flags else pill("PASS", "No flags")
     subtitle = {PRE_MEETING: "Confirm or update what the client tells you. Required fields (*) must be complete to continue.",
                 ADHOC: "Confirm the request: amount to deploy, horizon, liquidity and risk. Required fields (*) must be complete.",
                 EVENT: "From the client record (confirmed at the last review). Shown for reference.",
                 POST_MEETING: "From the client record. Shown for reference; spoken changes are proposed on the meeting record."}[uc]
     page_header(ctx, "profile", "Client profile", subtitle, status_html if profile else "")
     if not profile:
-        st.info("The client profile appears when the workflow starts.")
+        st.info("Not reached")
         return
     changes = profile_change_detector(raw, raw.get("last_review") or {}) if uc == PRE_MEETING else []
-    tab_names = ["Client details *"]
     if uc == PRE_MEETING:
-        tab_names.append(f"Changes since last review ({len(changes)})")
-    tab_names += ["Exposure & risk", "Flags & rules", "How it was generated"]
-    tabs = st.tabs(tab_names)
+        tabs = merge_tabs(["Details", f"Changes ({len(changes)})", "Risk & checks"], [0, 1, 2, 2, 2])
+    else:
+        tabs = merge_tabs(["Details", "Risk", "Checks"], [0, 1, 2, 2])
     with tabs[0]:
         edits, missing = profile_form(ctx, raw, editable=pending)
     i = 1
@@ -990,13 +1000,10 @@ def render_profile(ctx: dict[str, Any]) -> None:
         with tabs[i]:
             last = raw.get("last_review") or {}
             if not last:
-                st.info("No previous review on record: this is treated as the first review.")
+                st.info("First review")
             elif not changes:
-                st.success(f"Nothing has changed since the last review on {last.get('date', '—')}. "
-                           "The brief is facts and points to discuss; ideas are added only if you ask for them at Checkpoint 2.")
+                st.success(f"No changes since {last.get('date', '—')}")
             else:
-                html_block(f"<div class='callout'><b>{len(changes)} change(s) since the last review on {esc(last.get('date', '—'))}.</b> "
-                           "They appear in the briefing for you to confirm with the client. Ideas are optional (Checkpoint 2).</div>")
                 html_block("<table class='grid'><tr><th>Client fact</th><th>Last review</th><th>Now</th></tr>" + "".join(
                     f"<tr><td>{esc(c['label'])}</td><td>{esc(c['before'])}</td><td><b>{esc(c['after'])}</b></td></tr>" for c in changes) + "</table>")
         i += 1
@@ -1012,9 +1019,7 @@ def render_profile(ctx: dict[str, Any]) -> None:
             points = [{"Measure": "Current portfolio", "Score": round(sum(h.risk_rating * h.weight_pct for h in profile.parsed_holdings) / total, 2)}]
             if calc:
                 points = [{"Measure": "Risk willingness", "Score": calc.willingness_score}, {"Measure": "Risk capacity", "Score": calc.capacity_score}] + points
-            show_chart(risk_scale_chart(points, profile.risk_score_range).properties(title="Risk band = lower of willingness and capacity"))
-        if profile.new_capital_amount:
-            st.caption(f"Includes {fmt_money(profile.new_capital_amount, profile.base_currency)} of new capital held as cash (BIL) until the ideas deploy it.")
+            show_chart(risk_scale_chart(points, profile.risk_score_range).properties(title="Risk band"))
     with tabs[i + 1]:
         left, right = st.columns(2)
         with left:
@@ -1032,33 +1037,33 @@ def render_profile(ctx: dict[str, Any]) -> None:
                 f"<tr><td>{esc(r.rule_id)} · {esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>"
                 for r in evaluate_profile_rules(profile)) + "</table>")
     with tabs[i + 2]:
-        render_profile_generation(profile, raw)
+        with st.expander("How it was built"):
+            render_profile_generation(profile, raw)
 
     if not pending:
-        msg = decision_summary(ctx, "client_profile", "Checkpoint 1 · profile confirmed") if uc not in (EVENT, POST_MEETING) else \
-            "Client record loaded from the last confirmed review. No profile checkpoint is needed for this workflow."
+        msg = decision_summary(ctx, "client_profile", "") if uc not in (EVENT, POST_MEETING) else "From last review"
         done_footer(ctx, "profile", msg)
         return
     allowed = ctx["pending"].allowed_actions
     with st.container(border=True, key="footer"):
         left, mid, right = st.columns([3, 1.4, 1], vertical_alignment="bottom")
         with left:
-            note = st.text_input("Checkpoint 1 · Confirm the client profile — note (optional)", key=f"cp1_note_{ctx['sid']}",
-                                 placeholder="e.g. Confirmed with the client by phone: purchase brought forward to 2034.")
+            note = st.text_input("Checkpoint 1 note", key=f"cp1_note_{ctx['sid']}", label_visibility="collapsed",
+                                 placeholder="Add a note (optional)")
             if missing:
-                st.error("Required before you can continue: " + ", ".join(missing), icon=":material/rule:")
+                st.error("Missing: " + ", ".join(missing), icon=":material/rule:")
             elif edits:
-                st.warning(f"You changed {', '.join(e.replace('_', ' ') for e in edits)}. Save to re-run the profile check.", icon=":material/edit:")
+                st.warning("Unsaved changes", icon=":material/edit:")
         with mid:
             if edits:
-                if st.button("Save changes & re-check", type="primary", icon=":material/refresh:", width="stretch", disabled=bool(missing)):
+                if st.button("Save & re-check", type="primary", icon=":material/refresh:", width="stretch", disabled=bool(missing)):
                     submit_action("regenerate", note or "Advisor updated client inputs.", edits=edits)
             else:
-                if st.button("Confirm profile · Next", type="primary", icon=":material/arrow_forward:", width="stretch",
+                if st.button("Confirm", type="primary", icon=":material/arrow_forward:", width="stretch",
                              disabled=bool(missing) or "approve" not in allowed):
                     submit_action("approve", note)
-        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
-            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="cp1_reject"):
+        with right, st.popover("More", icon=":material/more_horiz:", width="stretch"):
+            if st.button("Reject", icon=":material/block:", width="stretch", key="cp1_reject"):
                 submit_action("reject", note)
 
 
@@ -1071,14 +1076,13 @@ def render_limits(ctx: dict[str, Any]) -> None:
     offer = state.get("offer_map")
     pending = ctx["stage"] == "client_limits"
     status_pill = {"CLEAR": pill("PASS", "Clear"), "GAPS": pill("FLAG", f"{len(offer.gaps)} gap(s)") if offer else "",
-                   "ESCALATE": pill("FLAG", "Escalation open"), "BLOCKED": pill("FAIL", "Blocked: data missing")}.get(offer.status, "") if offer else ""
+                   "ESCALATE": pill("FLAG", "Escalation"), "BLOCKED": pill("FAIL", "Blocked")}.get(offer.status, "") if offer else ""
     page_header(ctx, "limits", "What UBS can offer this client",
                 "A rule layer, not an AI judgement. A blocked product is never shown; a gap is listed, never guessed.", status_pill)
     if not offer:
-        st.info("The client limits appear once the client profile is confirmed.")
+        st.info("Not reached")
         return
-    tabs = st.tabs([f"Eligible products ({len(offer.eligible_products)})", f"Blocked areas ({len(offer.blocked_areas)})",
-                    f"Gaps & escalations ({len(offer.gaps)})", "Regulatory profile"])
+    tabs = merge_tabs(["Eligible", "Blocked & gaps", "Regulatory"], [0, 1, 1, 2])
     with tabs[0]:
         if offer.eligible_products:
             from src.tools.exposure import get_instrument_metadata
@@ -1101,20 +1105,20 @@ def render_limits(ctx: dict[str, Any]) -> None:
             with st.expander(f"Product list ({len(offer.eligible_products)})"):
                 st.markdown(" · ".join(f"**{md(prod.ticker)}** {md(prod.name)}" for prod in offer.eligible_products))
         else:
-            st.error("Nothing can be offered until the gaps are resolved.", icon=":material/block:")
+            st.error("Nothing can be offered", icon=":material/block:")
     with tabs[1]:
         if offer.blocked_areas:
             html_block("<table class='grid'><tr><th>Blocked area</th><th>Why</th></tr>" + "".join(
                 f"<tr><td>{esc(a.area)}</td><td>{esc(a.reason)}</td></tr>" for a in offer.blocked_areas) + "</table>")
         else:
-            st.success("No area is blocked for this client.")
+            st.success("Nothing blocked")
     with tabs[2]:
         for flag in offer.escalation_flags:
             st.warning(flag, icon=":material/priority_high:")
         for gap in offer.gaps:
             st.markdown(f"**{md(gap.message)}**  \n{md(gap.resolution)}")
         if not offer.gaps and not offer.escalation_flags:
-            st.success("No open gaps or escalations.")
+            st.success("No gaps")
     reg = (state.get("raw_input") or {}).get("regulatory_profile") or {}
     with tabs[3]:
         c1, c2, c3 = st.columns(3)
@@ -1146,19 +1150,19 @@ def render_limits(ctx: dict[str, Any]) -> None:
         left, mid, right = st.columns([3, 1.4, 1], vertical_alignment="bottom")
         with left:
             needs_note = bool(offer.escalation_flags)
-            note = st.text_input("Check limits — note" + (" (required: escalation open, say how it is being handled)" if needs_note else " (optional)"),
-                                 key=f"lim_note_{ctx['sid']}", placeholder="e.g. CKA refresh booked for next week; specified products stay off the table until then.")
+            note = st.text_input("Client limits note", key=f"lim_note_{ctx['sid']}", label_visibility="collapsed",
+                                 placeholder="How is the escalation handled? (required)" if needs_note else "Add a note (optional)")
             if offer.status == "BLOCKED":
-                st.error("Supply the missing regulatory data in the Regulatory profile tab, then save to re-check.", icon=":material/rule:")
+                st.error("Missing regulatory data", icon=":material/rule:")
         with mid:
             if changed:
-                if st.button("Save changes & re-check", type="primary", icon=":material/refresh:", width="stretch"):
+                if st.button("Save & re-check", type="primary", icon=":material/refresh:", width="stretch"):
                     submit_action("regenerate", note or "Advisor updated the regulatory profile.", edits={"regulatory_profile": edits})
-            elif st.button("Confirm limits · Next", type="primary", icon=":material/arrow_forward:", width="stretch",
+            elif st.button("Confirm", type="primary", icon=":material/arrow_forward:", width="stretch",
                            disabled="approve" not in allowed or (needs_note and not note.strip())):
                 submit_action("approve", note)
-        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
-            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="lim_reject"):
+        with right, st.popover("More", icon=":material/more_horiz:", width="stretch"):
+            if st.button("Reject", icon=":material/block:", width="stretch", key="lim_reject"):
                 submit_action("reject", note)
 
 
@@ -1172,15 +1176,14 @@ def render_meeting(ctx: dict[str, Any]) -> None:
     approved = ctx["outcome"] == "APPROVED"
     page_header(ctx, "meeting", "After the meeting: what was agreed",
                 "OneView drafts; you confirm. Every line links to the transcript, and the client's agreement is never changed automatically.",
-                (pill("PASS", "Confirmed · record saved") if approved else pill("FLAG", "Draft: your confirmation needed")) if record else "")
+                (pill("PASS", "Saved") if approved else pill("FLAG", "Draft")) if record else "")
     if not record:
-        st.info("The record is drafted from the transcript when the workflow starts.")
+        st.info("Not reached")
         return
     pending = ctx["stage"] == "record_approval"
     open_actions = [a for a in record.actions if a.status == "FLAGGED"]
     undecided = [c for c in record.profile_changes if c.decision == "PENDING"]
-    tabs = st.tabs(["Summary", f"Actions ({len(record.actions)})", f"Profile changes ({len(record.profile_changes)})",
-                    "Follow-up email", "Compliance checks"])
+    tabs = merge_tabs(["Summary", f"Actions ({len(record.actions)})", "Email"], [0, 1, 1, 2, 2])
     with tabs[0]:
         left, right = st.columns(2)
         for col, title, lines in ((left, "What the client said", record.client_said), (right, "Decisions made", record.decisions)):
@@ -1207,7 +1210,7 @@ def render_meeting(ctx: dict[str, Any]) -> None:
                     edits.setdefault("actions", []).append({"action_id": a.action_id, "owner": owner.strip() or None, "due_date": due.strip() or None})
     with tabs[2]:
         if not record.profile_changes:
-            st.success("No change in the client's circumstances was spoken.")
+            st.success("No changes")
         for c in record.profile_changes:
             with card():
                 status = c.check.status if c.check else "FLAG"
@@ -1235,7 +1238,6 @@ def render_meeting(ctx: dict[str, Any]) -> None:
     with tabs[4]:
         for r in record.compliance_checks:
             st.markdown(f"{pill(r.outcome)} **{md(r.rule_id)} {md(r.name)}** · {md(r.message)}", unsafe_allow_html=True)
-        st.caption(f"Transcript fingerprint {record.transcript_fingerprint} · {record.transcript_lines} lines · agreement type {record.agreement_type}")
 
     if approved:
         with st.container(border=True, key="footer_done"):
@@ -1250,21 +1252,22 @@ def render_meeting(ctx: dict[str, Any]) -> None:
     with st.container(border=True, key="footer"):
         left, mid, right = st.columns([3, 1.4, 1], vertical_alignment="bottom")
         with left:
-            note = st.text_input("Confirm the record — note (printed on the record)", key=f"rec_note_{ctx['sid']}")
+            note = st.text_input("Record note", key=f"rec_note_{ctx['sid']}", label_visibility="collapsed",
+                                 placeholder="Add a note for the record (optional)")
             if open_actions:
-                st.warning(f"{len(open_actions)} action(s) still need an owner and a due date.", icon=":material/rule:")
+                st.warning(f"{len(open_actions)} actions need owner / date", icon=":material/rule:")
             if undecided:
-                st.warning(f"{len(undecided)} profile change(s) still need your decision.", icon=":material/rule:")
+                st.warning(f"{len(undecided)} changes to decide", icon=":material/rule:")
         with mid:
             if edits:
                 if st.button("Save edits", type="primary", icon=":material/save:", width="stretch"):
                     submit_action("edit_record", note, edits=edits)
-            elif st.button("Confirm · save record", type="primary", icon=":material/verified:", width="stretch", disabled="approve" not in allowed):
+            elif st.button("Confirm", type="primary", icon=":material/verified:", width="stretch", disabled="approve" not in allowed):
                 submit_action("approve", note)
-        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
-            if st.button("Re-draft from the transcript", icon=":material/refresh:", width="stretch"):
+        with right, st.popover("More", icon=":material/more_horiz:", width="stretch"):
+            if st.button("Re-draft", icon=":material/refresh:", width="stretch"):
                 submit_action("regenerate", note or "Re-draft.")
-            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="rec_reject"):
+            if st.button("Reject", icon=":material/block:", width="stretch", key="rec_reject"):
                 submit_action("reject", note)
 
 
@@ -1273,7 +1276,7 @@ def render_meeting(ctx: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------------------
 
 def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
-    tabs = st.tabs(names)
+    tabs = merge_tabs(names, [0, 1, 1, 2])
     with tabs[0]:
         findings = sorted(brief.findings, key=lambda f: f.materiality_rank)
         for col, finding in zip(st.columns(max(len(findings[:3]), 1)), findings[:3]):
@@ -1297,7 +1300,7 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
     with tabs[1]:
         frame = pd.DataFrame([m.model_dump() for m in brief.quantitative_signals.values()])
         if frame.empty:
-            st.info("No quantitative signals were retrieved.")
+            st.info("No signals")
         else:
             held = {h.ticker for h in profile.parsed_holdings}
             frame["Held"] = frame["ticker"].map(lambda t: "In portfolio" if t in held else "Universe")
@@ -1319,9 +1322,10 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
             labels = {"ticker": "Ticker", "annualized_return_1y": "1y return", "annualized_volatility": "Volatility",
                       "max_drawdown": "Max drawdown", "momentum_12_1": "Momentum 12-1", "forward_pe": "Fwd P/E", "yield_to_maturity": "Yield"}
             percent = {"annualized_return_1y", "annualized_volatility", "max_drawdown", "momentum_12_1", "yield_to_maturity"}
-            st.dataframe(frame[list(labels)], hide_index=True, width="stretch", height=min(35 * len(frame) + 40, 190),
-                         column_config={c: st.column_config.NumberColumn(label, format="percent" if c in percent else "%.1f")
-                                        if c != "ticker" else st.column_config.TextColumn(label) for c, label in labels.items()})
+            with st.expander("Table"):
+                st.dataframe(frame[list(labels)], hide_index=True, width="stretch", height=min(35 * len(frame) + 40, 190),
+                             column_config={c: st.column_config.NumberColumn(label, format="percent" if c in percent else "%.1f")
+                                            if c != "ticker" else st.column_config.TextColumn(label) for c, label in labels.items()})
     with tabs[2]:
         left, right = st.columns([1, 1.3])
         sentiments = brief.sentiment_signals
@@ -1367,38 +1371,38 @@ def render_research(ctx: dict[str, Any]) -> None:
     subtitle = (f"CIO research first, then news you entered; facts only, no forecasts. Every claim has a dated source (last review: {since or 'none'})."
                 if uc == PRE_MEETING else "Client-relevant findings with quantitative and qualitative signals; every claim has a dated source.")
     stale = [s for s in brief.validated_sources if not s.is_fresh] if brief else []
-    status_html = (pill("FLAG", f"{len(stale)} stale source(s)") if stale else pill("PASS", f"All sources ≤ {brief.window_days} days")) if brief else ""
+    status_html = (pill("FLAG", f"{len(stale)} stale") if stale else pill("PASS", "Sources fresh")) if brief else ""
     page_header(ctx, "research", title, subtitle, status_html)
     if not brief:
-        st.info("Research appears after Checkpoint 1 is confirmed.")
+        st.info("Not reached")
         return
-    research_tabs(brief, state["profile"], ["Findings", "Quantitative signals", "Sentiment", "Sources & freshness"])
+    research_tabs(brief, state["profile"], ["Findings", "Signals", "Sources"])
 
     if ctx["stage"] != "market_intelligence":
         msg = decision_summary(ctx, "market_intelligence", "Checkpoint 2 · research approved")
         if uc == PRE_MEETING:
-            msg += " · ideas for the brief: **" + ("yes (your choice)" if state.get("include_ideas") else "no") + "**"
+            msg += " · ideas: **" + ("yes" if state.get("include_ideas") else "no") + "**"
         done_footer(ctx, "research", msg)
         return
     changes = state.get("profile_changes") or []
     with st.container(border=True, key="footer"):
         left, mid, right = st.columns([3, 1.4, 1], vertical_alignment="bottom")
         with left:
-            note = st.text_input("Checkpoint 2 · Review the research — note (required to re-run with feedback)", key=f"cp2_note_{ctx['sid']}",
-                                 placeholder="e.g. Relevant to the home goal. Or: focus more on short-duration bonds.")
+            note = st.text_input("Checkpoint 2 note", key=f"cp2_note_{ctx['sid']}", label_visibility="collapsed",
+                                 placeholder="Add a note (needed to re-run with feedback)")
             include = None
             if uc == PRE_MEETING:
-                include = st.checkbox(f"Also prepare 3 investment ideas for this meeting ({len(changes)} profile change(s) since last review)",
+                include = st.checkbox("Add 3 ideas to the brief",
                                       value=False, key=f"cp2_ideas_{ctx['sid']}",
                                       help="Off by default: the briefing is facts and points to discuss. Ideas are the Discover workflow")
         with mid:
-            label = "Approve · Next" if uc != PRE_MEETING else ("Approve · generate ideas" if include else "Approve · draft brief")
+            label = "Approve"
             if st.button(label, type="primary", icon=":material/arrow_forward:", width="stretch"):
                 submit_action("approve", note, **({"edits": {"include_ideas": bool(include)}} if uc == PRE_MEETING else {}))
-        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
-            if st.button("Re-run research with my feedback", icon=":material/refresh:", width="stretch", disabled=not note.strip()):
+        with right, st.popover("More", icon=":material/more_horiz:", width="stretch"):
+            if st.button("Re-run", icon=":material/refresh:", width="stretch", disabled=not note.strip()):
                 submit_action("regenerate", note)
-            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="cp2_reject"):
+            if st.button("Reject", icon=":material/block:", width="stretch", key="cp2_reject"):
                 submit_action("reject", note)
 
 
@@ -1491,8 +1495,7 @@ def render_event(ctx: dict[str, Any]) -> None:
 def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, height: int | str = "stretch") -> None:
     with card(height=height):
         badges = (pill(status) if status else "") + (info_pill(tag) if tag else "") + info_pill(idea.get("lane", "ALIGNED").title())
-        stats = (f"<div class='stats'><div>Action<b>{esc(idea['action'])}</b></div><div>Target weight<b>{idea['target_weight_pct']:.1f}%</b></div>"
-                 f"<div>Conviction<b>{esc(idea['conviction'])}</b></div></div>")
+        stats = (f"<div class='stats'><div>Action<b>{esc(idea['action'])}</b></div><div>Target<b>{idea['target_weight_pct']:.1f}%</b></div></div>")
         amount = idea.get("indicative_amount_range") or []
         html_block(f"<div class='eyebrow'>Idea {idea['slot_number']} · {esc(idea['portfolio_role'].title())}</div>"
                    f"<div class='card-ticker'>{esc(idea['ticker'])}</div><div class='subtle'>{esc(idea['name'])}</div>{badges}{stats}"
@@ -1501,14 +1504,14 @@ def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, 
 
 def round_trigger_text(trigger: dict[str, Any]) -> str:
     slots = ", ".join(str(s) for s in trigger.get("slots", []))
-    return {"initial": "Initial candidate set (all 3 slots)",
-            "auto_regeneration": f"Automatic regeneration of slot {slots} after a critic FAIL",
-            "advisor_revision": f"Advisor revision of slot {slots}",
-            "allocation_edit": "Advisor edited an allocation; re-validated"}.get(trigger.get("source"), trigger.get("source", ""))
+    return {"initial": "Initial",
+            "auto_regeneration": f"Slot {slots} regenerated",
+            "advisor_revision": f"Slot {slots} revised",
+            "allocation_edit": "Weight edited"}.get(trigger.get("source"), trigger.get("source", ""))
 
 
 def final_label(ctx: dict[str, Any]) -> str:
-    return "Meeting brief" if ctx["use_case"] == PRE_MEETING else "Memo"
+    return "Brief" if ctx["use_case"] == PRE_MEETING else "Memo"
 
 
 def render_ideas(ctx: dict[str, Any]) -> None:
@@ -1516,12 +1519,12 @@ def render_ideas(ctx: dict[str, Any]) -> None:
     rounds = state.get("idea_rounds") or []
     page_header(ctx, "ideas", "Candidate idea set",
                 "Three complementary ideas from the approved universe, generated as one portfolio-aware set. The agent cannot approve its own ideas.",
-                info_pill(f"{len(rounds)} round(s)"))
+                info_pill(f"{len(rounds)} rounds"))
     if not rounds:
-        st.info("Candidate ideas appear after the research checkpoint.")
+        st.info("Not reached")
         return
     lineage_strip(state, "ideas", final_label(ctx))
-    tabs = st.tabs(["Candidate set", "Idea rationale", "Proposed allocation", "Lock / regenerate rounds"])
+    tabs = merge_tabs(["Ideas", "Why", "Allocation"], [0, 1, 2, 0])
     labels = {r["round"]: f"Round {r['round']}" + (" · original" if r["round"] == 1 else "") for r in rounds}
     with tabs[0]:
         chosen = st.pills("Generation round", list(labels), format_func=labels.get, default=1, key=f"round_pick_{ctx['sid']}",
@@ -1543,7 +1546,7 @@ def render_ideas(ctx: dict[str, Any]) -> None:
             html_block(kv("Why it suits the client", idea["client_fit_rationale"])
                        + "<div class='kv'><b>Risks to raise</b><br>" + "".join(info_pill(r) for r in idea["key_risks"]) + "</div>"
                        + "<div class='kv'><b>Sources</b></div>" + source_links(idea["cited_evidence_ids"]))
-            with st.expander("Full rationale"):
+            with st.expander("More"):
                 st.markdown(f"**Thesis:** {md(idea['thesis'])}\n\n**Why now:** {md(idea['why_now'])}\n\n"
                             f"**What would change our view:** {md(idea['invalidation_trigger'])}\n\n"
                             f"**Alternative considered:** {md(idea['alternative_considered'] or '—')}")
@@ -1565,25 +1568,26 @@ def render_ideas(ctx: dict[str, Any]) -> None:
         with right:
             show_chart(donut({f"{i['portfolio_role'].title()} · {i['ticker']}": i["target_weight_pct"] for i in ideas}, "Target weight by role"))
     with tabs[3]:
-        header = "<tr><th>Round</th><th>Trigger</th>" + "".join(f"<th>Slot {s}</th>" for s in (1, 2, 3)) + "<th>Set verdict</th></tr>"
-        body = ""
-        for rnd in rounds:
-            regen = set(rnd["trigger"].get("slots", [])) if rnd["trigger"].get("source") != "initial" else set()
-            cells = ""
-            for s in (1, 2, 3):
-                idea = next(i for i in rnd["ideas"] if i["slot_number"] == s)
-                lock = "" if not regen else (" · regenerated" if s in regen else " · locked")
-                cells += f"<td><b>{esc(idea['ticker'])}</b> {pill(rnd['statuses'].get(idea['idea_id'], 'PASS'))}<span class='subtle'>{lock}</span></td>"
-            body += f"<tr><td>{rnd['round']}</td><td>{esc(round_trigger_text(rnd['trigger']))}</td>{cells}<td>{pill(rnd['overall_status'])}</td></tr>"
-        html_block(f"<table class='grid'>{header}{body}</table>")
-        history = state.get("regeneration_history") or []
-        if history:
-            st.markdown("**Sent back by the critic**")
-            st.dataframe(pd.DataFrame([{"Slot": h["slot"], "Rejected idea": h["ticker"], "Attempt": h["attempt"], "Rules failed": ", ".join(h["rules"]),
-                                        "Critic feedback": h["reason"]} for h in history]), hide_index=True, width="stretch", height=140)
-        else:
-            st.caption("No idea was sent back.")
-    done_footer(ctx, "ideas", f"Candidate set generated in {len(rounds)} round(s). The Suitability Critic checks every set before you see it.")
+        with st.expander(f"Rounds ({len(rounds)})"):
+            header = "<tr><th>Round</th><th>Trigger</th>" + "".join(f"<th>Slot {s}</th>" for s in (1, 2, 3)) + "<th>Set verdict</th></tr>"
+            body = ""
+            for rnd in rounds:
+                regen = set(rnd["trigger"].get("slots", [])) if rnd["trigger"].get("source") != "initial" else set()
+                cells = ""
+                for s in (1, 2, 3):
+                    idea = next(i for i in rnd["ideas"] if i["slot_number"] == s)
+                    lock = "" if not regen else (" · regenerated" if s in regen else " · locked")
+                    cells += f"<td><b>{esc(idea['ticker'])}</b> {pill(rnd['statuses'].get(idea['idea_id'], 'PASS'))}<span class='subtle'>{lock}</span></td>"
+                body += f"<tr><td>{rnd['round']}</td><td>{esc(round_trigger_text(rnd['trigger']))}</td>{cells}<td>{pill(rnd['overall_status'])}</td></tr>"
+            html_block(f"<table class='grid'>{header}{body}</table>")
+            history = state.get("regeneration_history") or []
+            if history:
+                st.markdown("**Sent back**")
+                st.dataframe(pd.DataFrame([{"Slot": h["slot"], "Rejected idea": h["ticker"], "Attempt": h["attempt"], "Rules failed": ", ".join(h["rules"]),
+                                            "Critic feedback": h["reason"]} for h in history]), hide_index=True, width="stretch", height=140)
+            else:
+                st.caption("No idea was sent back.")
+    done_footer(ctx, "ideas", f"{len(rounds)} rounds")
 
 
 def render_suitability(ctx: dict[str, Any]) -> None:
@@ -1591,13 +1595,13 @@ def render_suitability(ctx: dict[str, Any]) -> None:
     assessment = state.get("assessment")
     page_header(ctx, "suitability", "System-checked suitable set",
                 "Deterministic rules calculate measurable risk; the critic assesses each idea. No FAIL can reach the client.",
-                pill(assessment.overall_status, f"Overall {assessment.overall_status}") if assessment else "")
+                pill(assessment.overall_status) if assessment else "")
     if not assessment:
-        st.info("The suitability check runs automatically after the candidate set is generated.")
+        st.info("Not reached")
         return
     lineage_strip(state, "suitability", final_label(ctx))
     ideas, profile = state["candidate_ideas"].ideas, state["profile"]
-    tabs = st.tabs(["Idea verdicts", "Portfolio before → after", "Exposure shift & stress", "Rule matrix"])
+    tabs = merge_tabs(["Verdicts", "Portfolio", "Rules"], [0, 1, 1, 2])
     with tabs[0]:
         evaluations = {ie.idea_id: ie for ie in assessment.idea_evaluations}
         for col, idea in zip(st.columns(3), sorted(ideas, key=lambda i: i.slot_number)):
@@ -1610,7 +1614,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
                 for r in issues:
                     html_block(f"<div class='kv'>{pill(r.outcome, r.rule_id)} {esc(r.message)}</div>")
                 if not issues:
-                    html_block(f"<div class='kv'>{pill('PASS', 'All idea rules')} {len(ie.rule_results) if ie else 0} checks passed.</div>")
+                    html_block(pill('PASS', f"{len(ie.rule_results) if ie else 0}/{len(ie.rule_results) if ie else 0} rules"))
 
     with tabs[1]:
         m = assessment.after_metrics
@@ -1628,7 +1632,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
             for i, rule in enumerate(comparable):
                 with cols[i % len(cols)]:
                     show_chart(metric_vs_limit(rule, units.get(rule.metric or "", "%")))
-            st.caption("Light = current · dark = proposed · red dashed = limit")
+            st.caption("Grey = current · red = proposed · dashed = limit")
     with tabs[2]:
         left, mid, right = st.columns(3)
         with left:
@@ -1642,7 +1646,6 @@ def render_suitability(ctx: dict[str, Any]) -> None:
                 color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Before", "After"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=alt.Legend(title=None)),
                 tooltip=["Scenario", "Portfolio", alt.Tooltip("Impact %:Q", format=".2f")])
             show_chart(chart.properties(height=210))
-        st.caption("Illustrative stress scenarios, not a forecast")
     with tabs[3]:
         rows = [{"Scope": "Portfolio", "Rule": f"{r.rule_id} {r.name}", "Outcome": r.outcome, "Label": STATUS_ICONS[r.outcome], "Message": r.message}
                 for r in assessment.rule_results]
@@ -1660,39 +1663,40 @@ def render_suitability(ctx: dict[str, Any]) -> None:
             b.metric("! FLAG", int(counts.get("FLAG", 0)))
             c.metric("✕ FAIL", int(counts.get("FAIL", 0) + counts.get("BLOCK", 0)))
             st.dataframe(frame[frame["Outcome"] != "PASS"][["Scope", "Rule", "Outcome", "Message"]], hide_index=True, width="stretch", height=200)
-    done_footer(ctx, "suitability", f"Suitability result **{assessment.overall_status}**. You decide on the checked set at the next checkpoint.")
+    done_footer(ctx, "suitability", f"Suitability **{assessment.overall_status}**")
 
 
 def render_approval(ctx: dict[str, Any]) -> None:
     state = ctx["state"]
     assessment = state.get("assessment")
     approved = state.get("approved_idea_set")
-    status_html = pill("PASS", "Approved by advisor") if approved else (pill("FLAG", "Waiting for your decision") if ctx["stage"] == "suitability_review" else "")
+    status_html = pill("PASS", "Approved") if approved else (pill("FLAG", "Your turn") if ctx["stage"] == "suitability_review" else "")
     page_header(ctx, "approval", "Human-approved idea set",
                 f"Lock in each idea; only a fully locked-in set is formatted into the {final_label(ctx).lower()}. A FAIL can never be locked.", status_html)
     if not assessment:
-        st.info("This checkpoint opens once the suitability check has run.")
+        st.info("Not reached")
         return
     lineage_strip(state, "approval", final_label(ctx))
     ideas = state["candidate_ideas"].ideas
     statuses = {ie.idea_id: ie.status for ie in assessment.idea_evaluations}
-    tabs = st.tabs(["Checked set", "Human-approved set", "Idea lineage"])
+    tabs = st.tabs(["Ideas", "Approved", "Lineage"])
     locked_ids = set(ctx["pending"].locked_idea_ids) if ctx["stage"] == "suitability_review" else {i["idea_id"] for i in (approved or {}).get("ideas", [])}
     with tabs[0]:
-        left, right = st.columns([1.3, 1])
-        with left:
-            html_block("<table class='grid'><tr><th>Idea</th><th>Verdict</th><th>Locked in</th><th>Action</th><th>Why it fits</th></tr>" + "".join(
-                f"<tr><td><b>{esc(i.ticker)}</b> · {esc(i.portfolio_role.title())}</td><td>{pill(statuses.get(i.idea_id, 'PASS'))}</td>"
-                f"<td>{pill('PASS', 'Locked') if i.idea_id in locked_ids else info_pill('Not yet')}</td>"
-                f"<td>{i.action} {i.target_weight_pct:.1f}%</td><td>{esc(i.client_fit_rationale)}</td></tr>"
-                for i in sorted(ideas, key=lambda x: x.slot_number)) + "</table>")
-        with right:
-            html_block(f"<div class='callout'><b>Critic</b><br>{esc(assessment.critic_notes)}</div>")
+        cols = st.columns([1, 1, 1, 0.9])
+        for col, i in zip(cols, sorted(ideas, key=lambda x: x.slot_number)):
+            with col, card(height="stretch"):
+                html_block(f"<div class='eyebrow'>Idea {i.slot_number} · {esc(i.lane.title())}</div><div class='card-ticker'>{esc(i.ticker)}</div>"
+                           f"{pill(statuses.get(i.idea_id, 'PASS'))}{pill('PASS', 'Locked') if i.idea_id in locked_ids else info_pill('Not locked')}"
+                           f"<div class='stats'><div>{esc(i.action)}<b>{i.target_weight_pct:.1f}%</b></div></div>")
+                with st.expander("Why"):
+                    st.markdown(md(i.client_fit_rationale))
+        with cols[3]:
             m = assessment.after_metrics
-            st.metric("Proposed portfolio risk (0-100)", risk_points(m.after_risk_score), f"client band {risk_band_points(state['profile'].risk_score_range)}", delta_color="off", delta_arrow="off")
+            st.metric("Portfolio risk (0-100)", risk_points(m.after_risk_score), f"band {risk_band_points(state['profile'].risk_score_range)}",
+                      delta_color="off", delta_arrow="off", help=assessment.critic_notes)
     with tabs[1]:
         if not approved:
-            st.info("No set has been approved yet. Lock in all three ideas to approve the set that is formatted next.")
+            st.info("Not approved yet")
         else:
             for col, idea in zip(st.columns(3), sorted(approved["ideas"], key=lambda i: i["slot_number"])):
                 with col:
@@ -1729,11 +1733,11 @@ def render_approval(ctx: dict[str, Any]) -> None:
     flagged = assessment.overall_status == "FLAG"
     idea_label = lambda i: f"Idea {i.slot_number} · {i.ticker} ({statuses.get(i.idea_id, '')})"
     with st.container(border=True, key="footer"):
-        cols = st.columns([2.6, 1, 1, 1, 1.1], vertical_alignment="bottom")
+        cols = st.columns([2.2, 1.1, 1.1, 1.1, 1], vertical_alignment="bottom")
         with cols[0]:
-            note = st.text_input("Checkpoint 3 · Lock in each idea — rationale" + (" (required: FLAG)" if flagged else ""),
-                                 key=f"cp3_note_{ctx['sid']}", placeholder="Why this idea suits the client, or what to change.")
-            st.caption(f"Locked in: {len(locked)} of {len(ideas)}. The {final_label(ctx).lower()} is drafted once all three are locked; a FAIL cannot be locked.")
+            note = st.text_input("Checkpoint 3 rationale", key=f"cp3_note_{ctx['sid']}", label_visibility="collapsed",
+                                 placeholder="Rationale (required: FLAG)" if flagged else "Add a rationale (optional)")
+            st.caption(f"{len(locked)} of {len(ideas)} locked in", help=f"The {final_label(ctx).lower()} is drafted once all three are locked. A FAIL cannot be locked.")
         # No common accept button: the advisor locks in each idea individually.
         for col, idea in zip(cols[1:4], sorted(ideas, key=lambda x: x.slot_number)):
             with col:
@@ -1744,22 +1748,22 @@ def render_approval(ctx: dict[str, Any]) -> None:
                         submit_action("unlock_idea", note, idea_id=idea.idea_id)
                 else:
                     needs_note = flagged or verdict == "FLAG"
-                    if st.button(f"Lock in {idea.ticker}", icon=":material/lock_open:", type="primary", width="stretch", key=f"lock_{idea.idea_id}",
+                    if st.button(f"Lock {idea.ticker}", icon=":material/lock_open:", type="primary", width="stretch", key=f"lock_{idea.idea_id}",
                                  disabled=verdict == "FAIL" or "lock_idea" not in allowed or (needs_note and not note.strip()),
                                  help="A FAIL idea cannot be locked" if verdict == "FAIL" else ("Needs a rationale" if needs_note else None)):
                         submit_action("lock_idea", note, idea_id=idea.idea_id)
-        with cols[4], st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
+        with cols[4], st.popover("More", icon=":material/more_horiz:", width="stretch"):
             target = st.selectbox("Idea", ideas, format_func=idea_label, key=f"cp3_idea_{ctx['sid']}")
-            if st.button("Revise this idea", icon=":material/edit:", width="stretch", disabled=not note.strip() or "revise" not in allowed):
+            if st.button("Revise", icon=":material/edit:", width="stretch", disabled=not note.strip() or "revise" not in allowed):
                 submit_action("revise", note, idea_id=target.idea_id)
             weight = st.number_input("New target weight %", 0.0, 100.0, float(target.target_weight_pct), 0.5, key=f"cp3_w_{ctx['sid']}_{target.idea_id}")
-            if st.button("Apply weight and re-check", icon=":material/tune:", width="stretch",
+            if st.button("Apply weight", icon=":material/tune:", width="stretch",
                          disabled=not note.strip() or "edit_allocation" not in allowed or weight == target.target_weight_pct):
                 submit_action("edit_allocation", note, idea_id=target.idea_id, edits={"target_weight_pct": weight})
             st.divider()
-            if st.button("Regenerate all three ideas", icon=":material/refresh:", width="stretch", disabled=not note.strip() or "regenerate" not in allowed):
+            if st.button("Regenerate all", icon=":material/refresh:", width="stretch", disabled=not note.strip() or "regenerate" not in allowed):
                 submit_action("regenerate", note)
-            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="cp3_reject"):
+            if st.button("Reject", icon=":material/block:", width="stretch", key="cp3_reject"):
                 submit_action("reject", note)
 
 
@@ -1776,7 +1780,7 @@ def render_pdf_download(ctx: dict[str, Any], label: str) -> None:
         st.download_button(label, pdf_file.read_bytes(), file_name=pdf_file.name, mime="application/pdf",
                            type="primary", icon=":material/download:", width="stretch", key=f"pdf_{ctx['sid']}")
     else:
-        st.warning("The PDF file is not at the expected path.")
+        st.warning("PDF not found")
 
 
 def render_memo(ctx: dict[str, Any]) -> None:
@@ -1785,13 +1789,13 @@ def render_memo(ctx: dict[str, Any]) -> None:
     approved = ctx["outcome"] == "APPROVED"
     page_header(ctx, "memo", "Investment memo",
                 "Formats the approved set into a 3-page memo with charts; it cannot change ideas, allocations or risk findings.",
-                (pill("PASS", "Advisor approved · PDF generated") if approved else pill("FLAG", "Draft · PDF only after sign-off")) if memo else "")
+                (pill("PASS", "Approved") if approved else pill("FLAG", "Draft")) if memo else "")
     if not memo or nav_status("memo", ctx) == "locked":
-        st.info("The memo is drafted after the idea set is approved at Checkpoint 3.")
+        st.info("Not reached")
         return
     lineage_strip(state, "final", final_label(ctx))
     page1, page3 = memo.page_1_executive, memo.page_3_portfolio_view
-    tabs = st.tabs(["Page 1 · Executive recommendation", "Page 2 · Idea details", "Page 3 · Portfolio view", "Compliance checks"])
+    tabs = merge_tabs(["Summary", "Ideas", "Checks"], [0, 1, 2, 2])
     with tabs[0]:
         # Same as Figure 1 of the PDF: the three ideas at a glance, then the allocation shift.
         ideas, profile = state["candidate_ideas"].ideas, state["profile"]
@@ -1817,18 +1821,6 @@ def render_memo(ctx: dict[str, Any]) -> None:
                            f"<div class='card-ticker'>{esc(d.ticker)}</div><div class='subtle'>{esc(d.action)} · {esc(d.allocation_range_str)}</div>"
                            + kv("Why it suits the client", d.client_fit_rationale)
                            + "<div class='kv'><b>Risks to raise</b><br>" + "".join(info_pill(r) for r in d.key_risks) + "</div>")
-    with tabs[2]:
-        ideas, profile = state["candidate_ideas"].ideas, state["profile"]
-        left, right = st.columns([1.2, 1])
-        with left:
-            show_chart(before_after_bars(exposure_frame(profile, ideas, "asset_class"), "Asset allocation: current vs proposed", height=190))
-            html_block(f"<div class='callout'><b>Portfolio-level impact</b><br>{esc(page3.portfolio_level_impact_narrative)}</div>")
-        with right, card(height="stretch"):
-            st.markdown("**Scenario analysis**")
-            st.markdown("\n".join(f"- **{md(k)}**: {md(v)}" for k, v in page3.scenario_analysis.items()))
-            st.markdown("**Risk disclosures**")
-            st.markdown("\n".join(f"- {md(r)}" for r in page3.risk_disclosures))
-            st.caption(md(page3.advisor_signature_block))
     with tabs[3]:
         html_block("<table class='grid'><tr><th>Check</th><th>Outcome</th><th>Detail</th></tr>" + "".join(
             f"<tr><td>{esc(r.rule_id)} · {esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>" for r in memo.compliance_checks) + "</table>")
@@ -1838,33 +1830,33 @@ def render_memo(ctx: dict[str, Any]) -> None:
     if approved:
         with st.container(border=True, key="footer_done"):
             left, right = st.columns([3, 1.3], vertical_alignment="center")
-            left.markdown(decision_summary(ctx, "advisor_approval", "Checkpoint 4 · memo signed off") + " · the PDF includes the portfolio charts.")
+            left.markdown(decision_summary(ctx, "advisor_approval", ""))
             with right:
                 render_pdf_download(ctx, "Download memo PDF")
         return
     if ctx["stage"] != "advisor_approval":
-        done_footer(ctx, "memo", "The memo is waiting for the idea set to be approved again.")
+        done_footer(ctx, "memo", "Waiting for approval")
         return
     allowed = ctx["pending"].allowed_actions
     ideas = state["candidate_ideas"].ideas
     with st.container(border=True, key="footer"):
         left, mid, right = st.columns([3, 1.4, 1.1], vertical_alignment="bottom")
         with left:
-            note = st.text_input("Checkpoint 4 · Sign off the memo — note (printed in the approval block)", key=f"cp4_note_{ctx['sid']}")
+            note = st.text_input("Checkpoint 4 note", key=f"cp4_note_{ctx['sid']}", label_visibility="collapsed",
+                                 placeholder="Add a sign-off note (optional)")
             if "approve" not in allowed:
-                st.error("The memo failed a compliance check (R9 wording or consistency). Regenerate it.", icon=":material/block:")
+                st.error("Failed compliance check", icon=":material/block:")
         with mid:
-            if st.button("Approve · generate PDF", type="primary", icon=":material/verified:", width="stretch", disabled="approve" not in allowed):
+            if st.button("Approve", type="primary", icon=":material/verified:", width="stretch", disabled="approve" not in allowed):
                 submit_action("approve", note)
-        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
-            st.caption("Changes need a note.")
-            if st.button("Regenerate the memo", icon=":material/refresh:", width="stretch", disabled=not note.strip() or "regenerate" not in allowed):
+        with right, st.popover("More", icon=":material/more_horiz:", width="stretch"):
+            if st.button("Regenerate", icon=":material/refresh:", width="stretch", disabled=not note.strip() or "regenerate" not in allowed):
                 submit_action("regenerate", note)
             target = st.selectbox("Idea", ideas, format_func=lambda i: f"Idea {i.slot_number} · {i.ticker}", key=f"cp4_rev_{ctx['sid']}")
-            if st.button("Revise this idea", icon=":material/edit:", width="stretch", disabled=not note.strip() or "revise" not in allowed):
+            if st.button("Revise", icon=":material/edit:", width="stretch", disabled=not note.strip() or "revise" not in allowed):
                 submit_action("revise", note, idea_id=target.idea_id)
             st.divider()
-            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="cp4_reject"):
+            if st.button("Reject", icon=":material/block:", width="stretch", key="cp4_reject"):
                 submit_action("reject", note)
 
 
@@ -1878,15 +1870,14 @@ def render_brief(ctx: dict[str, Any]) -> None:
     approved = ctx["outcome"] == "APPROVED"
     page_header(ctx, "brief", "Client meeting brief",
                 "Confirm the profile, share the market landscape and agree next steps. The PDF (with charts) is generated after your approval.",
-                (pill("PASS", "Approved · PDF generated") if approved else pill("FLAG", "Draft")) if brief else "")
+                (pill("PASS", "Approved") if approved else pill("FLAG", "Draft")) if brief else "")
     if not brief:
-        st.info("The brief is drafted after the research checkpoint (and the idea approval, if ideas were requested).")
+        st.info("Not reached")
         return
     if brief.recommendations:
         lineage_strip(state, "final", final_label(ctx))
     profile = state["profile"]
-    tabs = st.tabs(["What matters", "Profile & changes", "Portfolio & risks", "Market landscape", "Talking points & questions"]
-                   + (["Ideas to discuss"] if brief.recommendations else []))
+    tabs = merge_tabs(["Overview", "Details", "Points"], [0, 1, 1, 1, 2, 1])
     with tabs[0]:
         # Deck slide 9: relevance filtering, not summarisation. Each card says why it is in the briefing.
         if brief.key_insights:
@@ -1896,15 +1887,15 @@ def render_brief(ctx: dict[str, Any]) -> None:
                     html_block(f"<div class='eyebrow'>{n:02d} · {esc(ins.area)}</div><div class='card-ticker'>{esc(ins.headline)}</div>")
                     if ins.area == "PORTFOLIO":
                         show_chart(reference_mix_chart(profile))
-                        st.caption("Dark = current · light = CIO mix")
+                        st.caption("Red = current · grey = CIO mix")
                     elif ins.area == "MARKET":
                         html_block(source_links([s for s in ins.sources if s in (st.session_state.get("source_index") or {})]))
                     else:
                         html_block(f"<div class='kv'>{esc(ins.detail)}</div>")
-                    with st.expander("Why is this here?"):
+                    with st.expander("Why"):
                         st.markdown(md(ins.why_here))
         else:
-            st.info("Nothing stands out for this client this period: no client notes since the last review, no gap to the reference mix.")
+            st.info("Nothing stands out")
     with tabs[1]:
         left, right = st.columns([1, 1.2])
         with left, card(height="stretch"):
@@ -1915,7 +1906,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
                 html_block("<table class='grid'><tr><th>Changed since last review</th><th>Before</th><th>Now</th></tr>" + "".join(
                     f"<tr><td>{esc(c.label)}</td><td>{esc(c.before)}</td><td><b>{esc(c.after)}</b></td></tr>" for c in brief.profile_changes) + "</table>")
             else:
-                st.success("No change in the client's profile since the last review.")
+                st.success("No profile changes")
     with tabs[2]:
         left, mid, right = st.columns([1, 1.2, 1.1])
         with left:
@@ -1926,28 +1917,19 @@ def render_brief(ctx: dict[str, Any]) -> None:
         with right, card(height="stretch"):
             st.markdown("**Portfolio risks to raise**")
             st.markdown("\n".join(f"- {md(r)}" for r in brief.portfolio_risks))
-    with tabs[3]:
-        research = state.get("research_brief")
-        if research and research.conflicting_signals:
-            html_block(f"<div class='callout'>{pill('FLAG', 'Sources disagree')}<br>" + "<br>".join(esc(c) for c in research.conflicting_signals) + "</div>")
-        for col, finding in zip(st.columns(3), sorted(research.findings, key=lambda f: f.materiality_rank)[:3] if research else []):
-            with col, card(height="stretch"):
-                html_block(f"<b>{finding.materiality_rank} · {esc(finding.theme)}</b>" + source_links(finding.cited_source_ids))
-                with st.expander("Details"):
-                    st.markdown(f"{md(finding.claim)}\n\n**For this client:** {md(finding.relevance_to_client)}")
     selecting = not approved and ctx["stage"] == "brief_approval"
     with tabs[4]:
         left, right = st.columns(2)
         with left, card(height="stretch"):
             if selecting:
                 # Checkpoint 4 (deck slide 3): the RM selects the points to raise; only those go into the PDF.
-                st.markdown("**Talking points** · tick the points to raise with the client")
+                st.markdown("**Talking points**")
                 for i, t in enumerate(brief.talking_points):
                     st.checkbox(md(t), value=True, key=f"cp4b_pt_{ctx['sid']}_{i}")
             else:
                 st.markdown("**Talking points**\n" + "\n".join(f"{i + 1}. {md(t)}" for i, t in enumerate(brief.talking_points)))
                 if brief.points_not_raised:
-                    st.caption(f"{len(brief.points_not_raised)} drafted point(s) not selected by the RM (kept on the audit record).")
+                    st.caption(f"{len(brief.points_not_raised)} not selected")
         with right, card(height="stretch"):
             st.markdown("**Questions for the client**\n" + "\n".join(f"- {md(q)}" for q in brief.questions_for_client))
     if brief.recommendations:
@@ -1960,7 +1942,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
     if approved:
         with st.container(border=True, key="footer_done"):
             left, right = st.columns([3, 1.3], vertical_alignment="center")
-            left.markdown(decision_summary(ctx, "brief_approval", "Checkpoint 4 · brief approved") + " · the PDF includes the allocation and risk charts.")
+            left.markdown(decision_summary(ctx, "brief_approval", ""))
             with right:
                 render_pdf_download(ctx, "Download meeting brief PDF")
         return
@@ -1970,16 +1952,17 @@ def render_brief(ctx: dict[str, Any]) -> None:
     with st.container(border=True, key="footer"):
         left, mid, right = st.columns([3, 1.4, 1], vertical_alignment="bottom")
         selected = [t for i, t in enumerate(brief.talking_points) if st.session_state.get(f"cp4b_pt_{ctx['sid']}_{i}", True)]
-        note = left.text_input(f"Checkpoint 4 · Approve the brief with {len(selected)} of {len(brief.talking_points)} talking points "
-                               "— note (printed on the brief)", key=f"cp4b_note_{ctx['sid']}")
+        note = left.text_input("Checkpoint 4 note", key=f"cp4b_note_{ctx['sid']}", label_visibility="collapsed",
+                               placeholder="Add a note for the brief (optional)")
+        left.caption(f"{len(selected)} of {len(brief.talking_points)} talking points selected")
         with mid:
-            if st.button("Approve · generate PDF", type="primary", icon=":material/verified:", width="stretch",
+            if st.button("Approve", type="primary", icon=":material/verified:", width="stretch",
                          disabled="approve" not in allowed or not selected):
                 submit_action("approve", note, edits={"talking_points": selected})
-        with right, st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
-            if st.button("Regenerate the brief (needs a note)", icon=":material/refresh:", width="stretch", disabled=not note.strip()):
+        with right, st.popover("More", icon=":material/more_horiz:", width="stretch"):
+            if st.button("Regenerate", icon=":material/refresh:", width="stretch", disabled=not note.strip()):
                 submit_action("regenerate", note)
-            if st.button("Reject and end the session", icon=":material/block:", width="stretch", key="cp4b_reject"):
+            if st.button("Reject", icon=":material/block:", width="stretch", key="cp4b_reject"):
                 submit_action("reject", note)
 
 
@@ -2020,7 +2003,7 @@ def render_audit(ctx: dict[str, Any]) -> None:
     log = st.session_state.service.get_run_log(view.session_id)
     page_header(ctx, "audit", "Audit trail & performance",
                 f"Run {view.session_id}: inputs, every agent output with model and prompt version, rule results and advisor decisions.")
-    tabs = st.tabs(["Decision timeline", "Latency & cost", "Advisor notes", "Raw run log"])
+    tabs = merge_tabs(["Timeline", "Performance", "Log"], [0, 1, 0, 2])
     with tabs[0]:
         rows = []
         for e in log:
@@ -2049,7 +2032,7 @@ def render_audit(ctx: dict[str, Any]) -> None:
                                "Prompt tokens": (e.get("usage") or {}).get("prompt_tokens", 0),
                                "Completion tokens": (e.get("usage") or {}).get("completion_tokens", 0)} for i, e in enumerate(calls)])
         if frame.empty:
-            st.info("No agent calls recorded yet.")
+            st.info("No agent calls yet")
         else:
             prompt_t, completion_t = frame["Prompt tokens"].sum(), frame["Completion tokens"].sum()
             cost = prompt_t / 1e6 * ASSUMED_PRICE_PER_MTOK["prompt"] + completion_t / 1e6 * ASSUMED_PRICE_PER_MTOK["completion"]
@@ -2084,16 +2067,15 @@ def render_audit(ctx: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------------------
 
 def render_landing() -> None:
-    top_l, top_r = st.columns([3, 2], vertical_alignment="bottom")
+    top_l, top_r = st.columns([5, 1], vertical_alignment="bottom")
     with top_l:
-        html_block("<div class='eyebrow'>UBS OneView · Agentic Fintech Consultancy pilot</div>")
-        st.markdown("## Advisory workspace")
-    with top_r:
+        st.markdown("## Clients")
+    with top_r, st.popover("Settings", icon=":material/tune:", width="stretch"):
         mode = st.segmented_control("Run mode", [OFFLINE, LIVE], default=st.session_state.get("mode", OFFLINE), key="mode_pick",
                                     selection_mode="single", width="stretch")
         st.session_state.mode = mode or OFFLINE
     if st.session_state.mode == LIVE and not os.environ.get("OPENROUTER_API_KEY"):
-        st.warning("Live mode needs OPENROUTER_API_KEY in the environment or a .env file. Until then, use offline mode.")
+        st.warning("Live mode needs OPENROUTER_API_KEY")
     if st.session_state.get("error"):
         st.error(st.session_state.error)
 
@@ -2101,7 +2083,7 @@ def render_landing() -> None:
     with st.container(border=False):
         left, right = st.columns([4, 1.2], vertical_alignment="center")
         left.markdown(f"<div class='cal'><b>Calendar · {tomorrow} · 10:00 · Quarterly review — Sarah Tan</b> "
-                      "<span class='subtle'>· future-state preview</span></div>", unsafe_allow_html=True)
+                      "</div>", unsafe_allow_html=True)
         right.button("Prepare meeting brief", icon=":material/event:", type="primary", width="stretch", key="cal_prepare",
                      on_click=start_case, args=(PRE_MEETING, "demo_sarah"))
 
@@ -2117,8 +2099,7 @@ def render_landing() -> None:
                     with left:
                         html_block(f"<div style='display:flex;gap:.75rem;align-items:center'>{avatar(raw['name'], large=True)}<div>"
                                    f"<b style='font-size:1rem'>{esc(raw['name'])}</b>"
-                                   f"<div class='subtle' style='font-size:.8rem'>{esc(raw['client_id'])} · {esc(summary)} · "
-                                   f"{esc(raw.get('stated_risk_willingness', ''))} · last review {esc(last)}</div></div></div>")
+                                   f"<div class='subtle' style='font-size:.8rem'>{esc(summary)} · {esc(raw.get('stated_risk_willingness', ''))}</div></div></div>")
                     right.button("Open", key=f"open_{key}", type="primary", width="stretch", on_click=select_client, args=(key,))
     with tabs[1]:
         render_intake()
@@ -2130,11 +2111,11 @@ def render_intake() -> None:
         client_id = c1.text_input("Client ID *", value=f"CL-{uuid4().hex[:6].upper()}")
         name = c2.text_input("Client name *")
         currency = c3.selectbox("Base currency", ["SGD", "USD", "EUR", "GBP", "HKD"])
-        wealth = c4.number_input("Investable wealth *", min_value=0.0, value=500000.0, step=10000.0)
+        wealth = c4.number_input("Wealth *", min_value=0.0, value=500000.0, step=10000.0)
         c1, c2, c3, c4 = st.columns([1.6, 1, 1, 1])
         goals = c1.text_input("Investment objective(s) * — separate with ';'", placeholder="Retirement income in 10 years; preserve capital")
-        horizon = c2.number_input("Time horizon (months) *", min_value=1, value=60)
-        risk = c3.selectbox("Risk willingness *", RISK_OPTIONS, index=2)
+        horizon = c2.number_input("Horizon (months) *", min_value=1, value=60)
+        risk = c3.selectbox("Risk *", RISK_OPTIONS, index=2)
         experience = c4.selectbox("Experience", EXPERIENCE_OPTIONS, index=2)
         left, right = st.columns([1.6, 1])
         with left:
@@ -2178,7 +2159,6 @@ def render_client_home() -> None:
     raw = record["raw"]
     top_l, top_r = st.columns([4, 1], vertical_alignment="bottom")
     with top_l:
-        html_block(f"<div class='eyebrow'>{esc(raw.get('client_id', ''))} · {esc(st.session_state.get('mode', OFFLINE))}</div>")
         st.markdown(f"## {md(raw.get('name', 'Client'))}")
         html_block(f"<div class='subtle'>{esc(' · '.join(raw.get('goals', [])))}</div>")
     with top_r:
@@ -2186,37 +2166,38 @@ def render_client_home() -> None:
     if st.session_state.get("error"):
         st.error(st.session_state.error)
     a, b, c, d = st.columns(4)
-    a.metric("Investable wealth", fmt_money(raw.get("total_wealth"), raw.get("base_currency", "SGD")))
-    b.metric("Time horizon", fmt_horizon(raw.get("time_horizon_months")))
-    c.metric("Stated risk willingness", raw.get("stated_risk_willingness", "—"))
+    a.metric("Wealth", fmt_money(raw.get("total_wealth"), raw.get("base_currency", "SGD")))
+    b.metric("Horizon", fmt_horizon(raw.get("time_horizon_months")))
+    c.metric("Risk", raw.get("stated_risk_willingness", "—"))
     d.metric("Last review", (raw.get("last_review") or {}).get("date", "None on record"))
 
-    st.markdown("#### What do you need today?")
     live_blocked = st.session_state.get("mode") == LIVE and not os.environ.get("OPENROUTER_API_KEY")
     last_run = {h["use_case"]: h for h in record["history"]}
     for col, key in zip(st.columns(3), HOME_CASES):
         verb, label, trigger, icon = USE_CASES[key]
         with col, card(height="stretch"):
-            html_block(f"<div class='eyebrow'>{esc(verb)}</div><b style='font-size:1.05rem'>{esc(label)}</b>"
-                       f"<div class='usecase-trigger'>{esc(trigger)}</div>")
+            html_block(f"<div class='eyebrow'>{esc(label)}</div><b style='font-size:1.05rem'>{esc(verb)}</b>"
+                       )
             if key == PRE_MEETING:
-                c1, c2 = st.columns([1, 1.3])
-                c1.date_input("Meeting date", value=date.today() + timedelta(days=1), key="uc1_date")
-                c2.text_input("Meeting", value="Quarterly portfolio review", key="uc1_purpose")
+                with st.expander("Meeting details"):
+                    st.date_input("Meeting date", value=date.today() + timedelta(days=1), key="uc1_date")
+                    st.text_input("Meeting", value="Quarterly portfolio review", key="uc1_purpose")
             elif key == ADHOC:
                 st.number_input("New capital to deploy", min_value=0.0, step=10000.0, value=120000.0, key="uc2_amount")
             elif key == POST_MEETING:
-                st.text_input("Meeting", value="Quarterly portfolio review", key="uc3_purpose")
-                st.text_area("Meeting notes or transcript", key="uc3_transcript", height=68,
-                             value=DEMO_TRANSCRIPTS.get(st.session_state.client_key, ""),
-                             placeholder="Paste the transcript: one line per turn, e.g. 'Rachel: …' / 'Sarah: …'")
+                has_demo = bool(DEMO_TRANSCRIPTS.get(st.session_state.client_key))
+                with st.expander("Notes or transcript" + (" · pre-filled" if has_demo else ""), expanded=not has_demo):
+                    st.text_input("Meeting", value="Quarterly portfolio review", key="uc3_purpose")
+                    st.text_area("Meeting notes or transcript", key="uc3_transcript", height=110,
+                                 value=DEMO_TRANSCRIPTS.get(st.session_state.client_key, ""),
+                                 placeholder="Paste the transcript: one line per turn, e.g. 'Rachel: …' / 'Sarah: …'")
             else:
                 st.selectbox("Market event", list(MARKET_EVENTS), format_func=lambda k: MARKET_EVENTS[k]["title"], key="uc3_event",
                              on_change=lambda: st.session_state.update(uc3_desc=MARKET_EVENTS[st.session_state.uc3_event]["description"]))
                 st.session_state.setdefault("uc3_desc", MARKET_EVENTS[st.session_state.get("uc3_event") or "rates_up"]["description"])
                 st.text_area("What happened", key="uc3_desc", height=68)
             if key in last_run:
-                st.caption(f"Last run {last_run[key]['date']}: {last_run[key]['summary'][:90]}")
+                st.caption(f"Last run {last_run[key]['date']}")
             st.button("Start", key=f"start_{key}", icon=icon, type="primary", width="stretch", on_click=start_case, args=(key,),
                       disabled=live_blocked or (key == ADHOC and not st.session_state.get("uc2_amount"))
                       or (key == POST_MEETING and not (st.session_state.get("uc3_transcript") or DEMO_TRANSCRIPTS.get(st.session_state.client_key, "")).strip()))
