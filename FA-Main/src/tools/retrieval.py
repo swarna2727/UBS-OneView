@@ -57,6 +57,7 @@ def retrieval_rag_tool(query: str, asset_universe: Optional[List[str]] = None) -
                 tickers=tickers,
                 asset_classes=item.get("asset_classes", []),
                 macro_themes=item.get("macro_themes", []),
+                url=item.get("url"),
                 is_fresh=True
             )
             results.append((score, snippet))

@@ -83,6 +83,7 @@ class DocumentSnippet(BaseModel):
     macro_themes: List[str] = Field(default_factory=list)
     is_fresh: bool = True
     age_days: Optional[int] = None
+    url: Optional[str] = None  # link the RM can open; the prototype corpus links to the publisher's page
 
 class ValidatedSnippets(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -31,8 +31,9 @@ from src.llm.fake import FakeAdvisoryLLMClient
 from src.schemas.workspace import AdvisorActionRequest
 from src.tools.event_tools import MARKET_EVENTS, stress_impact
 from src.tools.exposure import portfolio_exposure_calculator
+from src.tools.memo_tools import readable_citations, source_index
 from src.tools.profile_tools import profile_change_detector, required_field_validator, risk_profile_calculator
-from src.tools.risk_engine import evaluate_profile_rules, load_policy, risk_band_points, risk_points
+from src.tools.risk_engine import evaluate_profile_rules, load_policy, reference_mix_gaps, risk_band_points, risk_points
 
 load_dotenv()
 
@@ -135,6 +136,9 @@ st.html("""
   .st-key-footer { border-top: 3px solid var(--brand-red) !important; }
   .st-key-footer_done { border-top: 3px solid #0ca30c !important; }
   .usecase-trigger { font-style: italic; opacity: .85; font-size: .9rem; line-height: 1.45; min-height: 3rem; margin: .25rem 0 .35rem; }
+  .src { font-size: .86rem; line-height: 1.45; margin: 0 0 .45rem; }
+  .src a { font-weight: 600; text-decoration: none; }
+  .src a:hover { text-decoration: underline; }
   .cal { margin-top: .8rem; border: 1px dashed color-mix(in srgb, currentColor 35%, transparent); border-radius: 10px; padding: .65rem .9rem; font-size: .9rem; }
 </style>
 """)
@@ -145,12 +149,26 @@ st.html("""
 # --------------------------------------------------------------------------------------
 
 def esc(text: Any) -> str:
-    """Escape for HTML blocks; '$' is encoded so Streamlit never reads it as LaTeX."""
-    return html.escape(str(text)).replace("$", "&#36;")
+    """Escape for HTML blocks; '$' is encoded so Streamlit never reads it as LaTeX. Source ids become publisher · date."""
+    return html.escape(readable_citations(text, st.session_state.get("source_index"))).replace("$", "&#36;")
 
 
 def md(text: Any) -> str:
-    return str(text).replace("$", r"\$")
+    return readable_citations(text, st.session_state.get("source_index")).replace("$", r"\$")
+
+
+def source_links(source_ids: list[str] | None = None) -> str:
+    """Sources as linked titles with publisher and date (all sources of this session when no ids are given)."""
+    index = st.session_state.get("source_index") or source_index()
+    rows = []
+    for sid in dict.fromkeys(source_ids if source_ids is not None else list(index)):
+        info = index.get(sid) or source_index().get(sid)
+        if not info:
+            continue
+        title = html.escape(info["title"])
+        link = f"<a href='{html.escape(info['url'])}' target='_blank'>{title}</a>" if info.get("url") else f"<b>{title}</b>"
+        rows.append(f"<div class='src'>{link}<br><span class='subtle'>{html.escape(info['short'])} · {html.escape(info['date'])}</span></div>")
+    return "".join(rows)
 
 
 def fmt_money(amount: float | None, currency: str = "SGD") -> str:
@@ -210,6 +228,8 @@ def load_context() -> dict[str, Any]:
     view = service.get_workspace_view(view.session_id)
     st.session_state.workspace = view
     state = service.get_state(view.session_id)
+    if state.get("research_brief"):
+        st.session_state.source_index = source_index(state["research_brief"].validated_sources)
     pending = view.pending_review
     return {"state": state, "view": view, "pending": pending, "stage": pending.stage if pending else None,
             "outcome": view.outcome, "use_case": state.get("use_case", ADHOC), "sid": view.session_id}
@@ -581,6 +601,20 @@ def risk_scale_chart(points: list[dict[str, Any]], band: list[float]) -> alt.Cha
     return alt.layer(band_rect, dots, labels).properties(height=46 * len(order) + 40)
 
 
+def reference_mix_chart(profile: Any) -> alt.Chart:
+    """Current allocation vs the CIO reference mix for the client's risk band (slide 9 portfolio card)."""
+    mix = (load_policy().get("cio_reference_mix") or {}).get("mixes", {}).get(profile.calculated_risk_tier, {})
+    classes = sorted(set(mix) | set(profile.current_asset_class_weights), key=lambda c: -mix.get(c, 0))
+    rows = [{"Category": c, "Portfolio": label, "Weight": round(value, 1)} for c in classes
+            for label, value in (("Current", profile.current_asset_class_weights.get(c, 0.0)), ("CIO mix", float(mix.get(c, 0))))]
+    return alt.Chart(pd.DataFrame(rows)).mark_bar(cornerRadiusEnd=3, height=8).encode(
+        y=alt.Y("Category:N", sort=classes, title=None, axis=alt.Axis(labelLimit=110)),
+        yOffset=alt.YOffset("Portfolio:N", sort=["Current", "CIO mix"]),
+        x=alt.X("Weight:Q", title="%"),
+        color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Current", "CIO mix"], range=[AFTER_COLOR, BEFORE_COLOR]), legend=None),
+        tooltip=["Category", "Portfolio", alt.Tooltip("Weight:Q", format=".1f")]).properties(height=150)
+
+
 def status_heatmap(frame: pd.DataFrame) -> alt.Chart:
     base = alt.Chart(frame).encode(
         x=alt.X("Scope:N", title=None, sort=list(dict.fromkeys(frame["Scope"])), axis=alt.Axis(orient="top", labelAngle=0)),
@@ -630,7 +664,6 @@ def page_header(ctx: dict[str, Any], key: str, title: str, subtitle: str, status
     left.markdown(f"## {md(title)}")
     if status_html:
         right.markdown(f"<div style='text-align:right'>{status_html}</div>", unsafe_allow_html=True)
-    html_block(f"<div class='subtle'>{esc(subtitle)}</div>")
 
 
 def lineage_strip(state: dict[str, Any], active: str, final_label: str) -> None:
@@ -709,7 +742,6 @@ def render_sidebar(ctx: dict[str, Any]) -> None:
             st.html("<style>" + "".join(
                 f".st-key-nav_{k} button {{ border-color: #fab219 !important; box-shadow: inset 3px 0 0 #fab219; }}" for k in action_keys
             ) + "</style>")
-        st.caption("CP = advisor checkpoint · amber = waiting for your decision · locked = not reached yet")
         if ctx["outcome"] == "APPROVED":
             st.success("Workflow complete · PDF ready", icon=":material/verified:")
         elif ctx["outcome"] == "REJECTED":
@@ -958,16 +990,31 @@ def render_limits(ctx: dict[str, Any]) -> None:
                     f"Gaps & escalations ({len(offer.gaps)})", "Regulatory profile"])
     with tabs[0]:
         if offer.eligible_products:
-            html_block("<table class='grid'><tr><th>Product</th><th>Required disclosures</th></tr>" + "".join(
-                f"<tr><td><b>{esc(p.ticker)}</b> · {esc(p.name)}</td><td>{esc('; '.join(p.required_disclosures))}</td></tr>"
-                for p in offer.eligible_products) + "</table>")
+            from src.tools.exposure import get_instrument_metadata
+            classes: dict[str, float] = {}
+            for prod in offer.eligible_products:
+                cls = (get_instrument_metadata(prod.ticker) or {}).get("asset_class", "Other")
+                classes[cls] = classes.get(cls, 0) + 1
+            disclosures: dict[str, int] = {}
+            for prod in offer.eligible_products:
+                for d in prod.required_disclosures:
+                    disclosures[d.replace(" disclosure", "")] = disclosures.get(d.replace(" disclosure", ""), 0) + 1
+            left, right = st.columns(2)
+            with left:
+                show_chart(donut(classes, "Eligible products by asset class"))
+            with right:
+                frame = pd.DataFrame([{"Disclosure": k, "Products": v} for k, v in disclosures.items()])
+                show_chart(alt.Chart(frame, title="Disclosures required (number of products)").mark_bar(cornerRadiusEnd=4, height=16, color=SERIES[0]).encode(
+                    y=alt.Y("Disclosure:N", sort="-x", title=None, axis=alt.Axis(labelLimit=220)), x=alt.X("Products:Q", title=None),
+                    tooltip=["Disclosure", "Products"]).properties(height=36 * len(frame) + 30))
+            with st.expander(f"Product list ({len(offer.eligible_products)})"):
+                st.markdown(" · ".join(f"**{md(prod.ticker)}** {md(prod.name)}" for prod in offer.eligible_products))
         else:
             st.error("Nothing can be offered until the gaps are resolved.", icon=":material/block:")
     with tabs[1]:
         if offer.blocked_areas:
             html_block("<table class='grid'><tr><th>Blocked area</th><th>Why</th></tr>" + "".join(
                 f"<tr><td>{esc(a.area)}</td><td>{esc(a.reason)}</td></tr>" for a in offer.blocked_areas) + "</table>")
-            st.caption("Individual blocked products are not listed: they are never shown, and no idea can use them.")
         else:
             st.success("No area is blocked for this client.")
     with tabs[2]:
@@ -1087,7 +1134,6 @@ def render_meeting(ctx: dict[str, Any]) -> None:
                         submit_action("approve_change", why, item_id=c.change_id)
                     if b3.button("Reject", key=f"chg_no_{c.change_id}", icon=":material/close:", width="stretch"):
                         submit_action("reject_change", why, item_id=c.change_id)
-        st.caption("An approved change updates the client's profile data only. The client's agreement is never changed automatically.")
     with tabs[3]:
         subject = st.text_input("Subject", value=record.follow_up_email.subject, key=f"em_sub_{ctx['sid']}", disabled=not pending)
         body = st.text_area("Draft email (you edit and send it)", value=record.follow_up_email.body, height=200, key=f"em_body_{ctx['sid']}", disabled=not pending)
@@ -1138,23 +1184,24 @@ def render_meeting(ctx: dict[str, Any]) -> None:
 def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
     tabs = st.tabs(names)
     with tabs[0]:
-        html_block("".join(info_pill(t) for t in brief.macro_themes))
         left, right = st.columns([1.6, 1])
         with left, st.container(border=False):
             for finding in sorted(brief.findings, key=lambda f: f.materiality_rank):
                 with st.container(border=True):
-                    html_block(f"<b>#{finding.materiality_rank} · {esc(finding.theme)}</b> {info_pill(finding.finding_type.replace('_', ' ').title())}"
-                               f"<div class='kv'>{esc(finding.claim)}</div>"
-                               f"<div class='kv'><b>Why it matters for this client</b><br>{esc(finding.relevance_to_client)}</div>"
-                               f"<div class='subtle' style='font-size:.78rem'>Evidence: {esc(', '.join(f'{s} ({d})' for s, d in zip(finding.cited_source_ids, finding.publication_dates)))}</div>")
+                    html_block(f"<b>{finding.materiality_rank} · {esc(finding.theme)}</b>" + source_links(finding.cited_source_ids))
+                    with st.expander("Details"):
+                        st.markdown(f"{md(finding.claim)}\n\n**For this client:** {md(finding.relevance_to_client)}")
         with right:
             if brief.conflicting_signals:
                 # Slide 29: conflicting market signals are surfaced as uncertainty, never resolved by picking a side.
-                html_block(f"<div class='callout'><b>{pill('FLAG', 'Uncertain')} Sources disagree</b><br>"
-                           + "<br>".join(esc(c) for c in brief.conflicting_signals) + "</div>")
-            with st.container(border=True):
-                st.markdown("**Key market risks / conflicting evidence**")
-                st.markdown("\n".join(f"- {md(r)}" for r in brief.key_market_risks))
+                html_block(f"<div class='callout'>{pill('FLAG', 'Sources disagree')}<br>" + "<br>".join(esc(c) for c in brief.conflicting_signals) + "</div>")
+            cites: dict[str, float] = {}
+            for finding in brief.findings:
+                for sid in finding.cited_source_ids:
+                    label = (st.session_state.get("source_index") or {}).get(sid, {}).get("short", "Source")
+                    cites[label] = cites.get(label, 0) + 1
+            show_chart(donut(cites, "Evidence by publisher"))
+            html_block("".join(info_pill(r) for r in brief.key_market_risks))
     with tabs[1]:
         frame = pd.DataFrame([m.model_dump() for m in brief.quantitative_signals.values()])
         if frame.empty:
@@ -1197,17 +1244,14 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
                 show_chart((chart + zero).properties(height=70 * len(frame) + 40))
         with right:
             for k, v in sentiments.items():
-                c1, c2 = st.columns(2)
-                with c1, st.container(border=True, height="stretch"):
-                    st.markdown(f"**▲ Positive themes · {md(k)}**")
-                    st.markdown("\n".join(f"- {md(s)}" for s in v.bullish_signals) or "—")
-                with c2, st.container(border=True, height="stretch"):
-                    st.markdown(f"**▼ Negative themes · {md(k)}**")
-                    st.markdown("\n".join(f"- {md(s)}" for s in v.bearish_signals) or "—")
+                tones = {"Positive": len(v.bullish_signals), "Negative": len(v.bearish_signals), "Neutral": len(v.neutral_catalysts)}
+                show_chart(donut({tone: n for tone, n in tones.items() if n}, f"Sources by tone · {k}"))
     with tabs[3]:
         max_age = load_policy()["rules"]["R8_evidence_freshness"]["max_age_days"]
-        frame = pd.DataFrame([{"Source": s.source_id, "Title": s.title, "Publisher": s.publisher, "Published": s.published_at[:10],
-                               "Age (days)": s.age_days or 0, "Status": "PASS" if s.is_fresh else "FLAG"} for s in brief.validated_sources])
+        index = st.session_state.get("source_index") or {}
+        frame = pd.DataFrame([{"Source": f"{index.get(s.source_id, {}).get('short', 'Source')} · {index.get(s.source_id, {}).get('date', '')}",
+                               "Title": s.title, "Age (days)": s.age_days or 0, "Status": "PASS" if s.is_fresh else "FLAG"}
+                              for s in brief.validated_sources])
         left, right = st.columns([1, 1.3])
         with left:
             order = list(frame.sort_values("Age (days)", ascending=False)["Source"])
@@ -1215,11 +1259,11 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
                 y=alt.Y("Source:N", title=None, scale=alt.Scale(domain=order, paddingInner=0.35), axis=alt.Axis(labelLimit=200)),
                 x=alt.X("Age (days):Q", title="Age (days)", scale=alt.Scale(domain=[0, max(max_age * 1.2, frame['Age (days)'].max() + 3)])),
                 color=alt.Color("Status:N", scale=alt.Scale(domain=["PASS", "FLAG"], range=[STATUS_COLORS["PASS"], STATUS_COLORS["FLAG"]]), legend=alt.Legend(title=None)),
-                tooltip=["Source", "Title", "Published", "Age (days)"])
+                tooltip=["Source", "Title", "Age (days)"])
             limit = alt.Chart(pd.DataFrame([{"Age (days)": max_age}])).mark_rule(strokeDash=[4, 3], color=STATUS_COLORS["FAIL"], strokeWidth=2).encode(x="Age (days):Q")
             show_chart((bars + limit).properties(height=45 * len(frame) + 60))
-        with right:
-            st.dataframe(frame, hide_index=True, width="stretch", height=min(35 * len(frame) + 40, 260))
+        with right, st.container(border=True):
+            html_block(source_links([s.source_id for s in brief.validated_sources]))
 
 
 def render_research(ctx: dict[str, Any]) -> None:
@@ -1357,9 +1401,10 @@ def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, 
         badges = (pill(status) if status else "") + (info_pill(tag) if tag else "") + info_pill(idea.get("lane", "ALIGNED").title())
         stats = (f"<div class='stats'><div>Action<b>{esc(idea['action'])}</b></div><div>Target weight<b>{idea['target_weight_pct']:.1f}%</b></div>"
                  f"<div>Conviction<b>{esc(idea['conviction'])}</b></div></div>")
+        amount = idea.get("indicative_amount_range") or []
         html_block(f"<div class='eyebrow'>Idea {idea['slot_number']} · {esc(idea['portfolio_role'].title())}</div>"
                    f"<div class='card-ticker'>{esc(idea['ticker'])}</div><div class='subtle'>{esc(idea['name'])}</div>{badges}{stats}"
-                   + kv("Thesis", idea["thesis"]) + kv("Why it suits the client", idea["client_fit_rationale"]))
+                   + (f"<div class='subtle'>Indicative {fmt_money(amount[0])}–{fmt_money(amount[1])}</div>" if len(amount) == 2 and not idea.get("withheld") else ""))
 
 
 def round_trigger_text(trigger: dict[str, Any]) -> str:
@@ -1390,7 +1435,7 @@ def render_ideas(ctx: dict[str, Any]) -> None:
         chosen = st.pills("Generation round", list(labels), format_func=labels.get, default=1, key=f"round_pick_{ctx['sid']}",
                           label_visibility="collapsed") or 1
         rnd = next(r for r in rounds if r["round"] == chosen)
-        st.caption(f"{round_trigger_text(rnd['trigger'])}. Status shown is the Suitability Critic's verdict on this round.")
+        st.caption(round_trigger_text(rnd["trigger"]))
         regenerated = set(rnd["trigger"].get("slots", [])) if rnd["trigger"].get("source") != "initial" else set()
         for col, idea in zip(st.columns(3), sorted(rnd["ideas"], key=lambda i: i["slot_number"])):
             with col:
@@ -1401,14 +1446,24 @@ def render_ideas(ctx: dict[str, Any]) -> None:
         pick = st.pills("Idea", [i["slot_number"] for i in ideas], default=1, key=f"rationale_pick_{ctx['sid']}", label_visibility="collapsed",
                         format_func=lambda s: next(f"Idea {i['slot_number']} · {i['ticker']}" for i in ideas if i["slot_number"] == s)) or 1
         idea = next(i for i in ideas if i["slot_number"] == pick)
-        left, right = st.columns(2)
+        left, right = st.columns([1.2, 1])
         with left, st.container(border=True, height="stretch"):
-            html_block(kv("Why it suits the client", idea["client_fit_rationale"]) + kv("Investment thesis", idea["thesis"])
-                       + kv("Why now", idea["why_now"]) + kv("Alternative considered", idea["alternative_considered"] or "—"))
-        with right, st.container(border=True, height="stretch"):
-            html_block(kv("Key risks", " · ".join(idea["key_risks"])) + kv("What would change our view", idea["invalidation_trigger"])
-                       + kv("Allocation range", f"{idea['allocation_range']['min_pct']:.1f}% – {idea['allocation_range']['max_pct']:.1f}% (target {idea['target_weight_pct']:.1f}%)")
-                       + kv("Funded from", idea["funding_source_ticker"]) + kv("Evidence", ", ".join(idea["cited_evidence_ids"])))
+            html_block(kv("Why it suits the client", idea["client_fit_rationale"])
+                       + "<div class='kv'><b>Risks to raise</b><br>" + "".join(info_pill(r) for r in idea["key_risks"]) + "</div>"
+                       + "<div class='kv'><b>Sources</b></div>" + source_links(idea["cited_evidence_ids"]))
+            with st.expander("Full rationale"):
+                st.markdown(f"**Thesis:** {md(idea['thesis'])}\n\n**Why now:** {md(idea['why_now'])}\n\n"
+                            f"**What would change our view:** {md(idea['invalidation_trigger'])}\n\n"
+                            f"**Alternative considered:** {md(idea['alternative_considered'] or '—')}")
+        with right:
+            current = holding_weights(state["profile"].parsed_holdings).get(idea["ticker"], 0.0)
+            rng = idea["allocation_range"]
+            frame = pd.DataFrame([{"Weight": "Current", "Value": current}, {"Weight": "Range low", "Value": rng["min_pct"]},
+                                  {"Weight": "Target", "Value": idea["target_weight_pct"]}, {"Weight": "Range high", "Value": rng["max_pct"]}])
+            show_chart(alt.Chart(frame, title=f"{idea['ticker']}: portfolio weight %").mark_bar(cornerRadiusEnd=4, height=18).encode(
+                y=alt.Y("Weight:N", sort=list(frame["Weight"]), title=None), x=alt.X("Value:Q", title=None),
+                color=alt.condition(alt.datum.Weight == "Current", alt.value(BEFORE_COLOR), alt.value(AFTER_COLOR)),
+                tooltip=["Weight", alt.Tooltip("Value:Q", format=".1f")]).properties(height=170))
     with tabs[2]:
         current = holding_weights(state["profile"].parsed_holdings)
         frame = pd.DataFrame([{"Category": f"{i['ticker']} ({i['action']})", "Before": current.get(i["ticker"], 0.0), "After": i["target_weight_pct"]} for i in ideas])
@@ -1417,7 +1472,6 @@ def render_ideas(ctx: dict[str, Any]) -> None:
             show_chart(before_after_bars(frame, "Current vs proposed weight per idea", height=200))
         with right:
             show_chart(donut({f"{i['portfolio_role'].title()} · {i['ticker']}": i["target_weight_pct"] for i in ideas}, "Target weight by role"))
-        html_block(f"<div class='callout'><b>Why the three ideas work together</b><br>{esc(state['candidate_ideas'].complementarity_thesis)}</div>")
     with tabs[3]:
         header = "<tr><th>Round</th><th>Trigger</th>" + "".join(f"<th>Slot {s}</th>" for s in (1, 2, 3)) + "<th>Set verdict</th></tr>"
         body = ""
@@ -1432,11 +1486,11 @@ def render_ideas(ctx: dict[str, Any]) -> None:
         html_block(f"<table class='grid'>{header}{body}</table>")
         history = state.get("regeneration_history") or []
         if history:
-            st.markdown("**Why ideas were sent back (rule-engine feedback to the Investment Idea Agent)**")
+            st.markdown("**Sent back by the critic**")
             st.dataframe(pd.DataFrame([{"Slot": h["slot"], "Rejected idea": h["ticker"], "Attempt": h["attempt"], "Rules failed": ", ".join(h["rules"]),
                                         "Critic feedback": h["reason"]} for h in history]), hide_index=True, width="stretch", height=140)
         else:
-            st.caption("No idea has failed the critic: every slot was accepted in its first round.")
+            st.caption("No idea was sent back.")
     done_footer(ctx, "ideas", f"Candidate set generated in {len(rounds)} round(s). The Suitability Critic checks every set before you see it.")
 
 
@@ -1465,9 +1519,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
                     html_block(f"<div class='kv'>{pill(r.outcome, r.rule_id)} {esc(r.message)}</div>")
                 if not issues:
                     html_block(f"<div class='kv'>{pill('PASS', 'All idea rules')} {len(ie.rule_results) if ie else 0} checks passed.</div>")
-                if ie:
-                    html_block(kv("Critic", ie.qualitative_notes))
-        html_block(f"<div class='callout'><b>Critic summary</b><br>{esc(assessment.critic_notes)}</div>")
+
     with tabs[1]:
         m = assessment.after_metrics
         a, b, c, d = st.columns(4)
@@ -1484,7 +1536,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
             for i, rule in enumerate(comparable):
                 with cols[i % len(cols)]:
                     show_chart(metric_vs_limit(rule, units.get(rule.metric or "", "%")))
-            st.caption("Light = current, dark = after the proposed ideas, red dashed = rule limit. An existing breach not worsened is a FLAG; new or worsened is a FAIL.")
+            st.caption("Light = current · dark = proposed · red dashed = limit")
     with tabs[2]:
         left, mid, right = st.columns(3)
         with left:
@@ -1498,7 +1550,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
                 color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Before", "After"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=alt.Legend(title=None)),
                 tooltip=["Scenario", "Portfolio", alt.Tooltip("Impact %:Q", format=".2f")])
             show_chart(chart.properties(height=210))
-        st.caption("Stress test: deterministic asset-class shocks (e.g. equity sell-off: equities −15%, bonds +1%). Illustrative assumptions, not a forecast.")
+        st.caption("Illustrative stress scenarios, not a forecast")
     with tabs[3]:
         rows = [{"Scope": "Portfolio", "Rule": f"{r.rule_id} {r.name}", "Outcome": r.outcome, "Label": STATUS_ICONS[r.outcome], "Message": r.message}
                 for r in assessment.rule_results]
@@ -1605,7 +1657,6 @@ def render_approval(ctx: dict[str, Any]) -> None:
                                  help="A FAIL idea cannot be locked" if verdict == "FAIL" else ("Needs a rationale" if needs_note else None)):
                         submit_action("lock_idea", note, idea_id=idea.idea_id)
         with cols[4], st.popover("More actions", icon=":material/more_horiz:", width="stretch"):
-            st.caption("Changes need a rationale. Revising one idea keeps the other two locked; every change is re-checked by the critic.")
             target = st.selectbox("Idea", ideas, format_func=idea_label, key=f"cp3_idea_{ctx['sid']}")
             if st.button("Revise this idea", icon=":material/edit:", width="stretch", disabled=not note.strip() or "revise" not in allowed):
                 submit_action("revise", note, idea_id=target.idea_id)
@@ -1650,21 +1701,30 @@ def render_memo(ctx: dict[str, Any]) -> None:
     page1, page3 = memo.page_1_executive, memo.page_3_portfolio_view
     tabs = st.tabs(["Page 1 · Executive recommendation", "Page 2 · Idea details", "Page 3 · Portfolio view", "Compliance checks"])
     with tabs[0]:
-        for col, (label, text) in zip(st.columns([1.2, 1, 1]), [("Investment objective", page1.investment_objective),
-                                                               ("Client snapshot", page1.client_snapshot), ("Portfolio snapshot", page1.portfolio_snapshot)]):
-            with col, st.container(border=True, height="stretch"):
-                html_block(kv(label, text))
-        html_block("<table class='grid'><tr><th>#</th><th>Idea</th><th>Action</th><th>Target</th><th>Role</th><th>Why it fits</th></tr>" + "".join(
-            f"<tr><td>{g.slot_number}</td><td><b>{esc(g.ticker)}</b> · {esc(g.name)}</td><td>{esc(g.action)}</td><td>{g.target_weight_pct:.1f}%</td>"
-            f"<td>{esc(g.portfolio_role.title())}</td><td>{esc(g.why_it_fits)}</td></tr>" for g in page1.ideas_at_a_glance) + "</table>")
+        # Same as Figure 1 of the PDF: the three ideas at a glance, then the allocation shift.
+        ideas, profile = state["candidate_ideas"].ideas, state["profile"]
+        verdicts = {ie.idea_id: ie.status for ie in state["assessment"].idea_evaluations} if state.get("assessment") else {}
+        current = holding_weights(profile.parsed_holdings)
+        rows = "".join(
+            f"<tr><td><b>{esc(i.ticker)}</b> · {esc(i.name)}</td><td>{esc(i.lane.title())}</td><td>{esc(i.action)}</td>"
+            f"<td>{current.get(i.ticker, 0.0):.1f}%</td><td><b>{i.target_weight_pct:.1f}%</b></td>"
+            f"<td>{(fmt_money(i.indicative_amount_range[0]) + '–' + fmt_money(i.indicative_amount_range[1])) if i.indicative_amount_range else '—'}</td>"
+            f"<td>{pill(verdicts.get(i.idea_id, 'PASS'))}</td></tr>" for i in sorted(ideas, key=lambda x: x.slot_number))
+        html_block("<table class='grid'><tr><th>Idea</th><th>Lane</th><th>Action</th><th>Current</th><th>Target</th><th>Indicative amount</th><th>Fit</th></tr>"
+                   + rows + "</table>")
+        left, right = st.columns([1.3, 1])
+        with left:
+            show_chart(before_after_bars(exposure_frame(profile, ideas, "asset_class"), "Allocation: current vs proposed", height=180))
+        with right:
+            after = exposure_frame(profile, ideas, "asset_class")
+            show_chart(donut(dict(zip(after["Category"], after["After"])), "Proposed allocation", height=180))
     with tabs[1]:
         for col, d in zip(st.columns(3), memo.page_2_details):
             with col, st.container(border=True, height="stretch"):
                 html_block(f"<div class='eyebrow'>Idea {d.slot_number} · {esc(d.portfolio_role.title())} · {esc(d.conviction)} conviction</div>"
                            f"<div class='card-ticker'>{esc(d.ticker)}</div><div class='subtle'>{esc(d.action)} · {esc(d.allocation_range_str)}</div>"
-                           + kv("Why it suits the client", d.client_fit_rationale) + kv("Thesis", d.thesis) + kv("Why now", d.why_now)
-                           + kv("Key risks", " · ".join(d.key_risks)) + kv("What would change our view", d.what_changes_view)
-                           + kv("Evidence", " ; ".join(d.cited_sources_formatted)))
+                           + kv("Why it suits the client", d.client_fit_rationale)
+                           + "<div class='kv'><b>Risks to raise</b><br>" + "".join(info_pill(r) for r in d.key_risks) + "</div>")
     with tabs[2]:
         ideas, profile = state["candidate_ideas"].ideas, state["profile"]
         left, right = st.columns([1.2, 1])
@@ -1680,7 +1740,8 @@ def render_memo(ctx: dict[str, Any]) -> None:
     with tabs[3]:
         html_block("<table class='grid'><tr><th>Check</th><th>Outcome</th><th>Detail</th></tr>" + "".join(
             f"<tr><td>{esc(r.rule_id)} · {esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>" for r in memo.compliance_checks) + "</table>")
-        st.markdown("**Sources mapped into the memo**\n" + "\n".join(f"- {md(s)}" for s in page3.audit_sources_summary))
+        st.markdown("**Sources**")
+        html_block(source_links())
 
     if approved:
         with st.container(border=True, key="footer_done"):
@@ -1740,12 +1801,16 @@ def render_brief(ctx: dict[str, Any]) -> None:
             cols = st.columns(len(brief.key_insights))
             for n, (col, ins) in enumerate(zip(cols, brief.key_insights), start=1):
                 with col, st.container(border=True, height="stretch"):
-                    html_block(f"<div class='eyebrow'>{n:02d} · {esc(ins.area)}</div><div class='card-ticker'>{esc(ins.headline)}</div>"
-                               f"<div class='kv'>{esc(ins.detail)}</div>")
+                    html_block(f"<div class='eyebrow'>{n:02d} · {esc(ins.area)}</div><div class='card-ticker'>{esc(ins.headline)}</div>")
+                    if ins.area == "PORTFOLIO":
+                        show_chart(reference_mix_chart(profile))
+                        st.caption("Dark = current · light = CIO mix")
+                    elif ins.area == "MARKET":
+                        html_block(source_links([s for s in ins.sources if s in (st.session_state.get("source_index") or {})]))
+                    else:
+                        html_block(f"<div class='kv'>{esc(ins.detail)}</div>")
                     with st.expander("Why is this here?"):
                         st.markdown(md(ins.why_here))
-                        if ins.sources:
-                            st.caption("Sources: " + ", ".join(ins.sources))
         else:
             st.info("Nothing stands out for this client this period: no client notes since the last review, no gap to the reference mix.")
     with tabs[1]:
@@ -1770,10 +1835,14 @@ def render_brief(ctx: dict[str, Any]) -> None:
             st.markdown("**Portfolio risks to raise**")
             st.markdown("\n".join(f"- {md(r)}" for r in brief.portfolio_risks))
     with tabs[3]:
-        with st.container(border=False):
-            for line in brief.market_developments:
-                with st.container(border=True):
-                    st.markdown(md(line))
+        research = state.get("research_brief")
+        if research and research.conflicting_signals:
+            html_block(f"<div class='callout'>{pill('FLAG', 'Sources disagree')}<br>" + "<br>".join(esc(c) for c in research.conflicting_signals) + "</div>")
+        for col, finding in zip(st.columns(3), sorted(research.findings, key=lambda f: f.materiality_rank)[:3] if research else []):
+            with col, st.container(border=True, height="stretch"):
+                html_block(f"<b>{finding.materiality_rank} · {esc(finding.theme)}</b>" + source_links(finding.cited_source_ids))
+                with st.expander("Details"):
+                    st.markdown(f"{md(finding.claim)}\n\n**For this client:** {md(finding.relevance_to_client)}")
     selecting = not approved and ctx["stage"] == "brief_approval"
     with tabs[4]:
         left, right = st.columns(2)
@@ -1795,7 +1864,6 @@ def render_brief(ctx: dict[str, Any]) -> None:
                 f"<tr><td>{g.slot_number}</td><td><b>{esc(g.ticker)}</b> · {esc(g.name)}</td><td>{esc(g.action)}</td><td>{g.target_weight_pct:.1f}%</td>"
                 f"<td>{esc(g.portfolio_role.title())}</td><td>{esc(g.why_it_fits)}</td></tr>" for g in brief.recommendations) + "</table>")
             show_chart(before_after_bars(exposure_frame(profile, state["candidate_ideas"].ideas, "asset_class"), "Asset allocation if implemented", height=170))
-            st.caption("Ideas are for discussion; implementing them needs the client's confirmation and a formal memo (ad-hoc request workflow).")
 
     if approved:
         with st.container(border=True, key="footer_done"):
@@ -1928,7 +1996,6 @@ def render_landing() -> None:
     with top_l:
         html_block("<div class='eyebrow'>UBS OneView · Agentic Fintech Consultancy pilot</div>")
         st.markdown("## Advisory workspace")
-        html_block("<div class='subtle'>Prepare, recommend and reassess: one human-led multi-agent workflow per advisory moment.</div>")
     with top_r:
         mode = st.segmented_control("Run mode", [OFFLINE, LIVE], default=st.session_state.get("mode", OFFLINE), key="mode_pick",
                                     selection_mode="single", width="stretch")
@@ -1941,9 +2008,8 @@ def render_landing() -> None:
     tomorrow = (date.today() + timedelta(days=1)).strftime("%a %d %b")
     with st.container(border=False):
         left, right = st.columns([4, 1.2], vertical_alignment="center")
-        left.markdown(f"<div class='cal'><b>Calendar · {tomorrow} · 10:00 · Quarterly review — Sarah Tan</b><br>"
-                      "<span class='subtle'>Future-state preview (simulated calendar): a meeting named “quarterly review” prompts the "
-                      "advisor to prepare a client meeting brief.</span></div>", unsafe_allow_html=True)
+        left.markdown(f"<div class='cal'><b>Calendar · {tomorrow} · 10:00 · Quarterly review — Sarah Tan</b> "
+                      "<span class='subtle'>· future-state preview</span></div>", unsafe_allow_html=True)
         right.button("Prepare meeting brief", icon=":material/event:", type="primary", width="stretch", key="cal_prepare",
                      on_click=start_case, args=(PRE_MEETING, "demo_sarah"))
 
@@ -2033,7 +2099,6 @@ def render_client_home() -> None:
     d.metric("Last review", (raw.get("last_review") or {}).get("date", "None on record"))
 
     st.markdown("#### What do you need today?")
-    st.caption("Three advisory moments in the client lifecycle. Each has its own trigger and workflow; a completed one updates the client record for the next.")
     live_blocked = st.session_state.get("mode") == LIVE and not os.environ.get("OPENROUTER_API_KEY")
     last_run = {h["use_case"]: h for h in record["history"]}
     for col, key in zip(st.columns(3), HOME_CASES):
@@ -2045,16 +2110,13 @@ def render_client_home() -> None:
                 c1, c2 = st.columns([1, 1.3])
                 c1.date_input("Meeting date", value=date.today() + timedelta(days=1), key="uc1_date")
                 c2.text_input("Meeting", value="Quarterly portfolio review", key="uc1_purpose")
-                st.caption("Confirms the profile and client limits, then a sourced briefing with the last 3 months' portfolio impact.")
             elif key == ADHOC:
                 st.number_input("New capital to deploy", min_value=0.0, step=10000.0, value=120000.0, key="uc2_amount")
-                st.caption("Three ideas in two lanes (aligned, exploratory), each with its why, checked for fit and eligibility.")
             elif key == POST_MEETING:
                 st.text_input("Meeting", value="Quarterly portfolio review", key="uc3_purpose")
                 st.text_area("Meeting notes or transcript", key="uc3_transcript", height=68,
                              value=DEMO_TRANSCRIPTS.get(st.session_state.client_key, ""),
                              placeholder="Paste the transcript: one line per turn, e.g. 'Rachel: …' / 'Sarah: …'")
-                st.caption("Summary, actions with owners and dates, profile changes for you to approve, draft follow-up email.")
             else:
                 st.selectbox("Market event", list(MARKET_EVENTS), format_func=lambda k: MARKET_EVENTS[k]["title"], key="uc3_event",
                              on_change=lambda: st.session_state.update(uc3_desc=MARKET_EVENTS[st.session_state.uc3_event]["description"]))

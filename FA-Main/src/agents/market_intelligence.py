@@ -32,7 +32,7 @@ def rm_news_snippets(rm_news: List[Dict[str, Any]]) -> List[DocumentSnippet]:
             source_id=f"RM-NEWS-{n:02d}", title=str(item.get("title", "RM-entered news")),
             publisher=f"RM-entered: {item.get('source', 'unspecified source')}", published_at=published,
             retrieved_at=REFERENCE_DATE, text=str(item.get("text", "")), tickers=[str(t).upper() for t in item.get("tickers", [])],
-            asset_classes=[], macro_themes=[], is_fresh=True))
+            asset_classes=[], macro_themes=[], is_fresh=True, url=item.get("url") or None))
     return snippets
 
 class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchBrief]):

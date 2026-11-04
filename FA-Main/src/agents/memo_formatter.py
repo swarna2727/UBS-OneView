@@ -382,9 +382,10 @@ class BriefRecordAgent(BaseAdvisoryAgent[Any, Any]):
             portfolio_level_impact_narrative=(
                 f"Portfolio risk moves from {risk_points(before.after_risk_score)} to {risk_points(after.after_risk_score)} (0-100) "
                 f"against the {profile.calculated_risk_tier} band of {risk_band_points(profile.risk_score_range)}. "
-                f"Growth assets {before.growth_asset_pct:.1f}% -> {after.growth_asset_pct:.1f}%; "
-                f"largest single instrument {after.max_single_stock_ticker} at {after.max_single_stock_pct:.1f}%. "
-                f"Suitability review: {assessment.overall_status}."
+                f"Growth assets {before.growth_asset_pct:.1f}% -> {after.growth_asset_pct:.1f}%. "
+                + (f"Largest single instrument {after.max_single_stock_ticker} at {after.max_single_stock_pct:.1f}%. "
+                   if after.max_single_stock_ticker and after.max_single_stock_ticker.upper() != "NONE" else "")
+                + f"Suitability review: {assessment.overall_status}."
                 + (" Advisor-documented exceptions: " + " | ".join(open_items) if open_items else "")
             ),
             scenario_analysis={

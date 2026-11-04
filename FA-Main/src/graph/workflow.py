@@ -35,7 +35,8 @@ from src.graph.redaction import withheld_tickers, blocked_by_limits, redact_idea
 from src.audit.run_log import RunLog
 from src.schemas.advisory import InvestmentIdea, CandidateIdeaSet
 from src.tools.event_tools import market_event_impact
-from src.tools.memo_tools import pdf_memo_renderer, meeting_brief_renderer, decision_record_renderer, meeting_record_renderer
+from src.tools.memo_pdf import research_note_memo_renderer
+from src.tools.memo_tools import meeting_brief_renderer, decision_record_renderer, meeting_record_renderer
 from src.tools.pdf_charts import portfolio_change_charts, profile_charts, event_charts
 from src.tools.profile_tools import profile_change_detector, risk_profile_calculator
 from src.tools.risk_engine import load_policy
@@ -687,8 +688,11 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             "advisor_approved": True,
             "page_3_portfolio_view": memo.page_3_portfolio_view.model_copy(update={"advisor_signature_block": signature})
         })
-        pdf_path = pdf_memo_renderer(approved, f"{PDF_DIR}/{session_id}_final_memo.pdf",
-                                     charts=portfolio_change_charts(state["profile"], state["candidate_ideas"].ideas))
+        research = state.get("research_brief")
+        pdf_path = research_note_memo_renderer(
+            approved, f"{PDF_DIR}/{session_id}_final_memo.pdf", profile=state["profile"], ideas=state["candidate_ideas"].ideas,
+            assessment=state["assessment"], sources=research.validated_sources if research else None,
+            regeneration_history=state.get("regeneration_history"))
         approved = approved.model_copy(update={"pdf_artifact_path": pdf_path})
         log.record(session_id, "pdf_generated", memo_id=approved.memo_id, pdf_path=pdf_path)
         return {

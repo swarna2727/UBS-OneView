@@ -1,6 +1,7 @@
 [
   {
     "source_id": "SRC-UBS-CIO-2026-101",
+    "url": "https://www.ubs.com/global/en/wealthmanagement/insights.html",
     "title": "UBS CIO Global Wealth Management: Q4 Macro Strategy & Asset Allocation",
     "publisher": "UBS Chief Investment Office",
     "published_at": "2026-10-10T08:00:00Z",
@@ -12,6 +13,7 @@
   },
   {
     "source_id": "SRC-UBS-CIO-2026-102",
+    "url": "https://www.ubs.com/global/en/wealthmanagement/insights.html",
     "title": "UBS CIO Sector Insights: Secular Demand in Semis and Cloud Software",
     "publisher": "UBS Chief Investment Office",
     "published_at": "2026-10-14T09:30:00Z",
@@ -23,6 +25,7 @@
   },
   {
     "source_id": "SRC-FED-MINUTES-2026-09",
+    "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
     "title": "Federal Reserve Policy Review & Rate Trajectory",
     "publisher": "Federal Open Market Committee",
     "published_at": "2026-09-28T18:00:00Z",
@@ -34,6 +37,7 @@
   },
   {
     "source_id": "SRC-GOLD-MONITOR-2026-10",
+    "url": "https://www.gold.org",
     "title": "World Gold Council: Central Bank Reserve Diversification",
     "publisher": "World Gold Council",
     "published_at": "2026-10-05T07:15:00Z",
@@ -45,6 +49,7 @@
   },
   {
     "source_id": "SRC-EURO-CREDIT-2026-10",
+    "url": "https://www.ecb.europa.eu",
     "title": "ECB Policy & European Investment Grade Credit Quality",
     "publisher": "European Central Bank Market Operations",
     "published_at": "2026-10-08T11:00:00Z",

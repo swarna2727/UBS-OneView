@@ -84,7 +84,7 @@ def risk_band(title: str, band: Sequence[float], points: Dict[str, float], width
         color = SERIES[i % len(SERIES)]
         d.add(Rect(scale(risk_points(value)) - 3, y + 10, 6, 6, fillColor=color, strokeColor=colors.white))
         items.append((color, f"{label} {risk_points(value)}"))
-    _legend(d, width - 95, height - 20, items)
+    _legend(d, width - 78, height - 20, items)
     return d
 
 
@@ -213,3 +213,93 @@ def event_charts(impact) -> List[Drawing]:
     rows = sorted(impact.holdings, key=lambda r: r.contribution_pct)
     return [signed_bars(f"{impact.event_title}: estimated contribution by holding (portfolio % points)",
                         [r.ticker for r in rows], [r.contribution_pct for r in rows])]
+
+
+# --------------------------------------------------------------------------------------
+# Research-note figures for the UC2 memo: titles sit above the chart as "Figure n: ..." text,
+# so these drawings carry no title of their own and fit a half-page column.
+# --------------------------------------------------------------------------------------
+
+def _top_legend(d: Drawing, x: float, y: float, items: Sequence[Tuple[colors.Color, str]]) -> None:
+    for i, (color, label) in enumerate(items):
+        d.add(Rect(x + i * 70, y, 7, 7, fillColor=color, strokeColor=None))
+        d.add(String(x + i * 70 + 10, y + 0.5, label, fontName="Helvetica", fontSize=7, fillColor=MUTED))
+
+def compact_before_after(categories: List[str], before: List[float], after: List[float], width: float = 255, height: float = 150) -> Drawing:
+    d = Drawing(width, height)
+    chart = HorizontalBarChart()
+    chart.x, chart.y = 78, 14
+    chart.width, chart.height = width - 86, height - 32
+    chart.data = [list(reversed(before)), list(reversed(after))]
+    chart.categoryAxis.categoryNames = list(reversed(categories))
+    chart.categoryAxis.labels.fontName, chart.categoryAxis.labels.fontSize = "Helvetica", 7
+    chart.categoryAxis.labels.boxAnchor = "e"
+    chart.categoryAxis.joinAxisMode = "left"
+    chart.valueAxis.valueMin, chart.valueAxis.valueMax = 0, max(1, max(before + after)) * 1.15
+    chart.valueAxis.labels.fontName, chart.valueAxis.labels.fontSize = "Helvetica", 7
+    chart.valueAxis.labelTextFormat = "%.0f%%"
+    chart.valueAxis.gridStrokeColor, chart.valueAxis.visibleGrid = GRID, True
+    chart.bars[0].fillColor, chart.bars[1].fillColor = BEFORE, AFTER
+    chart.bars.strokeColor = None
+    chart.barSpacing, chart.groupSpacing = 1, 5
+    d.add(chart)
+    _top_legend(d, 78, height - 10, [(BEFORE, "Current"), (AFTER, "Proposed")])
+    return d
+
+def compact_pie(weights: Dict[str, float], width: float = 255, height: float = 150) -> Drawing:
+    d = Drawing(width, height)
+    items = sorted(((k, v) for k, v in weights.items() if v > 0), key=lambda kv: -kv[1])
+    pie = Pie()
+    pie.x, pie.y, pie.width, pie.height = 8, 12, 116, 116
+    pie.data = [v for _, v in items]
+    pie.labels = None
+    pie.slices.strokeColor, pie.slices.strokeWidth = colors.white, 1.5
+    for i in range(len(items)):
+        pie.slices[i].fillColor = SERIES[i % len(SERIES)]
+    pie.innerRadiusFraction = 0.55
+    d.add(pie)
+    for i, (k, v) in enumerate(items):
+        y = height - 24 - i * 15
+        d.add(Rect(138, y, 7, 7, fillColor=SERIES[i % len(SERIES)], strokeColor=None))
+        d.add(String(149, y + 0.5, f"{k} {v:.0f}%", fontName="Helvetica", fontSize=7, fillColor=INK))
+    return d
+
+def compact_stress(scenarios: List[str], before: List[float], after: List[float], width: float = 255, height: float = 150) -> Drawing:
+    d = Drawing(width, height)
+    chart = VerticalBarChart()
+    chart.x, chart.y = 30, 22
+    chart.width, chart.height = width - 40, height - 42
+    chart.data = [before, after]
+    chart.categoryAxis.categoryNames = scenarios
+    chart.categoryAxis.labels.fontName, chart.categoryAxis.labels.fontSize = "Helvetica", 6.5
+    chart.categoryAxis.joinAxisMode = "bottom"
+    flat = before + after + [0]
+    pad = max(abs(min(flat)), abs(max(flat))) * 0.2 or 1
+    chart.valueAxis.valueMin, chart.valueAxis.valueMax = min(flat) - pad, max(flat) + pad
+    chart.valueAxis.labels.fontName, chart.valueAxis.labels.fontSize = "Helvetica", 7
+    chart.valueAxis.labelTextFormat = "%.0f%%"
+    chart.valueAxis.gridStrokeColor, chart.valueAxis.visibleGrid = GRID, True
+    chart.bars[0].fillColor, chart.bars[1].fillColor = BEFORE, AFTER
+    chart.bars.strokeColor = None
+    d.add(chart)
+    _top_legend(d, 30, height - 10, [(BEFORE, "Current"), (AFTER, "Proposed")])
+    return d
+
+def memo_figures(profile, ideas: List) -> Dict[str, Drawing]:
+    """The UC2 memo's figures: allocation shift, proposed mix, risk vs band, stress (all from deterministic tools)."""
+    from src.tools.event_tools import stress_impact
+    from src.tools.exposure import portfolio_exposure_calculator
+    from src.tools.risk_engine import portfolio_metrics
+
+    delta = portfolio_exposure_calculator(profile.parsed_holdings, _trades(ideas))
+    before, after = _by_asset_class(delta.before_holdings), _by_asset_class(delta.after_holdings)
+    classes = sorted(set(before) | set(after), key=lambda c: -after.get(c, 0.0))
+    stress_before, stress_after = stress_impact(delta.before_holdings), stress_impact(delta.after_holdings)
+    return {
+        "allocation": compact_before_after(classes, [round(before.get(c, 0.0), 1) for c in classes], [round(after.get(c, 0.0), 1) for c in classes]),
+        "mix": compact_pie({c: round(after.get(c, 0.0), 1) for c in classes}),
+        "risk": risk_band("", profile.risk_score_range, {"Current": portfolio_metrics(delta.before_holdings, profile)["risk_score"],
+                                                         "Proposed": portfolio_metrics(delta.after_holdings, profile)["risk_score"]},
+                          width=WIDTH - 20, height=70),
+        "stress": compact_stress(list(stress_before), list(stress_before.values()), list(stress_after.values())),
+    }

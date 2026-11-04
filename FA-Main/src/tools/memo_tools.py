@@ -1,6 +1,9 @@
 """Deterministic tools for Memo Formatter Agent (Slide 18)."""
 
 import os
+from datetime import datetime
+import re
+import json
 from typing import List, Dict, Any, Optional
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -65,6 +68,55 @@ def citation_source_mapper(memo_text_or_findings: Any, evidence_list: List[Any])
 
     return citations
 
+# ------------------------------------------------------------------
+# Sources as the RM reads them: title, publisher and date, never the internal id
+# ------------------------------------------------------------------
+
+PUBLISHER_SHORT = {"UBS Chief Investment Office": "UBS CIO", "Federal Open Market Committee": "Federal Reserve",
+                   "European Central Bank Market Operations": "ECB"}
+SOURCE_ID_PATTERN = re.compile(r"\b(SRC-[A-Z0-9]+(?:-[A-Z0-9]+)*|RM-NEWS-\d+)\b")
+_CORPUS_INDEX: Optional[Dict[str, Dict[str, Any]]] = None
+
+def _field(item: Any, name: str) -> Any:
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+def _fmt_date(value: Any) -> str:
+    try:
+        return datetime.fromisoformat(str(value)[:10]).strftime("%d %b %Y").lstrip("0")
+    except ValueError:
+        return str(value or "")[:10]
+
+def source_index(sources: Optional[List[Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """source_id -> {title, publisher, short, date, url}. Defaults to the research corpus."""
+    global _CORPUS_INDEX
+    if sources is None:
+        if _CORPUS_INDEX is None:
+            path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "research", "corpus.json")
+            _CORPUS_INDEX = source_index(json.load(open(path, encoding="utf-8")) if os.path.exists(path) else [])
+        return _CORPUS_INDEX
+    out = {}
+    for s in sources:
+        publisher = str(_field(s, "publisher") or "")
+        short = PUBLISHER_SHORT.get(publisher, publisher.replace("RM-entered: ", "") or "Source")
+        if str(_field(s, "source_id") or "").startswith("RM-NEWS"):
+            short = f"RM news ({short})"
+        out[str(_field(s, "source_id"))] = {"title": str(_field(s, "title") or ""), "publisher": publisher, "short": short,
+                                            "date": _fmt_date(_field(s, "published_at")), "url": _field(s, "url")}
+    return out
+
+def source_label(source_id: str, index: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+    """'UBS CIO · 10 Oct 2026' for an id; 'RM-entered news' / 'source' when it is not in the index."""
+    info = (index or {}).get(source_id) or source_index().get(source_id)
+    if info:
+        return f"{info['short']} · {info['date']}"
+    return "RM-entered news" if source_id.startswith("RM-NEWS") else "source"
+
+def readable_citations(text: Any, index: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+    """Replace internal source ids in text with publisher and date. '[SRC-x] ' audit prefixes are dropped."""
+    text = str(text)
+    text = re.sub(r"\[(SRC-[A-Z0-9-]+|RM-NEWS-\d+)\]\s*", "", text)
+    return SOURCE_ID_PATTERN.sub(lambda m: source_label(m.group(1), index), text)
+
 def _pdf_styles() -> Dict[str, Any]:
     styles = getSampleStyleSheet()
     dark, slate, red = colors.HexColor("#0F172A"), colors.HexColor("#334155"), colors.HexColor("#E60000")
@@ -93,7 +145,21 @@ def _doc(output_path: str) -> SimpleDocTemplate:
 
 
 def _bullets(items: List[str], style: ParagraphStyle) -> List[Paragraph]:
-    return [Paragraph(f"&bull; {item}", style) for item in items]
+    return [Paragraph(f"&bull; {readable_citations(item)}", style) for item in items]
+
+
+def _source_links(lines: List[str], style: ParagraphStyle) -> List[Paragraph]:
+    """Audit-format source lines as linked titles with publisher and date (no internal ids)."""
+    out = []
+    for line in lines:
+        m = SOURCE_ID_PATTERN.search(line)
+        info = source_index().get(m.group(1)) if m else None
+        if info:
+            title = f"<link href='{info['url']}' color='#1C5CAB'><u>{info['title']}</u></link>" if info.get("url") else f"<b>{info['title']}</b>"
+            out.append(Paragraph(f"{title} — {info['short']}, {info['date']}", style))
+        else:
+            out.append(Paragraph(readable_citations(line), style))
+    return out
 
 
 def meeting_brief_renderer(brief: Any, output_path: str, charts: Optional[List[Any]] = None) -> str:
@@ -141,7 +207,7 @@ def meeting_brief_renderer(brief: Any, output_path: str, charts: Optional[List[A
     n = 5 if brief.recommendations else 4
     story += [Paragraph(f"{n}. Talking points", s["section"]), *_bullets(brief.talking_points, s["body"]),
               Paragraph(f"{n + 1}. Questions for the client", s["section"]), *_bullets(brief.questions_for_client, s["body"]),
-              Paragraph("Sources", s["section"]), *_bullets(brief.sources, s["body"]),
+              Paragraph("Sources", s["section"]), *_source_links(brief.sources, s["body"]),
               Spacer(1, 8), Paragraph(f"<b>Advisor approval:</b> {brief.advisor_signature_block}", s["bold"]),
               Paragraph("Internal preparation document. Returns are not guaranteed; any recommendation requires client suitability confirmation.", s["body"])]
     _doc(output_path).build(story)
@@ -168,7 +234,7 @@ def decision_record_renderer(record: Any, impact: Any, output_path: str, charts:
               Paragraph("4. Advisor decision", s["section"]), Paragraph(f"<b>{record.decision}</b>: {record.rationale}", s["body"])]
     if record.follow_up:
         story.append(Paragraph(f"<b>Follow-up / monitoring trigger:</b> {record.follow_up}", s["body"]))
-    story += [Paragraph("Key findings and sources", s["section"]), *_bullets(record.key_findings + record.sources, s["body"]),
+    story += [Paragraph("Key findings and sources", s["section"]), *_bullets(record.key_findings, s["body"]), *_source_links(record.sources, s["body"]),
               Spacer(1, 8), Paragraph(f"<b>Recorded by:</b> {record.advisor_signature_block}", s["bold"]),
               Paragraph("A market event triggers reassessment, not an automatic trade. No orders were placed.", s["body"])]
     _doc(output_path).build(story)
