@@ -3,6 +3,16 @@ toolbarMode = "viewer"  # hide developer controls (Deploy) in the advisor worksp
 
 [theme]
 primaryColor = "#c8102e"
+backgroundColor = "#f4f4f2"
+secondaryBackgroundColor = "#f7f7f5"
+textColor = "#1a1a1a"
+borderColor = "#e6e6e3"
+baseRadius = "0.6rem"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+
+[theme.sidebar]
+backgroundColor = "#ffffff"
 
 [browser]
 gatherUsageStats = false

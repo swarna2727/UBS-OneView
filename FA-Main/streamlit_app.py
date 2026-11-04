@@ -60,9 +60,10 @@ OFFLINE, LIVE = "Offline · test data stubs", "Live · OpenRouter"
 # Validated reference palette (dataviz skill): status colours never double as series colours.
 STATUS_COLORS = {"PASS": "#0ca30c", "FLAG": "#fab219", "FAIL": "#d03b3b", "BLOCK": "#d03b3b"}
 STATUS_ICONS = {"PASS": "✓", "FLAG": "!", "FAIL": "✕", "BLOCK": "■"}
-BEFORE_COLOR, AFTER_COLOR = "#86b6ef", "#1c5cab"  # ordinal blue: before (light) -> after (dark)
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
-MUTED = "#898781"
+BEFORE_COLOR, AFTER_COLOR = "#cfcfcc", "#c8102e"  # before (light grey) -> proposed (brand red)
+SERIES = ["#c8102e", "#1f1f1f", "#8c8c8a", "#c9a227", "#d6d6d3", "#7a1f2b", "#4d4d4b", "#e79aa6"]  # red, black, greys, gold
+MUTED = "#7a7a78"
+RM_NAME = "Rachel Wong"  # the deck's illustrative Relationship Manager
 # Assumed list prices used only for the cost estimate on the Audit screen (US$ per million tokens).
 ASSUMED_PRICE_PER_MTOK = {"prompt": 3.0, "completion": 15.0}
 RISK_OPTIONS = ["Conservative", "Low to moderate", "Moderate", "Balanced growth", "Aggressive growth"]
@@ -89,57 +90,110 @@ st.set_page_config(page_title="UBS OneView", layout="wide", initial_sidebar_stat
 
 st.html("""
 <style>
-  :root { --brand-red: #c8102e; }
-  .block-container { max-width: 1520px; padding-top: 3.75rem; padding-bottom: 1.1rem; }
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  :root { --brand-red: #c8102e; --ink: #1a1a1a; --muted: #7a7a78; --line: #ebebe8; --canvas: #f4f4f2; --pink: #fdecee; }
+  .stApp { background: var(--canvas); font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; color: var(--ink); }
+  .block-container { max-width: 1440px; padding-top: 3.4rem; padding-bottom: 1.1rem; }
   /* The transparent header overlays the top of the page; let clicks reach buttons under it (menu stays clickable). */
   header[data-testid="stHeader"] { background: transparent; }
   header[data-testid="stHeader"], header[data-testid="stHeader"] * { pointer-events: none !important; }
   header[data-testid="stHeader"] button, header[data-testid="stHeader"] button * { pointer-events: auto !important; }
-  [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: .85rem; }
-  h1, h2, h3 { letter-spacing: -0.03em; }
-  h2 { font-size: 1.4rem !important; font-weight: 640; padding: 0 !important; margin: 0 0 .25rem !important; }
-  h4 { font-size: 1rem !important; padding: .2rem 0 0 !important; margin: 0 0 .2rem !important; }
-  [data-testid="stMetric"] { border: 1px solid color-mix(in srgb, currentColor 13%, transparent); border-radius: 10px; padding: .65rem .9rem; }
-  [data-testid="stMetricValue"] { font-size: 1.25rem; }
+  [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: .9rem; }
+  h1, h2, h3, h4 { font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; letter-spacing: -0.02em; color: var(--ink); }
+  h2 { font-size: 1.3rem !important; font-weight: 600; padding: 0 !important; margin: 0 !important; }
+  h4 { font-size: .95rem !important; font-weight: 600; padding: .2rem 0 0 !important; margin: 0 0 .2rem !important; }
+
+  /* cards: every bordered container is a white rounded card with a soft shadow */
+  [class*="st-key-card_"], .st-key-footer, .st-key-footer_done {
+    background: #fff; border: 1px solid #efefec !important; border-radius: 14px !important;
+    box-shadow: 0 1px 2px rgba(20, 20, 20, .04), 0 6px 18px rgba(20, 20, 20, .04); }
+  .st-key-footer { border-left: 3px solid var(--brand-red) !important; }
+  .st-key-footer_done { border-left: 3px solid #0ca30c !important; }
+  [data-testid="stExpander"] details { border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+  [data-testid="stExpander"] summary { font-size: .82rem; }
+
+  /* sidebar: slim, white, small-caps section labels, pink active item */
+  section[data-testid="stSidebar"] { background: #fff; border-right: 1px solid var(--line); width: 16rem !important; min-width: 16rem !important; }
   [data-testid="stSidebarHeader"] { height: 2.4rem; padding-top: .6rem; }
-  [data-testid="stSidebarUserContent"] { padding-top: 0; }
-  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: .4rem; }
-  [data-testid="stSidebar"] .stButton button { justify-content: flex-start; min-height: 2.2rem; padding: .35rem .75rem; }
-  [data-testid="stSidebar"] .stButton button p { text-align: left; font-size: .9rem; }
-  [data-testid="stSidebar"] .eyebrow { display: block; margin: .6rem 0 1.1rem; }
-  .eyebrow { color: var(--brand-red); font-size: .72rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
-  .subtle { opacity: .72; font-size: .9rem; }
-  .brand { font-weight: 750; font-size: 1.15rem; letter-spacing: -.02em; }
-  .brand span { color: var(--brand-red); }
-  .client-chip { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 10px; padding: .65rem .8rem; margin: .45rem 0 .3rem; font-size: .85rem; line-height: 1.4; }
-  .client-chip b { font-size: .95rem; }
-  .pill { display: inline-block; border-radius: 99px; padding: .08rem .55rem; font-size: .75rem; font-weight: 650; border: 1px solid; margin-right: .25rem; white-space: nowrap; }
-  .pill.PASS { color: #0a7d0a; border-color: #0ca30c; background: color-mix(in srgb, #0ca30c 10%, transparent); }
-  .pill.FLAG { color: #9a6700; border-color: #fab219; background: color-mix(in srgb, #fab219 14%, transparent); }
-  .pill.FAIL, .pill.BLOCK { color: #b42f2f; border-color: #d03b3b; background: color-mix(in srgb, #d03b3b 10%, transparent); }
-  .pill.INFO { border-color: color-mix(in srgb, currentColor 25%, transparent); opacity: .85; }
-  @media (prefers-color-scheme: dark) { .pill.PASS { color: #3ccf3c; } .pill.FLAG { color: #fab219; } .pill.FAIL, .pill.BLOCK { color: #ff7a7a; } .eyebrow { color: #ff8091; } }
-  .lineage { display: flex; align-items: stretch; gap: .55rem; flex-wrap: wrap; margin: .5rem 0 0; }
-  .lineage .step { flex: 1 1 150px; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 10px; padding: .45rem .7rem; font-size: .78rem; line-height: 1.4; }
-  .lineage .step.active { border-color: var(--brand-red); box-shadow: inset 3px 0 0 var(--brand-red); }
-  .lineage .step b { font-size: .98rem; margin-left: .3rem; }
-  .lineage .arrow { align-self: center; opacity: .5; }
-  .card-ticker { font-size: 1.25rem; font-weight: 700; letter-spacing: -.02em; }
-  .kv { font-size: .86rem; line-height: 1.55; margin-bottom: .55rem; }
-  .kv b { opacity: .7; font-weight: 600; }
-  .stats { display: flex; gap: 1.4rem; margin: .5rem 0 .65rem; font-size: .8rem; }
-  .stats b { display: block; font-size: 1.1rem; }
-  .callout { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-left: 3px solid var(--brand-red); border-radius: 8px; padding: .65rem .9rem; font-size: .9rem; }
-  table.grid { border-collapse: collapse; width: 100%; font-size: .84rem; }
-  table.grid th, table.grid td { border: 1px solid color-mix(in srgb, currentColor 13%, transparent); padding: .45rem .6rem; text-align: left; vertical-align: top; }
-  table.grid th { opacity: .75; font-weight: 600; }
-  .st-key-footer { border-top: 3px solid var(--brand-red) !important; }
-  .st-key-footer_done { border-top: 3px solid #0ca30c !important; }
-  .usecase-trigger { font-style: italic; opacity: .85; font-size: .9rem; line-height: 1.45; min-height: 3rem; margin: .25rem 0 .35rem; }
-  .src { font-size: .86rem; line-height: 1.45; margin: 0 0 .45rem; }
-  .src a { font-weight: 600; text-decoration: none; }
-  .src a:hover { text-decoration: underline; }
-  .cal { margin-top: .8rem; border: 1px dashed color-mix(in srgb, currentColor 35%, transparent); border-radius: 10px; padding: .65rem .9rem; font-size: .9rem; }
+  [data-testid="stSidebarUserContent"] { padding-top: 0; padding-bottom: 5rem; }
+  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: .15rem; }
+  [data-testid="stSidebar"] .stButton button { justify-content: flex-start; min-height: 2.1rem; padding: .3rem .7rem; border: none !important;
+    background: transparent; color: #3a3a38; box-shadow: none !important; border-radius: 8px; }
+  [data-testid="stSidebar"] .stButton button p { text-align: left; font-size: .86rem; font-weight: 500; }
+  [data-testid="stSidebar"] .stButton button > div, [data-testid="stSidebar"] .stButton button span { justify-content: flex-start; }
+  [data-testid="stSidebar"] .stButton button > div { width: 100%; }
+  [data-testid="stSidebar"] .stHtml, [data-testid="stSidebar"] .stMarkdown { margin-bottom: .2rem; }
+  [data-testid="stSidebar"] .stButton button:hover { background: #f5f5f3; color: var(--ink); }
+  [data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"] { background: var(--pink); color: var(--brand-red); }
+  [data-testid="stSidebar"] .stButton button:disabled { color: #b5b5b2; background: transparent; }
+  .side-label { display: block; color: var(--muted); font-size: .66rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; margin: 1.1rem 0 .35rem .7rem; }
+  .user-chip { position: fixed; bottom: 0; left: 0; width: 16rem; padding: .8rem 1rem; border-top: 1px solid var(--line); background: #fff;
+    display: flex; align-items: center; gap: .6rem; font-size: .8rem; line-height: 1.25; z-index: 5; }
+  .avatar { width: 1.9rem; height: 1.9rem; border-radius: 50%; background: var(--brand-red); color: #fff; display: inline-flex;
+    align-items: center; justify-content: center; font-weight: 600; font-size: .78rem; flex: none; }
+  .avatar.lg { width: 2.4rem; height: 2.4rem; font-size: .9rem; }
+
+  /* type */
+  .eyebrow { color: var(--muted); font-size: .68rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+  .card-label { color: var(--ink); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .subtle { color: var(--muted); font-size: .86rem; }
+  .brand { font-weight: 700; font-size: 1.05rem; letter-spacing: -.02em; padding: .2rem .7rem 0; }
+  .brand span { font-weight: 500; color: var(--ink); }
+  .brand b { color: var(--brand-red); }
+  .client-chip { border-radius: 10px; padding: .55rem .7rem; margin: .6rem 0 0; font-size: .8rem; line-height: 1.4; background: #f7f7f5;
+    display: flex; gap: .55rem; align-items: center; }
+  .client-chip b { font-size: .88rem; }
+
+  /* top bar on every workflow page */
+  .topbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; padding: .2rem 0 .4rem; border-bottom: 1px solid var(--line); }
+  .topbar .title { font-size: 1.3rem; font-weight: 600; letter-spacing: -.02em; }
+
+  /* status pills */
+  .pill { display: inline-block; border-radius: 99px; padding: .08rem .55rem; font-size: .72rem; font-weight: 600; border: 1px solid; margin-right: .25rem; white-space: nowrap; }
+  .pill.PASS { color: #0a7d0a; border-color: #bfe3bf; background: #eef8ee; }
+  .pill.FLAG { color: #8a5d00; border-color: #f4dc9c; background: #fff8e6; }
+  .pill.FAIL, .pill.BLOCK { color: #b42f2f; border-color: #f0c2c2; background: #fdeeee; }
+  .pill.INFO { color: #4d4d4b; border-color: var(--line); background: #f7f7f5; }
+
+  /* stepper (idea lineage) */
+  .lineage { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; margin: .2rem 0 0; }
+  .lineage .step { display: flex; align-items: center; gap: .55rem; flex: 1 1 150px; font-size: .68rem; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted); }
+  .lineage .step .dot { width: 1.7rem; height: 1.7rem; border-radius: 50%; border: 1.5px solid #d6d6d3; display: inline-flex; align-items: center;
+    justify-content: center; font-size: .75rem; color: var(--muted); background: #fff; flex: none; }
+  .lineage .step b { display: block; font-size: .86rem; letter-spacing: 0; text-transform: none; color: var(--ink); font-weight: 600; }
+  .lineage .step.done .dot { border-color: var(--brand-red); color: var(--brand-red); }
+  .lineage .step.active .dot { background: var(--brand-red); border-color: var(--brand-red); color: #fff; }
+  .lineage .step.active { color: var(--brand-red); }
+  .lineage .arrow { flex: 0 0 1.6rem; height: 1.5px; background: #dcdcd9; }
+
+  /* content blocks */
+  .card-ticker { font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; }
+  .kv { font-size: .85rem; line-height: 1.55; margin-bottom: .5rem; }
+  .kv b { color: var(--muted); font-weight: 600; }
+  .stats { display: flex; gap: 1.4rem; margin: .5rem 0 .6rem; font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .stats b { display: block; font-size: 1.05rem; color: var(--ink); text-transform: none; letter-spacing: 0; }
+  .callout { background: #fff; border: 1px solid #efefec; border-left: 3px solid var(--brand-red); border-radius: 12px; padding: .75rem 1rem; font-size: .88rem;
+    box-shadow: 0 1px 2px rgba(20, 20, 20, .04); }
+  .src { font-size: .84rem; line-height: 1.45; margin: 0 0 .45rem; }
+  .src a { font-weight: 600; text-decoration: none; color: var(--ink); }
+  .src a:hover { color: var(--brand-red); }
+  .num { font-size: 1.6rem; font-weight: 300; color: #c9c9c6; line-height: 1; }
+  table.grid { border-collapse: collapse; width: 100%; font-size: .83rem; background: #fff; border-radius: 12px; overflow: hidden; }
+  table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: .5rem .65rem; text-align: left; vertical-align: top; }
+  table.grid th { color: var(--muted); font-weight: 600; font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; background: #fafaf8; }
+  .usecase-trigger { color: var(--muted); font-size: .86rem; line-height: 1.45; min-height: 2.6rem; margin: .25rem 0 .35rem; }
+  .cal { border: 1px solid #efefec; border-radius: 12px; padding: .7rem 1rem; font-size: .88rem; background: #fff; }
+
+  /* widgets */
+  [data-testid="stMetric"] { background: #fff; border: 1px solid #efefec; border-radius: 12px; padding: .7rem .95rem; box-shadow: 0 1px 2px rgba(20, 20, 20, .04); }
+  [data-testid="stMetricLabel"] p { font-size: .66rem !important; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  [data-testid="stMetricValue"] { font-size: 1.15rem; font-weight: 600; }
+  .stButton button, .stDownloadButton button, .stFormSubmitButton button { border-radius: 8px; font-weight: 600; }
+  [data-testid="stBaseButton-secondary"] { background: #fff; border-color: #e2e2df; }
+  [data-baseweb="tab-list"] { gap: 1.2rem; }
+  [data-baseweb="tab"] p { font-size: .84rem; font-weight: 500; }
+  [data-testid="stTextInputRootElement"], [data-baseweb="select"] > div, [data-testid="stNumberInputContainer"], textarea { border-radius: 8px !important; }
 </style>
 """)
 
@@ -190,6 +244,15 @@ def pill(status: str, text: str | None = None) -> str:
 
 def info_pill(text: str) -> str:
     return f"<span class='pill INFO'>{esc(text)}</span>"
+
+
+_CARD_IDS = iter(range(1, 1_000_000))
+
+
+def card(height: int | str | None = None) -> Any:
+    """A white rounded card (bordered container with a key the stylesheet targets)."""
+    kwargs = {"height": height} if height is not None else {}
+    return st.container(border=True, key=f"card_{next(_CARD_IDS)}", **kwargs)
 
 
 def html_block(markup: str) -> None:
@@ -541,13 +604,13 @@ def show_chart(chart: alt.Chart) -> None:
     title = _pop_title(chart)
     if title:
         html_block(f"<div style='font-weight:650;font-size:.92rem;padding-top:.2rem'>{esc(title)}</div>")
-    st.altair_chart(chart.configure_view(strokeWidth=0), width="stretch")
+    st.altair_chart(chart.configure_view(strokeWidth=0).configure(background="transparent", font="Inter"), width="stretch")
 
 
 def donut(weights: dict[str, float], title: str, height: int = 200) -> alt.Chart:
     frame = pd.DataFrame([{"Category": k, "Weight": round(v, 1)} for k, v in sorted(weights.items(), key=lambda kv: -kv[1])])
     order = list(frame["Category"])
-    return alt.Chart(frame, title=title).mark_arc(innerRadius=44, outerRadius=82, stroke="#ffffff", strokeWidth=2).encode(
+    return alt.Chart(frame, title=title).mark_arc(innerRadius=58, outerRadius=80, stroke="#ffffff", strokeWidth=2).encode(
         theta=alt.Theta("Weight:Q", stack=True),
         color=alt.Color("Category:N", scale=alt.Scale(domain=order, range=SERIES[:len(order)]), legend=alt.Legend(title=None, labelLimit=150)),
         order=alt.Order("Weight:Q", sort="descending"),
@@ -612,7 +675,7 @@ def reference_mix_chart(profile: Any) -> alt.Chart:
         yOffset=alt.YOffset("Portfolio:N", sort=["Current", "CIO mix"]),
         x=alt.X("Weight:Q", title="%"),
         color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Current", "CIO mix"], range=[AFTER_COLOR, BEFORE_COLOR]), legend=None),
-        tooltip=["Category", "Portfolio", alt.Tooltip("Weight:Q", format=".1f")]).properties(height=150)
+        tooltip=["Category", "Portfolio", alt.Tooltip("Weight:Q", format=".1f")]).properties(height=150, background="transparent")
 
 
 def status_heatmap(frame: pd.DataFrame) -> alt.Chart:
@@ -659,11 +722,8 @@ def page_header(ctx: dict[str, Any], key: str, title: str, subtitle: str, status
     cp = next((c for k, _, c in STEPS[ctx["use_case"]] if k == key), None)
     position = f"Step {steps.index(key) + 1} of {len(steps)} · " if key in steps else ""
     checkpoint = f" · Checkpoint {cp[2:]}" if cp and cp.startswith("CP") else (" · Advisor decision" if cp else "")
-    html_block(f"<div class='eyebrow'>{esc(position + PAGE_ROLES[key] + checkpoint)}</div>")
-    left, right = st.columns([5, 1.6], vertical_alignment="bottom")
-    left.markdown(f"## {md(title)}")
-    if status_html:
-        right.markdown(f"<div style='text-align:right'>{status_html}</div>", unsafe_allow_html=True)
+    html_block(f"<div class='topbar'><div><div class='eyebrow'>{esc(position + PAGE_ROLES[key] + checkpoint)}</div>"
+               f"<div class='title'>{esc(title)}</div></div><div>{status_html}</div></div>")
 
 
 def lineage_strip(state: dict[str, Any], active: str, final_label: str) -> None:
@@ -675,10 +735,12 @@ def lineage_strip(state: dict[str, Any], active: str, final_label: str) -> None:
         ("final", final_label, f"{counts['final']} ideas" if counts["final"] else "pending"),
     ]
     parts = []
+    order = [k for k, *_ in steps]
     for i, (key, label, value) in enumerate(steps):
         if i:
-            parts.append("<div class='arrow'>➜</div>")
-        parts.append(f"<div class='step {'active' if key == active else ''}'>{esc(label)}<b>{esc(value)}</b></div>")
+            parts.append("<div class='arrow'></div>")
+        state = "active" if key == active else ("done" if order.index(key) < order.index(active) else "")
+        parts.append(f"<div class='step {state}'><span class='dot'>{i + 1}</span><div>{esc(label)}<b>{esc(value)}</b></div></div>")
     html_block(f"<div class='lineage'>{''.join(parts)}</div>")
 
 
@@ -720,11 +782,11 @@ def render_sidebar(ctx: dict[str, Any]) -> None:
     raw = client_record(st.session_state.client_key)["raw"]
     uc = ctx["use_case"]
     with st.sidebar:
-        html_block("<div class='brand'>UBS <span>OneView</span></div><div class='subtle'>Human-led multi-agent advisory</div>")
-        mode = "Live model" if st.session_state.get("mode") == LIVE else "Offline stubs"
-        html_block(f"<div class='client-chip'><b>{esc(raw.get('name', 'Client'))}</b> · {esc(raw.get('client_id', ''))}<br>"
-                   f"{esc(USE_CASES[uc][0])} · {esc(USE_CASES[uc][1])}<br><span class='subtle'>{esc(mode)}</span></div>"
-                   "<div class='eyebrow'>Workflow</div>")
+        html_block(brand_html())
+        mode = "Live model" if st.session_state.get("mode") == LIVE else "Offline"
+        html_block(f"<div class='client-chip'>{avatar(raw.get('name', 'Client'))}<div><b>{esc(raw.get('name', 'Client'))}</b><br>"
+                   f"<span class='subtle'>{esc(USE_CASES[uc][0])} · {esc(mode)}</span></div></div>"
+                   "<span class='side-label'>Workflow</span>")
         current = st.session_state.get("screen")
         action_keys = []
         for i, (key, label, checkpoint) in enumerate(visible_steps(ctx)):
@@ -734,7 +796,7 @@ def render_sidebar(ctx: dict[str, Any]) -> None:
             number = f"{i + 1} · " if key != "audit" else ""
             state_text = {"action": "Waiting for your decision", "done": "Completed", "failed": "Needs attention",
                           "locked": "Not reached yet"}.get(status, "Available")
-            st.button(f"{number}{label}" + (f" · {checkpoint}" if checkpoint else ""), key=f"nav_{key}",
+            st.button(f"{number}{label}", key=f"nav_{key}",
                       icon=STATUS_NAV_ICON.get(status, ":material/radio_button_unchecked:"), width="stretch",
                       type="primary" if key == current else "secondary", disabled=status == "locked",
                       on_click=go, args=(key,), help=f"Advisor checkpoint {checkpoint} · {state_text}" if checkpoint else state_text)
@@ -746,8 +808,37 @@ def render_sidebar(ctx: dict[str, Any]) -> None:
             st.success("Workflow complete · PDF ready", icon=":material/verified:")
         elif ctx["outcome"] == "REJECTED":
             st.error("Workflow rejected", icon=":material/block:")
+        html_block("<span class='side-label'>Navigate</span>")
         st.button("Back to client", icon=":material/arrow_back:", on_click=back_to_client, width="stretch", key="nav_back")
         st.button("All clients", icon=":material/groups:", on_click=reset_to_client_list, width="stretch", key="nav_all_clients")
+        html_block(user_chip())
+
+
+def brand_html() -> str:
+    return "<div class='brand'><b>UBS</b> <span>OneView</span></div>"
+
+
+def avatar(name: str, large: bool = False) -> str:
+    initials = "".join(w[0] for w in str(name).replace("Mdm ", "").split()[:2]).upper() or "?"
+    return f"<span class='avatar{' lg' if large else ''}'>{esc(initials)}</span>"
+
+
+def user_chip() -> str:
+    return f"<div class='user-chip'>{avatar(RM_NAME)}<div><b>{esc(RM_NAME)}</b><br><span class='subtle' style='font-size:.74rem'>Relationship Manager</span></div></div>"
+
+
+def render_home_sidebar() -> None:
+    """Landing and client home: brand, the client list and the RM."""
+    with st.sidebar:
+        html_block(brand_html() + "<span class='side-label'>Clients</span>")
+        current = st.session_state.get("client_key")
+        for key in VISIBLE_CLIENT_KEYS:
+            raw = client_record(key)["raw"]
+            st.button(raw["name"], key=f"side_{key}", icon=":material/person:", width="stretch",
+                      type="primary" if key == current else "secondary", on_click=select_client, args=(key,))
+        html_block("<span class='side-label'>New request</span>")
+        st.button("Client intake", key="side_intake", icon=":material/person_add:", width="stretch", on_click=reset_to_client_list)
+        html_block(user_chip())
 
 
 # --------------------------------------------------------------------------------------
@@ -843,18 +934,18 @@ def profile_form(ctx: dict[str, Any], raw: dict[str, Any], editable: bool) -> tu
 def render_profile_generation(profile: Any, raw: dict[str, Any]) -> None:
     """Show how the profile was generated, step by step, so the advisor can review each one."""
     steps = st.columns(4)
-    with steps[0], st.container(border=True, height="stretch"):
+    with steps[0], card(height="stretch"):
         st.markdown("**1 · Ingest**  \nAdvisor-verified inputs")
         st.json({k: raw.get(k) for k in ("goals", "time_horizon_months", "stated_risk_willingness", "total_wealth",
-                                         "new_capital_amount", "liquidity_schedule") if k in raw}, expanded=True)
-    with steps[1], st.container(border=True, height="stretch"):
+                                         "new_capital_amount", "liquidity_schedule") if k in raw}, expanded=1)
+    with steps[1], card(height="stretch"):
         st.markdown("**2 · Required-field validator**  \nDeterministic")
         check = required_field_validator(raw)
         if check.is_valid:
             html_block(pill("PASS", "All mandatory fields present"))
         else:
             html_block(pill("FAIL", "Missing: " + ", ".join(check.missing_fields)))
-    with steps[2], st.container(border=True, height="stretch"):
+    with steps[2], card(height="stretch"):
         st.markdown("**3 · Risk-profile calculator**  \nDeterministic, not the LLM")
         try:
             risk = risk_profile_calculator(raw)
@@ -863,12 +954,12 @@ def render_profile_generation(profile: Any, raw: dict[str, Any]) -> None:
             st.metric("Band (lower of the two)", risk.risk_tier)
         except Exception as exc:
             st.info(f"The risk band cannot be calculated yet: {exc}")
-    with steps[3], st.container(border=True, height="stretch"):
+    with steps[3], card(height="stretch"):
         st.markdown("**4 · Standardised profile**  \nWhat the downstream agents receive")
         st.json({"risk_tier": profile.calculated_risk_tier, "risk_band_0_100": risk_band_points(profile.risk_score_range),
                  "time_horizon_months": profile.time_horizon_months, "near_term_liquidity_need": profile.near_term_liquidity_need,
                  "asset_class_weights": profile.current_asset_class_weights,
-                 "unresolved_flags": [f.code for f in profile.unresolved_flags]}, expanded=True)
+                 "unresolved_flags": [f.code for f in profile.unresolved_flags]}, expanded=1)
 
 
 def render_profile(ctx: dict[str, Any]) -> None:
@@ -1093,7 +1184,7 @@ def render_meeting(ctx: dict[str, Any]) -> None:
     with tabs[0]:
         left, right = st.columns(2)
         for col, title, lines in ((left, "What the client said", record.client_said), (right, "Decisions made", record.decisions)):
-            with col, st.container(border=True, height="stretch"):
+            with col, card(height="stretch"):
                 st.markdown(f"**{title}**")
                 if not lines:
                     st.caption("Nothing recorded.")
@@ -1104,7 +1195,7 @@ def render_meeting(ctx: dict[str, Any]) -> None:
     edits: dict[str, Any] = {}
     with tabs[1]:
         for a in record.actions:
-            with st.container(border=True):
+            with card():
                 head = f"**{md(a.description)}** " + pill("PASS" if a.status == "CONFIRMED" else "FLAG", a.status.title())
                 st.markdown(head, unsafe_allow_html=True)
                 if a.flag_reason:
@@ -1118,7 +1209,7 @@ def render_meeting(ctx: dict[str, Any]) -> None:
         if not record.profile_changes:
             st.success("No change in the client's circumstances was spoken.")
         for c in record.profile_changes:
-            with st.container(border=True):
+            with card():
                 status = c.check.status if c.check else "FLAG"
                 st.markdown(f"**{md(c.label)}**: {md(c.before or '—')} → **{md(c.after)}** " + pill(status, f"Critic: {status}")
                             + info_pill(c.decision.title()) + info_pill("transcript line " + ", ".join(map(str, c.source_lines))), unsafe_allow_html=True)
@@ -1184,14 +1275,16 @@ def render_meeting(ctx: dict[str, Any]) -> None:
 def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
     tabs = st.tabs(names)
     with tabs[0]:
-        left, right = st.columns([1.6, 1])
-        with left, st.container(border=False):
-            for finding in sorted(brief.findings, key=lambda f: f.materiality_rank):
-                with st.container(border=True):
-                    html_block(f"<b>{finding.materiality_rank} · {esc(finding.theme)}</b>" + source_links(finding.cited_source_ids))
-                    with st.expander("Details"):
-                        st.markdown(f"{md(finding.claim)}\n\n**For this client:** {md(finding.relevance_to_client)}")
+        findings = sorted(brief.findings, key=lambda f: f.materiality_rank)
+        for col, finding in zip(st.columns(max(len(findings[:3]), 1)), findings[:3]):
+            with col, card(height="stretch"):
+                html_block(f"<div class='num'>{finding.materiality_rank:02d}</div><b>{esc(finding.theme)}</b>" + source_links(finding.cited_source_ids))
+                with st.expander("Details"):
+                    st.markdown(f"{md(finding.claim)}\n\n**For this client:** {md(finding.relevance_to_client)}")
+        left, right = st.columns([1, 1.2])
         with right:
+            html_block("<div class='card-label' style='margin-top:.3rem'>Key market risks</div>" + "".join(info_pill(r) for r in brief.key_market_risks))
+        with left:
             if brief.conflicting_signals:
                 # Slide 29: conflicting market signals are surfaced as uncertainty, never resolved by picking a side.
                 html_block(f"<div class='callout'>{pill('FLAG', 'Sources disagree')}<br>" + "<br>".join(esc(c) for c in brief.conflicting_signals) + "</div>")
@@ -1200,8 +1293,7 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
                 for sid in finding.cited_source_ids:
                     label = (st.session_state.get("source_index") or {}).get(sid, {}).get("short", "Source")
                     cites[label] = cites.get(label, 0) + 1
-            show_chart(donut(cites, "Evidence by publisher"))
-            html_block("".join(info_pill(r) for r in brief.key_market_risks))
+            show_chart(donut(cites, "Evidence by publisher", height=170))
     with tabs[1]:
         frame = pd.DataFrame([m.model_dump() for m in brief.quantitative_signals.values()])
         if frame.empty:
@@ -1262,7 +1354,7 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
                 tooltip=["Source", "Title", "Age (days)"])
             limit = alt.Chart(pd.DataFrame([{"Age (days)": max_age}])).mark_rule(strokeDash=[4, 3], color=STATUS_COLORS["FAIL"], strokeWidth=2).encode(x="Age (days):Q")
             show_chart((bars + limit).properties(height=45 * len(frame) + 60))
-        with right, st.container(border=True):
+        with right, card():
             html_block(source_links([s.source_id for s in brief.validated_sources]))
 
 
@@ -1333,7 +1425,7 @@ def render_event(ctx: dict[str, Any]) -> None:
             html_block(f"<div class='callout'><b>Event</b><br>{esc(impact.event_description)}</div>")
             with st.container(border=False):
                 for f in sorted(brief.findings, key=lambda f: f.materiality_rank)[:3]:
-                    with st.container(border=True):
+                    with card():
                         html_block(f"<b>{esc(f.theme)}</b><div class='kv'>{esc(f.claim)}</div>"
                                    f"<div class='kv'><b>Client relevance</b><br>{esc(f.relevance_to_client)}</div>"
                                    f"<div class='subtle' style='font-size:.78rem'>{esc(', '.join(f.cited_source_ids))}</div>")
@@ -1397,7 +1489,7 @@ def render_event(ctx: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------------------
 
 def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, height: int | str = "stretch") -> None:
-    with st.container(border=True, height=height):
+    with card(height=height):
         badges = (pill(status) if status else "") + (info_pill(tag) if tag else "") + info_pill(idea.get("lane", "ALIGNED").title())
         stats = (f"<div class='stats'><div>Action<b>{esc(idea['action'])}</b></div><div>Target weight<b>{idea['target_weight_pct']:.1f}%</b></div>"
                  f"<div>Conviction<b>{esc(idea['conviction'])}</b></div></div>")
@@ -1447,7 +1539,7 @@ def render_ideas(ctx: dict[str, Any]) -> None:
                         format_func=lambda s: next(f"Idea {i['slot_number']} · {i['ticker']}" for i in ideas if i["slot_number"] == s)) or 1
         idea = next(i for i in ideas if i["slot_number"] == pick)
         left, right = st.columns([1.2, 1])
-        with left, st.container(border=True, height="stretch"):
+        with left, card(height="stretch"):
             html_block(kv("Why it suits the client", idea["client_fit_rationale"])
                        + "<div class='kv'><b>Risks to raise</b><br>" + "".join(info_pill(r) for r in idea["key_risks"]) + "</div>"
                        + "<div class='kv'><b>Sources</b></div>" + source_links(idea["cited_evidence_ids"]))
@@ -1510,7 +1602,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
         evaluations = {ie.idea_id: ie for ie in assessment.idea_evaluations}
         for col, idea in zip(st.columns(3), sorted(ideas, key=lambda i: i.slot_number)):
             ie = evaluations.get(idea.idea_id)
-            with col, st.container(border=True, height="stretch"):
+            with col, card(height="stretch"):
                 html_block(f"<div class='eyebrow'>Idea {idea.slot_number} · {esc(idea.portfolio_role.title())}</div>"
                            f"<div class='card-ticker'>{esc(idea.ticker)} {pill(ie.status) if ie else ''}</div>"
                            f"<div class='subtle'>{esc(idea.name)} · {idea.action} {idea.target_weight_pct:.1f}%</div>")
@@ -1720,7 +1812,7 @@ def render_memo(ctx: dict[str, Any]) -> None:
             show_chart(donut(dict(zip(after["Category"], after["After"])), "Proposed allocation", height=180))
     with tabs[1]:
         for col, d in zip(st.columns(3), memo.page_2_details):
-            with col, st.container(border=True, height="stretch"):
+            with col, card(height="stretch"):
                 html_block(f"<div class='eyebrow'>Idea {d.slot_number} · {esc(d.portfolio_role.title())} · {esc(d.conviction)} conviction</div>"
                            f"<div class='card-ticker'>{esc(d.ticker)}</div><div class='subtle'>{esc(d.action)} · {esc(d.allocation_range_str)}</div>"
                            + kv("Why it suits the client", d.client_fit_rationale)
@@ -1731,7 +1823,7 @@ def render_memo(ctx: dict[str, Any]) -> None:
         with left:
             show_chart(before_after_bars(exposure_frame(profile, ideas, "asset_class"), "Asset allocation: current vs proposed", height=190))
             html_block(f"<div class='callout'><b>Portfolio-level impact</b><br>{esc(page3.portfolio_level_impact_narrative)}</div>")
-        with right, st.container(border=True, height="stretch"):
+        with right, card(height="stretch"):
             st.markdown("**Scenario analysis**")
             st.markdown("\n".join(f"- **{md(k)}**: {md(v)}" for k, v in page3.scenario_analysis.items()))
             st.markdown("**Risk disclosures**")
@@ -1800,7 +1892,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
         if brief.key_insights:
             cols = st.columns(len(brief.key_insights))
             for n, (col, ins) in enumerate(zip(cols, brief.key_insights), start=1):
-                with col, st.container(border=True, height="stretch"):
+                with col, card(height="stretch"):
                     html_block(f"<div class='eyebrow'>{n:02d} · {esc(ins.area)}</div><div class='card-ticker'>{esc(ins.headline)}</div>")
                     if ins.area == "PORTFOLIO":
                         show_chart(reference_mix_chart(profile))
@@ -1815,7 +1907,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
             st.info("Nothing stands out for this client this period: no client notes since the last review, no gap to the reference mix.")
     with tabs[1]:
         left, right = st.columns([1, 1.2])
-        with left, st.container(border=True, height="stretch"):
+        with left, card(height="stretch"):
             html_block(f"<div class='eyebrow'>{esc(brief.meeting_purpose)} · {esc(brief.review_period)}</div>")
             st.markdown("\n".join(f"- {md(s)}" for s in brief.profile_summary))
         with right:
@@ -1831,7 +1923,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
         with mid:
             frame = pd.DataFrame([{"Scenario": k, "Impact %": v} for k, v in stress_impact(profile.parsed_holdings).items()])
             show_chart(signed_bars(frame, "Scenario", "Impact %", "Illustrative stress: estimated portfolio move %", height=170))
-        with right, st.container(border=True, height="stretch"):
+        with right, card(height="stretch"):
             st.markdown("**Portfolio risks to raise**")
             st.markdown("\n".join(f"- {md(r)}" for r in brief.portfolio_risks))
     with tabs[3]:
@@ -1839,14 +1931,14 @@ def render_brief(ctx: dict[str, Any]) -> None:
         if research and research.conflicting_signals:
             html_block(f"<div class='callout'>{pill('FLAG', 'Sources disagree')}<br>" + "<br>".join(esc(c) for c in research.conflicting_signals) + "</div>")
         for col, finding in zip(st.columns(3), sorted(research.findings, key=lambda f: f.materiality_rank)[:3] if research else []):
-            with col, st.container(border=True, height="stretch"):
+            with col, card(height="stretch"):
                 html_block(f"<b>{finding.materiality_rank} · {esc(finding.theme)}</b>" + source_links(finding.cited_source_ids))
                 with st.expander("Details"):
                     st.markdown(f"{md(finding.claim)}\n\n**For this client:** {md(finding.relevance_to_client)}")
     selecting = not approved and ctx["stage"] == "brief_approval"
     with tabs[4]:
         left, right = st.columns(2)
-        with left, st.container(border=True, height="stretch"):
+        with left, card(height="stretch"):
             if selecting:
                 # Checkpoint 4 (deck slide 3): the RM selects the points to raise; only those go into the PDF.
                 st.markdown("**Talking points** · tick the points to raise with the client")
@@ -1856,7 +1948,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
                 st.markdown("**Talking points**\n" + "\n".join(f"{i + 1}. {md(t)}" for i, t in enumerate(brief.talking_points)))
                 if brief.points_not_raised:
                     st.caption(f"{len(brief.points_not_raised)} drafted point(s) not selected by the RM (kept on the audit record).")
-        with right, st.container(border=True, height="stretch"):
+        with right, card(height="stretch"):
             st.markdown("**Questions for the client**\n" + "\n".join(f"- {md(q)}" for q in brief.questions_for_client))
     if brief.recommendations:
         with tabs[5]:
@@ -1905,7 +1997,7 @@ def render_record(ctx: dict[str, Any]) -> None:
         return
     impact = ctx["state"]["event_impact"]
     left, right = st.columns([1.2, 1])
-    with left, st.container(border=True, height="stretch"):
+    with left, card(height="stretch"):
         html_block(f"<div class='eyebrow'>{esc(record.event_title)}</div><div class='card-ticker'>{esc(record.decision.title())}</div>"
                    + kv("Rationale", record.rationale) + (kv("Follow-up / monitoring trigger", record.follow_up) if record.follow_up else "")
                    + kv("Estimated portfolio move", f"{record.portfolio_move_pct:+.2f}%") + kv("Recorded", record.advisor_signature_block))
@@ -1975,7 +2067,7 @@ def render_audit(ctx: dict[str, Any]) -> None:
             show_chart(chart.properties(height=max(26 * len(frame) + 40, 160)))
     with tabs[2]:
         left, right = st.columns([1.2, 1])
-        with left, st.container(border=True, height="stretch"):
+        with left, card(height="stretch"):
             st.markdown("**Notes and exceptions on this run**")
             st.markdown("\n".join(f"- {md(n)}" for n in state.get("advisor_notes") or []) or "No notes yet.")
         with right:
@@ -2020,12 +2112,13 @@ def render_landing() -> None:
                 raw = client_record(key)["raw"]
                 summary, control = CLIENT_CARD_SUMMARIES[key]
                 last = (raw.get("last_review") or {}).get("date", "none")
-                with col, st.container(border=True):
+                with col, card():
                     left, right = st.columns([3, 1.1], vertical_alignment="center")
                     with left:
-                        html_block(f"<div class='eyebrow'>{esc(raw['client_id'])}</div><b style='font-size:1.05rem'>{esc(raw['name'])}</b>"
-                                   f"<div class='kv'>{esc(summary)} · {esc(raw.get('stated_risk_willingness', ''))} · last review {esc(last)}</div>"
-                                   f"<div class='subtle' style='font-size:.8rem'>{esc(control)}</div>")
+                        html_block(f"<div style='display:flex;gap:.75rem;align-items:center'>{avatar(raw['name'], large=True)}<div>"
+                                   f"<b style='font-size:1rem'>{esc(raw['name'])}</b>"
+                                   f"<div class='subtle' style='font-size:.8rem'>{esc(raw['client_id'])} · {esc(summary)} · "
+                                   f"{esc(raw.get('stated_risk_willingness', ''))} · last review {esc(last)}</div></div></div>")
                     right.button("Open", key=f"open_{key}", type="primary", width="stretch", on_click=select_client, args=(key,))
     with tabs[1]:
         render_intake()
@@ -2103,7 +2196,7 @@ def render_client_home() -> None:
     last_run = {h["use_case"]: h for h in record["history"]}
     for col, key in zip(st.columns(3), HOME_CASES):
         verb, label, trigger, icon = USE_CASES[key]
-        with col, st.container(border=True, height="stretch"):
+        with col, card(height="stretch"):
             html_block(f"<div class='eyebrow'>{esc(verb)}</div><b style='font-size:1.05rem'>{esc(label)}</b>"
                        f"<div class='usecase-trigger'>{esc(trigger)}</div>")
             if key == PRE_MEETING:
@@ -2147,9 +2240,11 @@ PAGES = {
 def main() -> None:
     st.session_state.setdefault("mode", OFFLINE)
     if not st.session_state.get("client_key"):
+        render_home_sidebar()
         render_landing()
         return
     if not st.session_state.get("case") or not st.session_state.get("workspace"):
+        render_home_sidebar()
         render_client_home()
         return
     ctx = load_context()
