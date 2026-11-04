@@ -1,7 +1,7 @@
 """Charts for the PDF artifacts (memo, meeting brief, decision record), drawn with ReportLab graphics.
 
-Colours follow the workspace: light blue = current portfolio, dark blue = proposed / after,
-status green / amber / red only for rule outcomes.
+Colours follow the OneView design system: blue-grey = current portfolio, navy = proposed / after,
+status green / amber / red only for rule outcomes; brand red never in charts.
 """
 
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -14,9 +14,9 @@ from reportlab.lib import colors
 
 from src.tools.risk_engine import risk_points
 
-BEFORE = colors.HexColor("#86b6ef")
-AFTER = colors.HexColor("#1c5cab")
-SERIES = [colors.HexColor(c) for c in ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")]
+BEFORE = colors.HexColor("#9aa6b2")  # data-2: current
+AFTER = colors.HexColor("#1f3a5f")   # data-1: proposed
+SERIES = [colors.HexColor(c) for c in ("#1f3a5f", "#9aa6b2", "#2e7d76", "#b8892b", "#8e8a84", "#5b6f8a", "#c9c6bf", "#6f8f7a")]
 INK, MUTED, GRID = colors.HexColor("#0b0b0b"), colors.HexColor("#52514e"), colors.HexColor("#e1e0d9")
 WIDTH = 520
 
@@ -76,7 +76,7 @@ def risk_band(title: str, band: Sequence[float], points: Dict[str, float], width
         d.add(Line(scale(tick), y - 3, scale(tick), y + 3, strokeColor=MUTED, strokeWidth=0.6))
         d.add(String(scale(tick), y - 13, str(tick), fontName="Helvetica", fontSize=7, fillColor=MUTED, textAnchor="middle"))
     lo, hi = risk_points(band[0]), risk_points(band[1])
-    d.add(Rect(scale(lo), y + 6, scale(hi) - scale(lo), 14, fillColor=colors.HexColor("#cde2fb"), strokeColor=None))
+    d.add(Rect(scale(lo), y + 6, scale(hi) - scale(lo), 14, fillColor=colors.HexColor("#dfe5ec"), strokeColor=None))
     d.add(String(scale(lo), y + 23, f"Applied band {lo}-{hi}", fontName="Helvetica", fontSize=7, fillColor=MUTED))
     d.add(String(0, y + 9, "Risk (0-100)", fontName="Helvetica", fontSize=7, fillColor=MUTED))
     items = []
@@ -109,7 +109,7 @@ def signed_bars(title: str, labels: List[str], values: List[float], width: float
     chart.valueAxis.gridStrokeColor, chart.valueAxis.visibleGrid = GRID, True
     chart.bars.strokeColor = None
     for i, v in enumerate(reversed(values)):
-        chart.bars[(0, i)].fillColor = SERIES[0] if v >= 0 else SERIES[7]
+        chart.bars[(0, i)].fillColor = SERIES[0] if v >= 0 else colors.HexColor("#b42318")
     d.add(chart)
     return d
 

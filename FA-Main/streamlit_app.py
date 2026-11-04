@@ -58,11 +58,14 @@ DEMO_TRANSCRIPTS = json.loads((Path(__file__).parent / "data" / "samples" / "mee
 OFFLINE, LIVE = "Offline · test data stubs", "Live · OpenRouter"
 
 # Validated reference palette (dataviz skill): status colours never double as series colours.
-STATUS_COLORS = {"PASS": "#0ca30c", "FLAG": "#fab219", "FAIL": "#d03b3b", "BLOCK": "#d03b3b"}
+STATUS_COLORS = {"PASS": "#157f3b", "FLAG": "#b7791f", "FAIL": "#b42318", "BLOCK": "#b42318"}  # success / warning / danger
 STATUS_ICONS = {"PASS": "✓", "FLAG": "!", "FAIL": "✕", "BLOCK": "■"}
-BEFORE_COLOR, AFTER_COLOR = "#cfcfcc", "#c8102e"  # before (light grey) -> proposed (brand red)
-SERIES = ["#c8102e", "#1f1f1f", "#8c8c8a", "#c9a227", "#d6d6d3", "#7a1f2b", "#4d4d4b", "#e79aa6"]  # red, black, greys, gold
-MUTED = "#7a7a78"
+# Design-system data colours: red is for the primary action and the active place, never for chart data.
+BEFORE_COLOR, AFTER_COLOR = "#9aa6b2", "#1f3a5f"  # data-2 current -> data-1 proposed
+SERIES = ["#1f3a5f", "#9aa6b2", "#2e7d76", "#b8892b", "#8e8a84", "#5b6f8a", "#c9c6bf", "#6f8f7a"]  # data-1 … data-5, then tints
+MUTED = "#6b6a66"  # ink-muted
+SERIES_NAMES = {"Before": "Current", "After": "Proposed"}
+INK, BORDER = "#1a1a19", "#e7e6e3"
 RM_NAME = "Rachel Wong"  # the deck's illustrative Relationship Manager
 # Assumed list prices used only for the cost estimate on the Audit screen (US$ per million tokens).
 ASSUMED_PRICE_PER_MTOK = {"prompt": 3.0, "completion": 15.0}
@@ -86,114 +89,174 @@ IDEA_STEPS = ("ideas", "suitability", "approval")
 STATUS_NAV_ICON = {"done": ":material/check_circle:", "action": ":material/pending_actions:",
                    "failed": ":material/cancel:", "locked": ":material/lock:"}
 
-st.set_page_config(page_title="UBS OneView", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="UBS OneView", layout="wide", initial_sidebar_state="auto")
 
 st.html("""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-  :root { --brand-red: #c8102e; --ink: #1a1a1a; --muted: #7a7a78; --line: #ebebe8; --canvas: #f4f4f2; --pink: #fdecee; }
-  .stApp { background: var(--canvas); font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; color: var(--ink); }
-  .block-container { max-width: 1440px; padding-top: 3.4rem; padding-bottom: 1.1rem; }
-  /* The transparent header overlays the top of the page; let clicks reach buttons under it (menu stays clickable). */
+  /* OneView design system (tokens: see the design-system artifact). Components read only these properties. */
+  :root {
+    --brand-red: #c8102e; --brand-red-hover: #a50d26; --brand-tint: #fdecee;
+    --canvas: #f6f6f4; --surface: #ffffff; --surface-subtle: #fafaf9; --border: #e7e6e3; --border-strong: #cfcdc8;
+    --ink: #1a1a19; --ink-secondary: #52514e; --ink-muted: #6b6a66; --focus: #1f3a5f;
+    --success: #157f3b; --success-bg: #e9f5ee; --warning: #8a5a00; --warning-bg: #fdf4e1; --danger: #b42318; --danger-bg: #fdecea;
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
+    --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
+    --shadow-sm: 0 1px 2px rgba(26, 26, 25, .05); --shadow-lg: 0 8px 24px rgba(26, 26, 25, .12);
+    --sidebar-width: 240px; --content-max: 1200px;
+  }
+  .stApp { background: var(--canvas); color: var(--ink); }
+  .block-container { max-width: calc(var(--content-max) + 2 * var(--space-8)); padding: 3rem var(--space-8) 1.5rem; }
+  /* the stock Streamlit chrome stays out of the product */
   header[data-testid="stHeader"] { background: transparent; }
   header[data-testid="stHeader"], header[data-testid="stHeader"] * { pointer-events: none !important; }
   header[data-testid="stHeader"] button, header[data-testid="stHeader"] button * { pointer-events: auto !important; }
-  [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: 1.1rem; }
-  h1, h2, h3, h4 { font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; letter-spacing: -0.02em; color: var(--ink); }
-  h2 { font-size: 1.3rem !important; font-weight: 600; padding: 0 !important; margin: 0 !important; }
-  h4 { font-size: .95rem !important; font-weight: 600; padding: .2rem 0 0 !important; margin: 0 0 .2rem !important; }
+  [data-testid="stToolbar"], [data-testid="stMainMenu"], [data-testid="stStatusWidget"], [data-testid="stElementToolbar"],
+  [data-testid="stDecoration"] { visibility: hidden !important; }
+  [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: var(--space-4); }
+  h1, h2, h3, h4 { letter-spacing: -0.01em; color: var(--ink); }
+  h2 { font-size: 24px !important; line-height: 32px !important; font-weight: 600 !important; padding: 0 !important; margin: 0 !important; }
+  h4 { font-size: 18px !important; line-height: 26px !important; font-weight: 600 !important; padding: 0 !important; margin: 0 !important; }
+  *:focus-visible { outline: 2px solid var(--focus) !important; outline-offset: 2px; }
 
-  /* cards: every bordered container is a white rounded card with a soft shadow */
+  /* Card: every bordered container; Action bar: the footer container, sticky at the bottom of the page */
   [class*="st-key-card_"], .st-key-footer, .st-key-footer_done {
-    background: #fff; border: 1px solid #efefec !important; border-radius: 14px !important;
-    box-shadow: 0 1px 2px rgba(20, 20, 20, .04), 0 6px 18px rgba(20, 20, 20, .04); padding: 1.1rem 1.25rem !important; }
-  .st-key-footer { border-left: 3px solid var(--brand-red) !important; }
-  .st-key-footer_done { border-left: 3px solid #0ca30c !important; }
-  [data-testid="stExpander"] details { border: 1px solid var(--line); border-radius: 10px; background: #fff; }
-  [data-testid="stExpander"] summary { font-size: .82rem; }
+    background: var(--surface); border: 1px solid var(--border) !important; border-radius: var(--radius-lg) !important;
+    box-shadow: var(--shadow-sm); padding: var(--space-5) !important; }
+  /* Action bar: fixed to the bottom of the window, aligned to the content column */
+  :root { --inset: max(var(--space-8), calc((100vw - var(--sidebar-width) - var(--content-max) - 2 * var(--space-8)) / 2 + var(--space-8)));
+          --inset-full: max(var(--space-8), calc((100vw - var(--content-max) - 2 * var(--space-8)) / 2 + var(--space-8))); }
+  .st-key-footer, .st-key-footer_done { position: fixed; bottom: var(--space-4); left: calc(var(--sidebar-width) + var(--inset)); right: var(--inset);
+    z-index: 50; box-shadow: var(--shadow-lg); padding: var(--space-3) var(--space-4) !important; width: auto !important; }
+  .stApp:has(section[data-testid="stSidebar"][aria-expanded="false"]) .st-key-footer,
+  .stApp:has(section[data-testid="stSidebar"][aria-expanded="false"]) .st-key-footer_done { left: var(--inset-full); right: var(--inset-full); }
+  .block-container { padding-bottom: 112px !important; }
+  /* "Why" and "More" disclosures read as links, not boxes */
+  [data-testid="stExpander"] details { border: none !important; background: transparent !important; }
+  [data-testid="stExpander"] summary { padding: 0 !important; font-size: 13px; font-weight: 500; color: var(--ink-secondary); min-height: 0; }
+  [data-testid="stExpander"] summary:hover { color: var(--ink); }
+  [data-testid="stExpanderDetails"] { padding: var(--space-2) 0 0 !important; }
 
-  /* sidebar: slim, white, small-caps section labels, pink active item */
-  section[data-testid="stSidebar"] { background: #fff; border-right: 1px solid var(--line); width: 16rem !important; min-width: 16rem !important; }
+  /* Navigation: sidebar */
+  section[data-testid="stSidebar"] { background: var(--surface); border-right: 1px solid var(--border); width: var(--sidebar-width) !important; min-width: var(--sidebar-width) !important; }
   [data-testid="stSidebarHeader"] { height: 2.4rem; padding-top: .6rem; }
-  [data-testid="stSidebarUserContent"] { padding-top: 0; padding-bottom: 5rem; }
-  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: .15rem; }
-  [data-testid="stSidebar"] .stButton button { justify-content: flex-start; min-height: 2.1rem; padding: .3rem .7rem; border: none !important;
-    background: transparent; color: #3a3a38; box-shadow: none !important; border-radius: 8px; }
-  [data-testid="stSidebar"] .stButton button p { text-align: left; font-size: .86rem; font-weight: 500; }
+  [data-testid="stSidebarUserContent"] { padding: 0 var(--space-3) 5rem; }
+  [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 2px; }
+  [data-testid="stSidebar"] .stButton button { justify-content: flex-start; min-height: 32px; height: 32px; padding: 0 var(--space-2); border: none !important;
+    background: transparent; color: var(--ink-secondary); box-shadow: none !important; border-radius: var(--radius-md); }
+  [data-testid="stSidebar"] .stButton button p { text-align: left; font-size: 14px; font-weight: 500; }
   [data-testid="stSidebar"] .stButton button > div, [data-testid="stSidebar"] .stButton button span { justify-content: flex-start; }
   [data-testid="stSidebar"] .stButton button > div { width: 100%; }
-  [data-testid="stSidebar"] .stHtml, [data-testid="stSidebar"] .stMarkdown { margin-bottom: .2rem; }
-  [data-testid="stSidebar"] .stButton button:hover { background: #f5f5f3; color: var(--ink); }
-  [data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"] { background: var(--pink); color: var(--brand-red); }
-  [data-testid="stSidebar"] .stButton button:disabled { color: #b5b5b2; background: transparent; }
-  .side-label { display: block; color: var(--muted); font-size: .66rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; margin: 1.1rem 0 .35rem .7rem; }
-  .user-chip { position: fixed; bottom: 0; left: 0; width: 16rem; padding: .8rem 1rem; border-top: 1px solid var(--line); background: #fff;
-    display: flex; align-items: center; gap: .6rem; font-size: .8rem; line-height: 1.25; z-index: 5; }
-  .avatar { width: 1.9rem; height: 1.9rem; border-radius: 50%; background: var(--brand-red); color: #fff; display: inline-flex;
-    align-items: center; justify-content: center; font-weight: 600; font-size: .78rem; flex: none; }
-  .avatar.lg { width: 2.4rem; height: 2.4rem; font-size: .9rem; }
+  [data-testid="stSidebar"] .stButton button:hover { background: var(--surface-subtle); color: var(--ink); }
+  [data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"] { background: var(--brand-tint); color: var(--brand-red); }
+  [data-testid="stSidebar"] .stButton button:disabled { color: var(--ink-muted); opacity: .55; background: transparent; }
+  .side-label { display: block; color: var(--ink-muted); font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    padding: var(--space-5) 0 var(--space-2) var(--space-2); }
+  [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+  [data-testid="stSidebar"] .stElementContainer:has(.side-label), [data-testid="stSidebar"] .stElementContainer:has(.client-chip) { margin-bottom: 0; overflow: visible; }
+  .user-chip { position: fixed; bottom: 0; left: 0; width: var(--sidebar-width); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border);
+    background: var(--surface); display: flex; align-items: center; gap: var(--space-3); font-size: 13px; line-height: 18px; z-index: 5; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--ink); color: #fff; display: inline-flex;
+    align-items: center; justify-content: center; font-weight: 600; font-size: 12px; flex: none; }
+  .avatar.lg { width: 36px; height: 36px; font-size: 13px; }
+  .brand { font-weight: 600; font-size: 15px; line-height: 22px; padding: var(--space-1) var(--space-2) 0; }
+  .brand span { font-weight: 600; color: var(--ink); }
+  .brand b { color: var(--brand-red); font-weight: 700; }
+  .client-chip { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-2) var(--space-3); margin: var(--space-3) 0 0;
+    font-size: 13px; line-height: 18px; display: flex; gap: var(--space-3); align-items: center; }
+  .client-chip b { font-size: 14px; }
+
+  /* Navigation: top bar (breadcrumb, title, status) and tabs */
+  .st-key-crumb { gap: var(--space-1) !important; min-height: 0; }
+  .st-key-crumb .stButton button { padding: 0; min-height: 0; height: auto; color: var(--ink-muted); font-size: 13px; }
+  .st-key-crumb .stButton button p { font-size: 13px; font-weight: 500; }
+  .st-key-crumb .stButton button:hover { color: var(--ink); }
+  .crumb-sep, .crumb-here { font-size: 13px; line-height: 20px; color: var(--ink-muted); }
+  .crumb-sep { padding: 0 2px; }
+  .crumb-here { color: var(--ink); font-weight: 500; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); padding: 0 0 var(--space-3); border-bottom: 1px solid var(--border); }
+  .topbar .title { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -.01em; }
+  [data-baseweb="tab-list"] { gap: var(--space-5); border-bottom: 1px solid var(--border); }
+  [data-baseweb="tab"] { padding: var(--space-2) 0 var(--space-3) !important; }
+  [data-baseweb="tab"] p { font-size: 14px; font-weight: 500; color: var(--ink-secondary); }
+  [data-baseweb="tab"][aria-selected="true"] p { color: var(--ink); }
+  [data-baseweb="tab-highlight"] { background: var(--ink) !important; height: 2px !important; }
+  [data-baseweb="tab-border"] { display: none; }
 
   /* type */
-  .eyebrow { color: var(--muted); font-size: .68rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
-  .card-label { color: var(--ink); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-  .subtle { color: var(--muted); font-size: .86rem; }
-  .brand { font-weight: 700; font-size: 1.05rem; letter-spacing: -.02em; padding: .2rem .7rem 0; }
-  .brand span { font-weight: 500; color: var(--ink); }
-  .brand b { color: var(--brand-red); }
-  .client-chip { border-radius: 10px; padding: .55rem .7rem; margin: .6rem 0 0; font-size: .8rem; line-height: 1.4; background: #f7f7f5;
-    display: flex; gap: .55rem; align-items: center; }
-  .client-chip b { font-size: .88rem; }
+  .eyebrow, .card-label { color: var(--ink-muted); font-size: 12px; line-height: 16px; font-weight: 500; }
+  .card-label { color: var(--ink); font-weight: 600; }
+  .subtle { color: var(--ink-secondary); font-size: 13px; line-height: 19px; }
+  .card-ticker { font-size: 15px; line-height: 22px; font-weight: 600; }
+  .kv { font-size: 14px; line-height: 21px; color: var(--ink-secondary); margin-bottom: var(--space-2); }
+  .kv b { color: var(--ink-muted); font-weight: 500; font-size: 12px; }
+  .num { font-size: 20px; line-height: 28px; font-weight: 500; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+  .stats { display: flex; gap: var(--space-6); margin: var(--space-3) 0 var(--space-2); font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+  .stats b { display: block; font-size: 15px; line-height: 22px; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 
-  /* top bar on every workflow page */
-  .topbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; padding: .2rem 0 .7rem; border-bottom: 1px solid var(--line); margin-bottom: .3rem; }
-  .topbar .title { font-size: 1.3rem; font-weight: 600; letter-spacing: -.02em; }
-
-  /* status pills */
-  .pill { display: inline-block; border-radius: 99px; padding: .08rem .55rem; font-size: .72rem; font-weight: 600; border: 1px solid; margin-right: .25rem; white-space: nowrap; }
-  .pill.PASS { color: #0a7d0a; border-color: #bfe3bf; background: #eef8ee; }
-  .pill.FLAG { color: #8a5d00; border-color: #f4dc9c; background: #fff8e6; }
-  .pill.FAIL, .pill.BLOCK { color: #b42f2f; border-color: #f0c2c2; background: #fdeeee; }
-  .pill.INFO { color: #4d4d4b; border-color: var(--line); background: #f7f7f5; }
-
-  /* stepper (idea lineage) */
-  .lineage { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; margin: .2rem 0 0; }
-  .lineage .step { display: flex; align-items: center; gap: .55rem; flex: 1 1 150px; font-size: .68rem; font-weight: 600; letter-spacing: .08em;
-    text-transform: uppercase; color: var(--muted); }
-  .lineage .step .dot { width: 1.7rem; height: 1.7rem; border-radius: 50%; border: 1.5px solid #d6d6d3; display: inline-flex; align-items: center;
-    justify-content: center; font-size: .75rem; color: var(--muted); background: #fff; flex: none; }
-  .lineage .step b { display: block; font-size: .86rem; letter-spacing: 0; text-transform: none; color: var(--ink); font-weight: 600; }
-  .lineage .step.done .dot { border-color: var(--brand-red); color: var(--brand-red); }
-  .lineage .step.active .dot { background: var(--brand-red); border-color: var(--brand-red); color: #fff; }
-  .lineage .step.active { color: var(--brand-red); }
-  .lineage .arrow { flex: 0 0 1.6rem; height: 1.5px; background: #dcdcd9; }
+  /* Badge */
+  .pill { display: inline-flex; align-items: center; gap: 3px; height: 20px; border-radius: var(--radius-sm); padding: 0 6px; font-size: 12px; font-weight: 500;
+    margin-right: var(--space-1); white-space: nowrap; border: none; vertical-align: middle; }
+  .pill.PASS { color: var(--success); background: var(--success-bg); }
+  .pill.FLAG { color: var(--warning); background: var(--warning-bg); }
+  .pill.FAIL, .pill.BLOCK { color: var(--danger); background: var(--danger-bg); }
+  .pill.INFO { color: var(--ink-secondary); background: var(--surface-subtle); box-shadow: inset 0 0 0 1px var(--border); }
 
   /* content blocks */
-  .card-ticker { font-size: 1.15rem; font-weight: 700; letter-spacing: -.02em; }
-  .kv { font-size: .85rem; line-height: 1.55; margin-bottom: .5rem; }
-  .kv b { color: var(--muted); font-weight: 600; }
-  .stats { display: flex; gap: 1.4rem; margin: .5rem 0 .6rem; font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-  .stats b { display: block; font-size: 1.05rem; color: var(--ink); text-transform: none; letter-spacing: 0; }
-  .callout { background: #fff; border: 1px solid #efefec; border-left: 3px solid var(--brand-red); border-radius: 12px; padding: .75rem 1rem; font-size: .88rem;
-    box-shadow: 0 1px 2px rgba(20, 20, 20, .04); }
-  .src { font-size: .84rem; line-height: 1.45; margin: 0 0 .45rem; }
-  .src a { font-weight: 600; text-decoration: none; color: var(--ink); }
+  .callout { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4);
+    font-size: 14px; line-height: 21px; color: var(--ink-secondary); }
+  .src { font-size: 13px; line-height: 19px; margin: 0 0 var(--space-2); color: var(--ink-muted); }
+  .src a, .src b { font-size: 14px; font-weight: 500; text-decoration: none; color: var(--ink); }
   .src a:hover { color: var(--brand-red); }
-  .num { font-size: 1.6rem; font-weight: 300; color: #c9c9c6; line-height: 1; }
-  table.grid { border-collapse: collapse; width: 100%; font-size: .83rem; background: #fff; border-radius: 12px; overflow: hidden; }
-  table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: .5rem .65rem; text-align: left; vertical-align: top; }
-  table.grid th { color: var(--muted); font-weight: 600; font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; background: #fafaf8; }
-  .usecase-trigger { color: var(--muted); font-size: .86rem; line-height: 1.45; min-height: 2.6rem; margin: .25rem 0 .35rem; }
-  .cal { border: 1px solid #efefec; border-radius: 12px; padding: .7rem 1rem; font-size: .88rem; background: #fff; }
+  .blocked { opacity: .75; }
+  .blocked .card-ticker { color: var(--ink-muted); }
 
-  /* widgets */
-  [data-testid="stMetric"] { background: #fff; border: 1px solid #efefec; border-radius: 12px; padding: .7rem .95rem; box-shadow: 0 1px 2px rgba(20, 20, 20, .04); }
-  [data-testid="stMetricLabel"] p { font-size: .66rem !important; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
-  [data-testid="stMetricValue"] { font-size: 1.15rem; font-weight: 600; }
-  .stButton button, .stDownloadButton button, .stFormSubmitButton button { border-radius: 8px; font-weight: 600; }
-  [data-testid="stBaseButton-secondary"] { background: #fff; border-color: #e2e2df; }
-  [data-baseweb="tab-list"] { gap: 1.2rem; }
-  [data-baseweb="tab"] p { font-size: .84rem; font-weight: 500; }
-  [data-testid="stTextInputRootElement"], [data-baseweb="select"] > div, [data-testid="stNumberInputContainer"], textarea { border-radius: 8px !important; }
+  /* Table */
+  table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 14px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm); }
+  table.grid th, table.grid td { border-bottom: 1px solid var(--border); padding: 10px var(--space-3); text-align: left; vertical-align: top; color: var(--ink-secondary); }
+  table.grid tr:last-child td { border-bottom: none; }
+  table.grid th { color: var(--ink-muted); font-weight: 500; font-size: 12px; line-height: 16px; background: var(--surface-subtle); }
+  table.grid td b { color: var(--ink); font-weight: 600; }
+  [data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+  .cal { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); font-size: 14px; background: var(--surface); }
+
+  /* Card: stat tile */
+  [data-testid="stMetric"] { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-4) var(--space-5); box-shadow: var(--shadow-sm); }
+  [data-testid="stMetricLabel"] p { font-size: 12px !important; line-height: 16px; font-weight: 500; color: var(--ink-muted); }
+  [data-testid="stMetricValue"] { font-size: 20px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Button */
+  .stButton button, .stDownloadButton button, .stFormSubmitButton button, [data-testid="stPopover"] button {
+    border-radius: var(--radius-md); font-weight: 600; min-height: 36px; padding: 0 var(--space-3); box-shadow: none; }
+  [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"] { background: var(--brand-red); border-color: var(--brand-red); }
+  [data-testid="stBaseButton-primary"]:hover { background: var(--brand-red-hover); border-color: var(--brand-red-hover); }
+  [data-testid="stBaseButton-secondary"] { background: var(--surface); border: 1px solid var(--border-strong); color: var(--ink); }
+  [data-testid="stBaseButton-secondary"]:hover { background: var(--surface-subtle); border-color: var(--border-strong); color: var(--ink); }
+
+  /* Input */
+  [data-testid="stTextInputRootElement"], [data-baseweb="select"] > div, [data-testid="stNumberInputContainer"], [data-testid="stDateInput"] > div > div,
+  textarea { border-radius: var(--radius-md) !important; }
+  [data-testid="stWidgetLabel"] p { font-size: 12px !important; font-weight: 500; color: var(--ink-muted); }
+  [data-testid="stNumberInputStepDown"], [data-testid="stNumberInputStepUp"] { display: none; }
+  input, textarea { font-variant-numeric: tabular-nums; }
+
+  /* Alerts follow the status colours */
+  [data-testid="stAlert"] { border-radius: var(--radius-lg); }
+  [data-testid="stAlertContentInfo"] { background: var(--surface-subtle); color: var(--ink-secondary); }
+
+  /* Responsive: drawer sidebar and 16px gutter on phones, tighter gutter on tablets */
+  @media (max-width: 1024px) {
+    .block-container { padding-left: var(--space-6); padding-right: var(--space-6); }
+    :root { --inset: var(--space-6); --inset-full: var(--space-6); }
+  }
+  @media (max-width: 768px) {
+    section[data-testid="stSidebar"] { width: 85vw !important; min-width: 0 !important; }
+    .user-chip { display: none; }
+    .block-container { padding: 3rem var(--space-4) 1rem; }
+    .topbar .title { font-size: 20px; line-height: 28px; }
+    .lineage .arrow { display: none; }
+    .st-key-footer, .st-key-footer_done { bottom: var(--space-2); left: var(--space-2) !important; right: var(--space-2) !important; }
+  }
 </style>
 """)
 
@@ -259,6 +322,38 @@ def merge_tabs(names: list[str], layout: list[int]) -> list[Any]:
     """At most three tabs; layout maps each content section, in order, to a tab."""
     tabs = st.tabs(names)
     return [tabs[i] for i in layout]
+
+
+@st.dialog("Why", width="medium")
+def why_dialog(title: str, body: str, sources: list[str] | None = None) -> None:
+    st.markdown(f"**{md(title)}**")
+    st.markdown(md(body))
+    if sources:
+        html_block(source_links(sources))
+
+
+def why_link(title: str, body: str, key: str, sources: list[str] | None = None) -> None:
+    """The one way to show an explanation: a quiet link that opens a dialog."""
+    if st.button("Why", key=key, type="tertiary", icon=":material/info:"):
+        why_dialog(title, body, sources)
+
+
+def money_input(label: str, value: float, key: str, container: Any = None, **kwargs: Any) -> float:
+    """Currency field with thousands separators (S$120,000), parsed back to a number."""
+    box = container or st
+    text = box.text_input(label, value=f"{float(value or 0):,.0f}", key=key, **kwargs)
+    try:
+        return float(str(text).replace(",", "").replace("S$", "").strip() or 0)
+    except ValueError:
+        box.caption("Enter an amount, e.g. 120,000")
+        return float(value or 0)
+
+
+def fmt_date(value: Any) -> str:
+    try:
+        return datetime.fromisoformat(str(value)[:10]).strftime("%d %b %Y").lstrip("0")
+    except ValueError:
+        return str(value or "—")
 
 
 def html_block(markup: str) -> None:
@@ -609,8 +704,13 @@ def show_chart(chart: alt.Chart) -> None:
     chart = chart.copy(deep=True)
     title = _pop_title(chart)
     if title:
-        html_block(f"<div style='font-weight:650;font-size:.92rem;padding-top:.2rem'>{esc(title)}</div>")
-    st.altair_chart(chart.configure_view(strokeWidth=0).configure(background="transparent", font="Inter"), width="stretch")
+        html_block(f"<div class='card-label'>{esc(title)}</div>")
+    styled = (chart.configure_view(strokeWidth=0).configure(background="transparent", font="Inter")
+              .configure_axis(gridColor="#efeeeb", domainColor=BORDER, tickColor=BORDER, labelColor=MUTED, titleColor=MUTED,
+                              labelFontSize=11, titleFontSize=11, titleFontWeight=500, labelPadding=6)
+              .configure_axisQuantitative(tickCount=5)
+              .configure_legend(labelColor="#52514e", labelFontSize=12, symbolType="square", symbolSize=80))
+    st.altair_chart(styled, width="stretch")
 
 
 def donut(weights: dict[str, float], title: str, height: int = 200) -> alt.Chart:
@@ -626,11 +726,12 @@ def donut(weights: dict[str, float], title: str, height: int = 200) -> alt.Chart
 
 def before_after_bars(frame: pd.DataFrame, title: str, height: int = 220) -> alt.Chart:
     long = frame.melt(id_vars="Category", value_vars=["Before", "After"], var_name="Portfolio", value_name="Weight")
+    long["Portfolio"] = long["Portfolio"].map(SERIES_NAMES)
     return alt.Chart(long, title=title).mark_bar(cornerRadiusEnd=4, height=11).encode(
         y=alt.Y("Category:N", sort=list(frame["Category"]), title=None, axis=alt.Axis(labelLimit=160)),
-        yOffset=alt.YOffset("Portfolio:N", sort=["Before", "After"]),
+        yOffset=alt.YOffset("Portfolio:N", sort=["Current", "Proposed"]),
         x=alt.X("Weight:Q", title="Portfolio weight %"),
-        color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Before", "After"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=alt.Legend(title=None)),
+        color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Current", "Proposed"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=alt.Legend(title=None)),
         tooltip=["Category", "Portfolio", alt.Tooltip("Weight:Q", format=".1f", title="Weight %")],
     ).properties(height=height)
 
@@ -639,18 +740,18 @@ def metric_vs_limit(rule: Any, unit: str = "") -> alt.Chart:
     """One rule as a small multiple: before and after bars against the rule's limit line."""
     show = risk_points if rule.metric == "risk_score" else (lambda v: v)
     num = ".0f" if rule.metric == "risk_score" else ".2f"
-    frame = pd.DataFrame([{"Portfolio": "Before", "Value": show(rule.before_value)}, {"Portfolio": "After", "Value": show(rule.after_value)}])
+    frame = pd.DataFrame([{"Portfolio": "Current", "Value": show(rule.before_value)}, {"Portfolio": "Proposed", "Value": show(rule.after_value)}])
     limit = show(rule.threshold_value)
     domain_max = max(frame["Value"].max(), limit) * 1.25 or 1
     bars = alt.Chart(frame).mark_bar(cornerRadiusEnd=4).encode(
-        y=alt.Y("Portfolio:N", sort=["Before", "After"], title=None, scale=alt.Scale(paddingInner=0.3)),
+        y=alt.Y("Portfolio:N", sort=["Current", "Proposed"], title=None, scale=alt.Scale(paddingInner=0.3)),
         x=alt.X("Value:Q", title=unit or None, scale=alt.Scale(domain=[0, domain_max])),
-        color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Before", "After"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=None),
+        color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Current", "Proposed"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=None),
         tooltip=["Portfolio", alt.Tooltip("Value:Q", format=num)])
     labels = bars.mark_text(align="left", dx=4, color=MUTED).encode(text=alt.Text("Value:Q", format=num), color=alt.value(MUTED))
     rule_line = alt.Chart(pd.DataFrame([{"Limit": limit}])).mark_rule(strokeDash=[4, 3], color=STATUS_COLORS["FAIL"], strokeWidth=2).encode(
         x="Limit:Q", tooltip=[alt.Tooltip("Limit:Q", format=num, title="Limit")])
-    return alt.layer(bars, labels, rule_line, title=f"{STATUS_ICONS.get(rule.outcome, '')} {rule.rule_id} · {rule.name}").properties(height=120)
+    return alt.layer(bars, labels, rule_line, title=f"{STATUS_ICONS.get(rule.outcome, '')} {rule.name}").properties(height=120)
 
 
 def risk_scale_chart(points: list[dict[str, Any]], band: list[float]) -> alt.Chart:
@@ -658,7 +759,7 @@ def risk_scale_chart(points: list[dict[str, Any]], band: list[float]) -> alt.Cha
     frame = pd.DataFrame([{**p, "Score": risk_points(p["Score"])} for p in points])
     order = list(frame["Measure"]) + ["Applied band"]
     y_scale = alt.Scale(domain=order)
-    band_rect = alt.Chart(pd.DataFrame([{"lo": risk_points(band[0]), "hi": risk_points(band[1]), "y": "Applied band"}])).mark_bar(color="#cde2fb", cornerRadius=4).encode(
+    band_rect = alt.Chart(pd.DataFrame([{"lo": risk_points(band[0]), "hi": risk_points(band[1]), "y": "Applied band"}])).mark_bar(color="#dfe5ec", cornerRadius=4).encode(
         x=alt.X("lo:Q", scale=alt.Scale(domain=[0, 100]), title="Risk (0 = lowest, 100 = highest)"), x2="hi:Q",
         y=alt.Y("y:N", scale=y_scale, title=None, axis=alt.Axis(labelLimit=160)),
         tooltip=[alt.Tooltip("lo:Q", title="Band from"), alt.Tooltip("hi:Q", title="Band to")])
@@ -688,12 +789,13 @@ def status_heatmap(frame: pd.DataFrame) -> alt.Chart:
     base = alt.Chart(frame).encode(
         x=alt.X("Scope:N", title=None, sort=list(dict.fromkeys(frame["Scope"])), axis=alt.Axis(orient="top", labelAngle=0)),
         y=alt.Y("Rule:N", title=None, sort=list(dict.fromkeys(frame["Rule"])), axis=alt.Axis(labelLimit=240)))
-    cells = base.mark_rect(cornerRadius=4, stroke="#ffffff", strokeWidth=2).encode(
-        color=alt.Color("Outcome:N", scale=alt.Scale(domain=list(STATUS_COLORS), range=list(STATUS_COLORS.values())), legend=None),
+    fills = {"PASS": "#e9f5ee", "FLAG": "#fdf4e1", "FAIL": "#fdecea", "BLOCK": "#fdecea"}  # success-bg / warning-bg / danger-bg
+    cells = base.mark_rect(cornerRadius=4, stroke="#ffffff", strokeWidth=3).encode(
+        color=alt.Color("Outcome:N", scale=alt.Scale(domain=list(fills), range=list(fills.values())), legend=None),
         tooltip=["Scope", "Rule", "Outcome", "Message"])
-    text = base.mark_text(fontWeight="bold").encode(
-        text="Label:N", color=alt.condition(alt.datum.Outcome == "FLAG", alt.value("#0b0b0b"), alt.value("#ffffff")))
-    return alt.layer(cells, text).properties(height=min(32 * frame["Rule"].nunique() + 40, 380))
+    text = base.mark_text(fontWeight=600).encode(
+        text="Label:N", color=alt.Color("Outcome:N", scale=alt.Scale(domain=list(STATUS_COLORS), range=list(STATUS_COLORS.values())), legend=None))
+    return alt.layer(cells, text).resolve_scale(color="independent").properties(height=min(32 * frame["Rule"].nunique() + 40, 380))
 
 
 def signed_bars(frame: pd.DataFrame, label: str, value: str, title: str, height: int = 220) -> alt.Chart:
@@ -729,25 +831,23 @@ def page_header(ctx: dict[str, Any], key: str, title: str, subtitle: str, status
     position = f"Step {steps.index(key) + 1} of {len(steps)} · " if key in steps else ""
     checkpoint = f" · Checkpoint {cp[2:]}" if cp and cp.startswith("CP") else (" · Advisor decision" if cp else "")
     label = next((lbl for k, lbl, _ in visible_steps(ctx) if k == key), title)
+    breadcrumb(USE_CASES[ctx["use_case"]][0])
     html_block(f"<div class='topbar'><div class='title'>{esc(label)}</div><div>{status_html}</div></div>")
 
 
-def lineage_strip(state: dict[str, Any], active: str, final_label: str) -> None:
-    counts = idea_lineage(state)
-    steps = [
-        ("ideas", "Candidates", str(counts["generated"])),
-        ("suitability", "Checked", f"{counts['checked']}/3"),
-        ("approval", "Approved", f"{counts['approved']}/3" if counts["approved"] else "—"),
-        ("final", final_label, str(counts["final"]) if counts["final"] else "—"),
-    ]
-    parts = []
-    order = [k for k, *_ in steps]
-    for i, (key, label, value) in enumerate(steps):
-        if i:
-            parts.append("<div class='arrow'></div>")
-        state = "active" if key == active else ("done" if order.index(key) < order.index(active) else "")
-        parts.append(f"<div class='step {state}'><span class='dot'>{i + 1}</span><div>{esc(label)}<b>{esc(value)}</b></div></div>")
-    html_block(f"<div class='lineage'>{''.join(parts)}</div>")
+def breadcrumb(here: str | None = None) -> None:
+    """Clients / client / workflow: the way back, in place of separate back buttons."""
+    raw = client_record(st.session_state.client_key)["raw"] if st.session_state.get("client_key") else {}
+    with st.container(horizontal=True, key="crumb", vertical_alignment="center"):
+        st.button("Clients", type="tertiary", key="nav_all_clients", on_click=reset_to_client_list)
+        if raw:
+            html_block("<span class='crumb-sep'>/</span>")
+            if here:
+                st.button(raw.get("name", "Client"), type="tertiary", key="nav_back", on_click=back_to_client)
+                html_block("<span class='crumb-sep'>/</span>")
+                html_block(f"<span class='crumb-here'>{esc(here)}</span>")
+            else:
+                html_block(f"<span class='crumb-here'>{esc(raw.get('name', 'Client'))}</span>")
 
 
 def next_step(ctx: dict[str, Any], current: str) -> tuple[str, str] | None:
@@ -791,32 +891,38 @@ def render_sidebar(ctx: dict[str, Any]) -> None:
         html_block(brand_html())
         mode = "Live model" if st.session_state.get("mode") == LIVE else "Offline"
         html_block(f"<div class='client-chip'>{avatar(raw.get('name', 'Client'))}<div><b>{esc(raw.get('name', 'Client'))}</b><br>"
-                   f"<span class='subtle'>{esc(USE_CASES[uc][0])} · {esc(mode)}</span></div></div>"
+                   f"<span class='subtle' title='{esc(mode)}'>{esc(USE_CASES[uc][0])}</span></div></div>"
                    "<span class='side-label'>Workflow</span>")
         current = st.session_state.get("screen")
         action_keys = []
-        for i, (key, label, checkpoint) in enumerate(visible_steps(ctx)):
+        steps = visible_steps(ctx)
+        counts = idea_lineage(ctx["state"])
+        # the idea lineage (candidate -> checked -> approved -> final) as counts on its steps
+        lineage = {"ideas": str(counts["generated"]) if counts["generated"] else "",
+                   "suitability": f"{counts['checked']}/3" if counts["rounds"] else "",
+                   "approval": f"{counts['approved']}/3" if counts["rounds"] else "",
+                   "memo": "3" if counts["final"] else "", "brief": "✓" if counts["final"] else ""}
+        for i, (key, label, checkpoint) in enumerate(steps):
+            if key == "audit":
+                html_block("<span class='side-label'>Run</span>")
             status = nav_status(key, ctx)
             if status == "action":
                 action_keys.append(key)
-            number = f"{i + 1} · " if key != "audit" else ""
+            number = ""
             state_text = {"action": "Waiting for your decision", "done": "Completed", "failed": "Needs attention",
                           "locked": "Not reached yet"}.get(status, "Available")
-            st.button(f"{number}{label}", key=f"nav_{key}",
+            st.button(f"{number}{label}" + (f" · {lineage[key]}" if lineage.get(key) else ""), key=f"nav_{key}",
                       icon=STATUS_NAV_ICON.get(status, ":material/radio_button_unchecked:"), width="stretch",
                       type="primary" if key == current else "secondary", disabled=status == "locked",
                       on_click=go, args=(key,), help=f"Advisor checkpoint {checkpoint} · {state_text}" if checkpoint else state_text)
         if action_keys:
-            st.html("<style>" + "".join(
-                f".st-key-nav_{k} button {{ border-color: #fab219 !important; box-shadow: inset 3px 0 0 #fab219; }}" for k in action_keys
-            ) + "</style>")
+            # the step waiting for the RM: warning-coloured icon, no extra frame
+            st.html("<style>" + "".join(f".st-key-nav_{k} button span[data-testid='stIconMaterial'] {{ color: var(--warning) !important; }}"
+                                        for k in action_keys) + "</style>")
         if ctx["outcome"] == "APPROVED":
             st.success("Complete", icon=":material/verified:")
         elif ctx["outcome"] == "REJECTED":
             st.error("Rejected", icon=":material/block:")
-        html_block("<span class='side-label'>Navigate</span>")
-        st.button("Client home", icon=":material/arrow_back:", on_click=back_to_client, width="stretch", key="nav_back")
-        st.button("All clients", icon=":material/groups:", on_click=reset_to_client_list, width="stretch", key="nav_all_clients")
         html_block(user_chip())
 
 
@@ -883,8 +989,7 @@ def profile_form(ctx: dict[str, Any], raw: dict[str, Any], editable: bool) -> tu
         c1, c2 = st.columns(2)
         horizon = c1.number_input("Horizon (months) *", min_value=0, step=6, value=int(raw.get("time_horizon_months") or 0),
                                   key=k("horizon"), disabled=not editable, help="0 = not recorded (R1 blocks the workflow)")
-        wealth = c2.number_input("Wealth *", min_value=0.0, step=10000.0, value=float(raw.get("total_wealth") or 0),
-                                 key=k("wealth"), disabled=not editable)
+        wealth = money_input("Wealth (S$) *", raw.get("total_wealth") or 0, key=k("wealth"), container=c2, disabled=not editable)
         risk_opts = RISK_OPTIONS if raw.get("stated_risk_willingness") in RISK_OPTIONS else [raw.get("stated_risk_willingness") or "Moderate"] + RISK_OPTIONS
         exp_opts = EXPERIENCE_OPTIONS if raw.get("experience_level") in EXPERIENCE_OPTIONS else [raw.get("experience_level") or "ETF investor"] + EXPERIENCE_OPTIONS
         c1, c2 = st.columns(2)
@@ -894,8 +999,8 @@ def profile_form(ctx: dict[str, Any], raw: dict[str, Any], editable: bool) -> tu
                                   key=k("exp"), disabled=not editable)
         capital = None
         if uc == ADHOC:
-            capital = st.number_input("New capital *", min_value=0.0, step=10000.0, value=float(raw.get("new_capital_amount") or 0),
-                                      key=k("capital"), disabled=not editable, help="Added to the portfolio as cash; the ideas deploy it")
+            capital = money_input("New capital (S$) *", raw.get("new_capital_amount") or 0, key=k("capital"), disabled=not editable,
+                                  help="Added to the portfolio as cash; the ideas deploy it")
     with right:
         schedule = raw.get("liquidity_schedule") or []
         positions = raw.get("raw_holdings") or []
@@ -1034,7 +1139,7 @@ def render_profile(ctx: dict[str, Any]) -> None:
         with right:
             st.markdown("**Profile rules (deterministic)**")
             html_block("<table class='grid'><tr><th>Rule</th><th>Outcome</th><th>Detail</th></tr>" + "".join(
-                f"<tr><td>{esc(r.rule_id)} · {esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>"
+                f"<tr><td title='{esc(r.rule_id)}'>{esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>"
                 for r in evaluate_profile_rules(profile)) + "</table>")
     with tabs[i + 2]:
         with st.expander("How it was built"):
@@ -1237,7 +1342,7 @@ def render_meeting(ctx: dict[str, Any]) -> None:
             edits["email_body"] = body
     with tabs[4]:
         for r in record.compliance_checks:
-            st.markdown(f"{pill(r.outcome)} **{md(r.rule_id)} {md(r.name)}** · {md(r.message)}", unsafe_allow_html=True)
+            st.markdown(f"{pill(r.outcome)} **{md(r.name)}** · {md(r.message)}", unsafe_allow_html=True)
 
     if approved:
         with st.container(border=True, key="footer_done"):
@@ -1452,7 +1557,7 @@ def render_event(ctx: dict[str, Any]) -> None:
             st.caption("Assumed moves come from an illustrative event scenario (deterministic tool), not a forecast.")
     with tabs[2]:
         html_block("<table class='grid'><tr><th>Rule</th><th>Outcome</th><th>Detail</th></tr>" + "".join(
-            f"<tr><td>{esc(r.rule_id)} · {esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>" for r in impact.rule_results) + "</table>")
+            f"<tr><td title='{esc(r.rule_id)}'>{esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>" for r in impact.rule_results) + "</table>")
         html_block(f"<div class='callout' style='margin-top:.6rem'><b>Why {impact.suggested_decision.lower()}</b><br>{esc(impact.rationale)}</div>")
     with tabs[3]:
         advice = client_record(st.session_state.client_key).get("current_advice")
@@ -1492,14 +1597,27 @@ def render_event(ctx: dict[str, Any]) -> None:
 # Pages: candidate ideas, suitability check, approval (CP3)
 # --------------------------------------------------------------------------------------
 
-def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, height: int | str = "stretch") -> None:
+def idea_card(idea: dict[str, Any], status: str | None, tag: str | None = None, height: int | str = "stretch",
+              locked: bool | None = None, why: tuple[str, str] | None = None, key: str = "") -> None:
+    """The one idea card: ticker, status, lane, name, target and amount, then an optional Why link.
+    A product blocked by client limits is never named."""
     with card(height=height):
-        badges = (pill(status) if status else "") + (info_pill(tag) if tag else "") + info_pill(idea.get("lane", "ALIGNED").title())
-        stats = (f"<div class='stats'><div>Action<b>{esc(idea['action'])}</b></div><div>Target<b>{idea['target_weight_pct']:.1f}%</b></div></div>")
+        lane = info_pill(idea.get("lane", "ALIGNED").title())
+        if idea.get("withheld"):
+            html_block(f"<div class='blocked'><div class='eyebrow'>Idea {idea['slot_number']}</div>"
+                       f"<div class='card-ticker'>Blocked by client limits</div>{pill('FAIL', 'Blocked')}{lane}"
+                       f"<div class='stats'><div>Target<b>{idea['target_weight_pct']:.1f}%</b></div></div>"
+                       "<div class='subtle'>Not shown · replaced in the next round</div></div>")
+            return
+        lock = "" if locked is None else (pill("PASS", "Locked") if locked else info_pill("Not locked"))
+        badges = (pill(status) if status else "") + lane + lock + (info_pill(tag) if tag else "")
         amount = idea.get("indicative_amount_range") or []
-        html_block(f"<div class='eyebrow'>Idea {idea['slot_number']} · {esc(idea['portfolio_role'].title())}</div>"
-                   f"<div class='card-ticker'>{esc(idea['ticker'])}</div><div class='subtle'>{esc(idea['name'])}</div>{badges}{stats}"
-                   + (f"<div class='subtle'>Indicative {fmt_money(amount[0])}–{fmt_money(amount[1])}</div>" if len(amount) == 2 and not idea.get("withheld") else ""))
+        stats = (f"<div class='stats'><div>Target<b>{idea['target_weight_pct']:.1f}%</b></div>"
+                 + (f"<div>Amount<b>{fmt_money(amount[0])}–{fmt_money(amount[1])}</b></div>" if len(amount) == 2 else "") + "</div>")
+        html_block(f"<div class='eyebrow'>Idea {idea['slot_number']}</div>"
+                   f"<div class='card-ticker'>{esc(idea['ticker'])}</div><div class='subtle'>{esc(idea['name'])}</div>{badges}{stats}")
+        if why:
+            why_link(why[0], why[1], key=f"why_{key or idea['idea_id']}", sources=idea.get("cited_evidence_ids"))
 
 
 def round_trigger_text(trigger: dict[str, Any]) -> str:
@@ -1523,7 +1641,6 @@ def render_ideas(ctx: dict[str, Any]) -> None:
     if not rounds:
         st.info("Not reached")
         return
-    lineage_strip(state, "ideas", final_label(ctx))
     tabs = merge_tabs(["Ideas", "Why", "Allocation"], [0, 1, 2, 0])
     labels = {r["round"]: f"Round {r['round']}" + (" · original" if r["round"] == 1 else "") for r in rounds}
     with tabs[0]:
@@ -1599,7 +1716,6 @@ def render_suitability(ctx: dict[str, Any]) -> None:
     if not assessment:
         st.info("Not reached")
         return
-    lineage_strip(state, "suitability", final_label(ctx))
     ideas, profile = state["candidate_ideas"].ideas, state["profile"]
     tabs = merge_tabs(["Verdicts", "Portfolio", "Rules"], [0, 1, 1, 2])
     with tabs[0]:
@@ -1612,7 +1728,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
                            f"<div class='subtle'>{esc(idea.name)} · {idea.action} {idea.target_weight_pct:.1f}%</div>")
                 issues = [r for r in (ie.rule_results if ie else []) if r.outcome != "PASS"]
                 for r in issues:
-                    html_block(f"<div class='kv'>{pill(r.outcome, r.rule_id)} {esc(r.message)}</div>")
+                    html_block(f"<div class='kv'>{pill(r.outcome)} {esc(r.message)}</div>")
                 if not issues:
                     html_block(pill('PASS', f"{len(ie.rule_results) if ie else 0}/{len(ie.rule_results) if ie else 0} rules"))
 
@@ -1632,7 +1748,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
             for i, rule in enumerate(comparable):
                 with cols[i % len(cols)]:
                     show_chart(metric_vs_limit(rule, units.get(rule.metric or "", "%")))
-            st.caption("Grey = current · red = proposed · dashed = limit")
+            st.caption("Grey = current · navy = proposed · dashed = limit")
     with tabs[2]:
         left, mid, right = st.columns(3)
         with left:
@@ -1640,17 +1756,19 @@ def render_suitability(ctx: dict[str, Any]) -> None:
         with mid:
             show_chart(before_after_bars(exposure_frame(profile, ideas, "region"), "Region", height=210))
         with right:
-            chart = alt.Chart(stress_frame(profile, ideas), title="Illustrative stress impact").mark_bar(cornerRadiusEnd=4, height=11).encode(
-                y=alt.Y("Scenario:N", title=None, axis=alt.Axis(labelLimit=160)), yOffset=alt.YOffset("Portfolio:N", sort=["Before", "After"]),
+            stress = stress_frame(profile, ideas)
+            stress["Portfolio"] = stress["Portfolio"].map(SERIES_NAMES)
+            chart = alt.Chart(stress, title="Illustrative stress impact").mark_bar(cornerRadiusEnd=4, height=11).encode(
+                y=alt.Y("Scenario:N", title=None, axis=alt.Axis(labelLimit=160)), yOffset=alt.YOffset("Portfolio:N", sort=["Current", "Proposed"]),
                 x=alt.X("Impact %:Q", title="Estimated portfolio move %"),
-                color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Before", "After"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=alt.Legend(title=None)),
+                color=alt.Color("Portfolio:N", scale=alt.Scale(domain=["Current", "Proposed"], range=[BEFORE_COLOR, AFTER_COLOR]), legend=alt.Legend(title=None)),
                 tooltip=["Scenario", "Portfolio", alt.Tooltip("Impact %:Q", format=".2f")])
             show_chart(chart.properties(height=210))
     with tabs[3]:
-        rows = [{"Scope": "Portfolio", "Rule": f"{r.rule_id} {r.name}", "Outcome": r.outcome, "Label": STATUS_ICONS[r.outcome], "Message": r.message}
+        rows = [{"Scope": "Portfolio", "Rule": r.name, "Outcome": r.outcome, "Label": STATUS_ICONS[r.outcome], "Message": r.message}
                 for r in assessment.rule_results]
         for ie in sorted(assessment.idea_evaluations, key=lambda e: e.slot_number):
-            rows += [{"Scope": f"{ie.slot_number} · {ie.ticker}", "Rule": f"{r.rule_id} {r.name}", "Outcome": r.outcome,
+            rows += [{"Scope": f"{ie.slot_number} · {ie.ticker}", "Rule": r.name, "Outcome": r.outcome,
                       "Label": STATUS_ICONS[r.outcome], "Message": r.message} for r in ie.rule_results]
         frame = pd.DataFrame(rows)
         left, right = st.columns([1.2, 1])
@@ -1659,10 +1777,14 @@ def render_suitability(ctx: dict[str, Any]) -> None:
         with right:
             counts = frame["Outcome"].value_counts()
             a, b, c = st.columns(3)
-            a.metric("✓ PASS", int(counts.get("PASS", 0)))
-            b.metric("! FLAG", int(counts.get("FLAG", 0)))
-            c.metric("✕ FAIL", int(counts.get("FAIL", 0) + counts.get("BLOCK", 0)))
-            st.dataframe(frame[frame["Outcome"] != "PASS"][["Scope", "Rule", "Outcome", "Message"]], hide_index=True, width="stretch", height=200)
+            a.metric("Pass", int(counts.get("PASS", 0)))
+            b.metric("Flag", int(counts.get("FLAG", 0)))
+            c.metric("Fail", int(counts.get("FAIL", 0) + counts.get("BLOCK", 0)))
+            issues = frame[frame["Outcome"] != "PASS"]
+            if issues.empty:
+                html_block(pill("PASS", "All rules pass"))
+            else:
+                st.dataframe(issues[["Scope", "Rule", "Outcome", "Message"]], hide_index=True, width="stretch", height=200)
     done_footer(ctx, "suitability", f"Suitability **{assessment.overall_status}**")
 
 
@@ -1676,7 +1798,6 @@ def render_approval(ctx: dict[str, Any]) -> None:
     if not assessment:
         st.info("Not reached")
         return
-    lineage_strip(state, "approval", final_label(ctx))
     ideas = state["candidate_ideas"].ideas
     statuses = {ie.idea_id: ie.status for ie in assessment.idea_evaluations}
     tabs = st.tabs(["Ideas", "Approved", "Lineage"])
@@ -1684,12 +1805,9 @@ def render_approval(ctx: dict[str, Any]) -> None:
     with tabs[0]:
         cols = st.columns([1, 1, 1, 0.9])
         for col, i in zip(cols, sorted(ideas, key=lambda x: x.slot_number)):
-            with col, card(height="stretch"):
-                html_block(f"<div class='eyebrow'>Idea {i.slot_number} · {esc(i.lane.title())}</div><div class='card-ticker'>{esc(i.ticker)}</div>"
-                           f"{pill(statuses.get(i.idea_id, 'PASS'))}{pill('PASS', 'Locked') if i.idea_id in locked_ids else info_pill('Not locked')}"
-                           f"<div class='stats'><div>{esc(i.action)}<b>{i.target_weight_pct:.1f}%</b></div></div>")
-                with st.expander("Why"):
-                    st.markdown(md(i.client_fit_rationale))
+            with col:
+                idea_card(i.model_dump(), statuses.get(i.idea_id, "PASS"), locked=i.idea_id in locked_ids,
+                          why=(f"{i.ticker} · {i.name}", i.client_fit_rationale), key=f"lock_{i.idea_id}")
         with cols[3]:
             m = assessment.after_metrics
             st.metric("Portfolio risk (0-100)", risk_points(m.after_risk_score), f"band {risk_band_points(state['profile'].risk_score_range)}",
@@ -1748,7 +1866,7 @@ def render_approval(ctx: dict[str, Any]) -> None:
                         submit_action("unlock_idea", note, idea_id=idea.idea_id)
                 else:
                     needs_note = flagged or verdict == "FLAG"
-                    if st.button(f"Lock {idea.ticker}", icon=":material/lock_open:", type="primary", width="stretch", key=f"lock_{idea.idea_id}",
+                    if st.button(f"Lock {idea.ticker}", icon=":material/lock_open:", width="stretch", key=f"lock_{idea.idea_id}",
                                  disabled=verdict == "FAIL" or "lock_idea" not in allowed or (needs_note and not note.strip()),
                                  help="A FAIL idea cannot be locked" if verdict == "FAIL" else ("Needs a rationale" if needs_note else None)):
                         submit_action("lock_idea", note, idea_id=idea.idea_id)
@@ -1793,7 +1911,6 @@ def render_memo(ctx: dict[str, Any]) -> None:
     if not memo or nav_status("memo", ctx) == "locked":
         st.info("Not reached")
         return
-    lineage_strip(state, "final", final_label(ctx))
     page1, page3 = memo.page_1_executive, memo.page_3_portfolio_view
     tabs = merge_tabs(["Summary", "Ideas", "Checks"], [0, 1, 2, 2])
     with tabs[0]:
@@ -1815,15 +1932,18 @@ def render_memo(ctx: dict[str, Any]) -> None:
             after = exposure_frame(profile, ideas, "asset_class")
             show_chart(donut(dict(zip(after["Category"], after["After"])), "Proposed allocation", height=180))
     with tabs[1]:
+        by_slot = {i.slot_number: i for i in state["candidate_ideas"].ideas}
+        verdicts = {ie.idea_id: ie.status for ie in state["assessment"].idea_evaluations} if state.get("assessment") else {}
         for col, d in zip(st.columns(3), memo.page_2_details):
-            with col, card(height="stretch"):
-                html_block(f"<div class='eyebrow'>Idea {d.slot_number} · {esc(d.portfolio_role.title())} · {esc(d.conviction)} conviction</div>"
-                           f"<div class='card-ticker'>{esc(d.ticker)}</div><div class='subtle'>{esc(d.action)} · {esc(d.allocation_range_str)}</div>"
-                           + kv("Why it suits the client", d.client_fit_rationale)
-                           + "<div class='kv'><b>Risks to raise</b><br>" + "".join(info_pill(r) for r in d.key_risks) + "</div>")
+            with col:
+                idea = by_slot.get(d.slot_number)
+                body = (f"{d.client_fit_rationale}\n\n**Thesis:** {d.thesis}\n\n**Risks to raise:** {'; '.join(d.key_risks)}."
+                        f"\n\n**Conviction:** {d.conviction}")
+                if idea:
+                    idea_card(idea.model_dump(), verdicts.get(idea.idea_id, "PASS"), why=(f"{d.ticker} · {d.name}", body), key=f"memo_{idea.idea_id}")
     with tabs[3]:
         html_block("<table class='grid'><tr><th>Check</th><th>Outcome</th><th>Detail</th></tr>" + "".join(
-            f"<tr><td>{esc(r.rule_id)} · {esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>" for r in memo.compliance_checks) + "</table>")
+            f"<tr><td title='{esc(r.rule_id)}'>{esc(r.name)}</td><td>{pill(r.outcome)}</td><td>{esc(r.message)}</td></tr>" for r in memo.compliance_checks) + "</table>")
         st.markdown("**Sources**")
         html_block(source_links())
 
@@ -1874,8 +1994,6 @@ def render_brief(ctx: dict[str, Any]) -> None:
     if not brief:
         st.info("Not reached")
         return
-    if brief.recommendations:
-        lineage_strip(state, "final", final_label(ctx))
     profile = state["profile"]
     tabs = merge_tabs(["Overview", "Details", "Points"], [0, 1, 1, 1, 2, 1])
     with tabs[0]:
@@ -1884,16 +2002,15 @@ def render_brief(ctx: dict[str, Any]) -> None:
             cols = st.columns(len(brief.key_insights))
             for n, (col, ins) in enumerate(zip(cols, brief.key_insights), start=1):
                 with col, card(height="stretch"):
-                    html_block(f"<div class='eyebrow'>{n:02d} · {esc(ins.area)}</div><div class='card-ticker'>{esc(ins.headline)}</div>")
+                    html_block(f"<div class='eyebrow'>{esc(ins.area.title())}</div><div class='card-ticker'>{esc(ins.headline)}</div>")
                     if ins.area == "PORTFOLIO":
                         show_chart(reference_mix_chart(profile))
-                        st.caption("Red = current · grey = CIO mix")
+                        st.caption("Navy = current · grey = CIO mix")
                     elif ins.area == "MARKET":
                         html_block(source_links([s for s in ins.sources if s in (st.session_state.get("source_index") or {})]))
                     else:
                         html_block(f"<div class='kv'>{esc(ins.detail)}</div>")
-                    with st.expander("Why"):
-                        st.markdown(md(ins.why_here))
+                    why_link(ins.headline, ins.why_here, key=f"why_ins_{n}")
         else:
             st.info("Nothing stands out")
     with tabs[1]:
@@ -2087,7 +2204,7 @@ def render_landing() -> None:
         right.button("Prepare meeting brief", icon=":material/event:", type="primary", width="stretch", key="cal_prepare",
                      on_click=start_case, args=(PRE_MEETING, "demo_sarah"))
 
-    tabs = st.tabs(["Clients", "New client intake"])
+    tabs = st.tabs(["All", "New client"])
     with tabs[0]:
         for row_start in range(0, len(VISIBLE_CLIENT_KEYS), 2):
             for col, key in zip(st.columns(2), VISIBLE_CLIENT_KEYS[row_start:row_start + 2]):
@@ -2100,7 +2217,7 @@ def render_landing() -> None:
                         html_block(f"<div style='display:flex;gap:.75rem;align-items:center'>{avatar(raw['name'], large=True)}<div>"
                                    f"<b style='font-size:1rem'>{esc(raw['name'])}</b>"
                                    f"<div class='subtle' style='font-size:.8rem'>{esc(summary)} · {esc(raw.get('stated_risk_willingness', ''))}</div></div></div>")
-                    right.button("Open", key=f"open_{key}", type="primary", width="stretch", on_click=select_client, args=(key,))
+                    right.button("Open", key=f"open_{key}", width="stretch", on_click=select_client, args=(key,))
     with tabs[1]:
         render_intake()
 
@@ -2111,7 +2228,7 @@ def render_intake() -> None:
         client_id = c1.text_input("Client ID *", value=f"CL-{uuid4().hex[:6].upper()}")
         name = c2.text_input("Client name *")
         currency = c3.selectbox("Base currency", ["SGD", "USD", "EUR", "GBP", "HKD"])
-        wealth = c4.number_input("Wealth *", min_value=0.0, value=500000.0, step=10000.0)
+        wealth = money_input("Wealth (S$) *", 500000.0, key="intake_wealth", container=c4)
         c1, c2, c3, c4 = st.columns([1.6, 1, 1, 1])
         goals = c1.text_input("Investment objective(s) * — separate with ';'", placeholder="Retirement income in 10 years; preserve capital")
         horizon = c2.number_input("Horizon (months) *", min_value=1, value=60)
@@ -2157,19 +2274,16 @@ def render_intake() -> None:
 def render_client_home() -> None:
     record = client_record(st.session_state.client_key)
     raw = record["raw"]
-    top_l, top_r = st.columns([4, 1], vertical_alignment="bottom")
-    with top_l:
-        st.markdown(f"## {md(raw.get('name', 'Client'))}")
-        html_block(f"<div class='subtle'>{esc(' · '.join(raw.get('goals', [])))}</div>")
-    with top_r:
-        st.button("All clients", icon=":material/arrow_back:", on_click=reset_to_client_list, width="stretch")
+    breadcrumb()
+    html_block(f"<div class='topbar'><div><div class='title'>{esc(raw.get('name', 'Client'))}</div>"
+               f"<div class='subtle'>{esc(' · '.join(raw.get('goals', [])))}</div></div></div>")
     if st.session_state.get("error"):
         st.error(st.session_state.error)
     a, b, c, d = st.columns(4)
     a.metric("Wealth", fmt_money(raw.get("total_wealth"), raw.get("base_currency", "SGD")))
     b.metric("Horizon", fmt_horizon(raw.get("time_horizon_months")))
     c.metric("Risk", raw.get("stated_risk_willingness", "—"))
-    d.metric("Last review", (raw.get("last_review") or {}).get("date", "None on record"))
+    d.metric("Last review", fmt_date((raw.get("last_review") or {}).get("date")) if raw.get("last_review") else "None")
 
     live_blocked = st.session_state.get("mode") == LIVE and not os.environ.get("OPENROUTER_API_KEY")
     last_run = {h["use_case"]: h for h in record["history"]}
@@ -2180,10 +2294,10 @@ def render_client_home() -> None:
                        )
             if key == PRE_MEETING:
                 with st.expander("Meeting details"):
-                    st.date_input("Meeting date", value=date.today() + timedelta(days=1), key="uc1_date")
+                    st.date_input("Meeting date", value=date.today() + timedelta(days=1), key="uc1_date", format="DD/MM/YYYY")
                     st.text_input("Meeting", value="Quarterly portfolio review", key="uc1_purpose")
             elif key == ADHOC:
-                st.number_input("New capital to deploy", min_value=0.0, step=10000.0, value=120000.0, key="uc2_amount")
+                st.session_state["uc2_amount"] = money_input("New capital (S$)", 120000.0, key="uc2_amount_text")
             elif key == POST_MEETING:
                 has_demo = bool(DEMO_TRANSCRIPTS.get(st.session_state.client_key))
                 with st.expander("Notes or transcript" + (" · pre-filled" if has_demo else ""), expanded=not has_demo):
@@ -2198,7 +2312,7 @@ def render_client_home() -> None:
                 st.text_area("What happened", key="uc3_desc", height=68)
             if key in last_run:
                 st.caption(f"Last run {last_run[key]['date']}")
-            st.button("Start", key=f"start_{key}", icon=icon, type="primary", width="stretch", on_click=start_case, args=(key,),
+            st.button("Start", key=f"start_{key}", icon=icon, width="stretch", on_click=start_case, args=(key,),
                       disabled=live_blocked or (key == ADHOC and not st.session_state.get("uc2_amount"))
                       or (key == POST_MEETING and not (st.session_state.get("uc3_transcript") or DEMO_TRANSCRIPTS.get(st.session_state.client_key, "")).strip()))
     if record["history"]:

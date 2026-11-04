@@ -21,7 +21,7 @@ from src.tools.pdf_charts import memo_figures
 from src.tools.risk_engine import risk_band_points, risk_points
 
 RED, INK, MUTED, RULE = colors.HexColor("#C8102E"), colors.HexColor("#1A1A1A"), colors.HexColor("#6B6B6B"), colors.HexColor("#BDBDBD")
-BLUE, TAG_BG = colors.HexColor("#1C5CAB"), colors.HexColor("#E8C9C3")
+BLUE, TAG_BG = colors.HexColor("#1F3A5F"), colors.HexColor("#E8C9C3")
 PAGE_W, PAGE_H = A4
 MARGIN = 40
 BODY_W = PAGE_W - 2 * MARGIN - 12  # the page frame pads 6pt on each side
@@ -159,7 +159,7 @@ def research_note_memo_renderer(memo: Any, output_path: str, profile: Any, ideas
     for i in ideas:
         rows.append([Paragraph(f"<b>{i.ticker}</b> {i.name}", STYLES["cell"]), Paragraph(i.lane.title(), STYLES["cell"]),
                      Paragraph(i.action, STYLES["cell"]), Paragraph(f"{current.get(i.ticker.upper(), 0.0):.1f}%", STYLES["cell"]),
-                     Paragraph(f"<font color='#1C5CAB'><b>{i.target_weight_pct:.1f}%</b></font>", STYLES["cell"]),
+                     Paragraph(f"<font color='#1F3A5F'><b>{i.target_weight_pct:.1f}%</b></font>", STYLES["cell"]),
                      Paragraph(amount(i), STYLES["cell"]), Paragraph(fit(i), STYLES["cell"]), Paragraph(eligible(i), STYLES["cell"])])
     glance = Table(rows, colWidths=[w * BODY_W / 515 for w in (150, 52, 40, 42, 40, 92, 34, 65)], repeatRows=1)
     glance.setStyle(TableStyle([("LINEABOVE", (0, 0), (-1, 0), 0.8, INK), ("LINEBELOW", (0, 0), (-1, 0), 0.5, RULE),
@@ -222,7 +222,7 @@ def research_note_memo_renderer(memo: Any, output_path: str, profile: Any, ideas
 
     story.append(Paragraph("Sources", STYLES["h1"]))
     for info in (index or source_index()).values():
-        link = f"<link href='{info['url']}' color='#1C5CAB'><u>{info['title']}</u></link>" if info.get("url") else f"<b>{info['title']}</b>"
+        link = f"<link href='{info['url']}' color='#1F3A5F'><u>{info['title']}</u></link>" if info.get("url") else f"<b>{info['title']}</b>"
         story.append(Paragraph(f"{link} — {info['short']}, {info['date']}", STYLES["body"]))
 
     story.append(Paragraph("RM sign-off", STYLES["h1"]))
