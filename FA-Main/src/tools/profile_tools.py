@@ -272,3 +272,22 @@ def profile_change_detector(current: Dict[str, Any], last_review: Dict[str, Any]
             continue
         changes.append({"field": field, "label": label, "before": _describe(field, before), "after": _describe(field, after)})
     return changes
+
+def client_note_signals(notes: List[Dict[str, Any]], since: str = "") -> List[Dict[str, str]]:
+    """Client notes dated after the last review that mention a possible change in circumstances (deck slide 9).
+
+    A deterministic keyword flag for the RM to confirm with the client; it never changes the profile."""
+    from src.tools.risk_engine import load_policy
+    rules = load_policy().get("client_note_signals") or {}
+    signals = []
+    for note in notes or []:
+        if since and str(note.get("date", "")) <= since:
+            continue
+        text = str(note.get("text", "")).lower()
+        for kind, rule in rules.items():
+            if any(k in text for k in rule["keywords"]):
+                signals.append({"kind": kind, "label": rule["label"], "implication": rule["implication"],
+                                "date": str(note.get("date", "")), "source": str(note.get("source", "Client note")),
+                                "text": str(note.get("text", ""))})
+                break
+    return signals

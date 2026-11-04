@@ -93,6 +93,7 @@ class ResearchBrief(BaseModel):
     window_days: int = 30  # look-back used for the freshness limit (UC1: 3 months)
     external_news_used: bool = False  # external news only by exception; the prototype never uses it
     rm_news_count: int = 0  # items the RM entered
+    conflicting_signals: List[str] = Field(default_factory=list)  # sources that disagree: surfaced as uncertainty, never resolved
 
 # ==========================================
 # 3. INVESTMENT IDEA SCHEMAS (Slide 16)
@@ -251,6 +252,15 @@ class ProfileChange(BaseModel):
 # 6. USE CASE OUTPUTS: MEETING BRIEF (UC1) AND MARKET-EVENT DECISION (UC3)
 # ==========================================
 
+class BriefInsight(BaseModel):
+    """One card of 'what the RM sees' (deck slide 9): what matters, and why it is in the briefing."""
+    model_config = ConfigDict(extra="forbid")
+    area: Literal["CLIENT", "PORTFOLIO", "MARKET", "DISCUSSION"]
+    headline: str
+    detail: str
+    why_here: str  # where the point comes from: client profile, portfolio, CIO research (with dates)
+    sources: List[str] = Field(default_factory=list)
+
 class MeetingBrief(BaseModel):
     """UC1 client meeting brief: confirm the profile, share the market landscape, discuss next steps."""
     model_config = ConfigDict(extra="forbid")
@@ -262,6 +272,7 @@ class MeetingBrief(BaseModel):
     review_period: str
     profile_summary: List[str]
     profile_changes: List[ProfileChange] = Field(default_factory=list)
+    key_insights: List[BriefInsight] = Field(default_factory=list)  # client, portfolio, market, discussion
     portfolio_summary: str
     portfolio_risks: List[str]
     market_developments: List[str]

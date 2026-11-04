@@ -53,19 +53,45 @@ def quantitative_analysis_tool(ticker_or_asset_class: str) -> QuantMetrics:
         credit_spread_bps=metrics.get("credit_spread_bps")
     )
 
+BULLISH_KEYWORDS = [
+    "overweight", "outperform", "catalyst", "expansion", "growth",
+    "resilient", "attractive", "compelling", "upside", "monetization", "yield"
+]
+BEARISH_KEYWORDS = [
+    "underweight", "slowdown", "recession", "headwind", "downside",
+    "elevated valuation", "spread widening", "breach", "pressure", "decline"
+]
+
+def _tone(text: str) -> int:
+    """+1 / -1 / 0: which way one document reads, from the same lexicon as the sentiment tool."""
+    text = text.lower()
+    score = sum(w in text for w in BULLISH_KEYWORDS) - sum(w in text for w in BEARISH_KEYWORDS)
+    return (score > 0) - (score < 0)
+
+def conflicting_signals_detector(snippets: List[DocumentSnippet]) -> List[str]:
+    """Retrieved sources that read in opposite directions on the same instrument (deck slide 29: surface uncertainty).
+
+    Deterministic. A conflict is reported to the RM with both sources; it is never resolved by picking a side."""
+    by_ticker: Dict[str, List[DocumentSnippet]] = {}
+    for doc in snippets:
+        for ticker in doc.tickers:
+            by_ticker.setdefault(ticker.upper(), []).append(doc)
+    conflicts = []
+    for ticker, docs in sorted(by_ticker.items()):
+        positive = [d for d in docs if _tone(d.text) > 0]
+        negative = [d for d in docs if _tone(d.text) < 0]
+        if positive and negative:
+            pos, neg = positive[0], negative[0]
+            conflicts.append(f"Sources disagree on {ticker}: {pos.publisher} reads positive, {neg.publisher} reads negative. "
+                             f"Treat the view as uncertain and weigh both before discussing it ({pos.source_id}, {neg.source_id}).")
+    return conflicts
+
 def sentiment_analysis_tool(corpus_docs: List[DocumentSnippet]) -> SentimentBreakdown:
     """
     Deterministically analyze sentiment across retrieved corpus documents
     using financial lexicon keywords (bullish vs bearish signals).
     """
-    bullish_keywords = [
-        "overweight", "outperform", "catalyst", "expansion", "growth",
-        "resilient", "attractive", "compelling", "upside", "monetization", "yield"
-    ]
-    bearish_keywords = [
-        "underweight", "slowdown", "recession", "headwind", "downside",
-        "elevated valuation", "spread widening", "breach", "pressure", "decline"
-    ]
+    bullish_keywords, bearish_keywords = BULLISH_KEYWORDS, BEARISH_KEYWORDS
 
     bullish_signals = []
     bearish_signals = []

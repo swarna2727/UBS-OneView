@@ -172,3 +172,20 @@ def test_market_event_with_missing_data_still_blocks_at_profile(sample_profiles)
 def test_unknown_use_case_is_rejected(sample_profiles):
     with pytest.raises(ValueError, match="use_case"):
         new_service().start_session(client(sample_profiles, "demo_sarah", use_case="newsletter"))
+
+
+def test_pre_meeting_brief_shows_what_matters_and_why(sample_profiles):
+    """Deck slide 9: client, portfolio, market and discussion cards, each saying why it is in the briefing."""
+    service = new_service()
+    sid = "uc1_insights"
+    service.start_session(client(sample_profiles, "demo_sarah", use_case="pre_meeting"), session_id=sid)
+    for _ in range(3):
+        act(service, sid, action="approve")
+    brief = service.get_state(sid)["meeting_brief"]
+    cards = {i.area: i for i in brief.key_insights}
+    assert list(cards) == ["CLIENT", "PORTFOLIO", "MARKET", "DISCUSSION"]
+    assert cards["CLIENT"].headline == "Income change flagged" and "2026-09-30" in cards["CLIENT"].why_here
+    assert cards["PORTFOLIO"].headline == "Fixed Income below reference allocation" and "30%" in cards["PORTFOLIO"].detail
+    assert cards["MARKET"].sources and all(i.why_here for i in brief.key_insights)
+    assert "stability" in cards["DISCUSSION"].detail
+    assert service.get_state(sid)["profile"].goals == sample_profiles["demo_sarah"]["goals"]  # a flag never changes the profile

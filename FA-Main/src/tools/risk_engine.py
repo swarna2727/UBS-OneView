@@ -403,3 +403,24 @@ def suitability_rule_engine(
         "after_metrics": to_risk_metrics(before, after),
         "after_holdings": exposure.after_holdings
     }
+
+# ==========================================
+# UC1 briefing: where the portfolio sits against the CIO reference mix (deck slide 9)
+# ==========================================
+
+def reference_mix_gaps(asset_class_weights: Dict[str, float], risk_tier: str) -> List[Dict[str, Any]]:
+    """Asset classes whose current weight differs from the CIO reference mix for the client's band, largest gap first.
+
+    Facts only: the gap is shown to the RM as a point to discuss, never as a recommendation."""
+    cfg = load_policy().get("cio_reference_mix") or {}
+    mix = (cfg.get("mixes") or {}).get(risk_tier)
+    if not mix:
+        return []
+    gaps = []
+    for asset_class in sorted(set(mix) | set(asset_class_weights)):
+        current, reference = round(asset_class_weights.get(asset_class, 0.0), 1), float(mix.get(asset_class, 0.0))
+        if abs(current - reference) >= cfg.get("min_gap_pp", 5.0):
+            gaps.append({"asset_class": asset_class, "current_pct": current, "reference_pct": reference,
+                         "gap_pp": round(current - reference, 1), "source_id": cfg.get("source_id")})
+    # largest gap first; an underweight before an overweight of the same size
+    return sorted(gaps, key=lambda g: (-abs(g["gap_pp"]), g["gap_pp"]))

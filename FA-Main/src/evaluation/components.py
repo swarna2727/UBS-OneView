@@ -106,3 +106,21 @@ def source_validity(run: RunResult) -> List[Dict[str, Any]]:
 
 def component_level(run: RunResult) -> List[Dict[str, Any]]:
     return schema_validation(run) + calculation_accuracy(run) + source_validity(run)
+
+def output_structure(run: RunResult) -> List[Dict[str, Any]]:
+    """Schema level (slide 26): exactly the required number and type of outputs, with their required fields."""
+    s, out = run.state, []
+    ideas = s.get("candidate_ideas")
+    if run.use_case == "adhoc_request" and ideas:
+        complete = all(i.action and i.allocation_range and i.portfolio_role and i.thesis and i.key_risks and i.invalidation_trigger
+                       for i in ideas.ideas)
+        out.append(check("schema:exactly-three-complete-ideas", len(ideas.ideas) == 3 and complete, f"{len(ideas.ideas)} ideas"))
+    brief = s.get("meeting_brief")
+    if run.use_case == "pre_meeting" and brief:
+        sections = all([brief.profile_summary, brief.market_developments, brief.talking_points, brief.questions_for_client])
+        out.append(check("schema:briefing-sections-present", sections))
+        out.append(check("schema:insight-cards-have-why", all(i.why_here for i in brief.key_insights), f"{len(brief.key_insights)} cards"))
+    record = s.get("meeting_record")
+    if run.use_case == "post_meeting" and record:
+        out.append(check("schema:record-has-summary-actions-email", bool(record.client_said and record.actions and record.follow_up_email.body)))
+    return out

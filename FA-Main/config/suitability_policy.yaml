@@ -70,3 +70,25 @@ client_limits:
 
 # UC1 looks back over the last 3 months of CIO research; UC2 ideas need current (R8) research.
 uc1_research_window_days: 90
+
+# UC1 briefing (deck slide 9): the CIO reference mix per risk band, used to point out where the portfolio sits
+# against it. Illustrative weights in %; replace with the CIO office's published strategic asset allocation.
+cio_reference_mix:
+  source_id: SRC-UBS-CIO-2026-101
+  min_gap_pp: 5.0                     # smaller gaps are not raised
+  mixes:
+    Conservative:      {Equities: 25, Fixed Income: 55, Cash Equivalents: 15, Commodities: 5}
+    Moderate:          {Equities: 45, Fixed Income: 40, Cash Equivalents: 10, Commodities: 5}
+    Balanced Growth:   {Equities: 60, Fixed Income: 30, Cash Equivalents: 5, Commodities: 5}
+    Aggressive Growth: {Equities: 75, Fixed Income: 15, Cash Equivalents: 5, Commodities: 5}
+    Speculative:       {Equities: 85, Fixed Income: 5, Cash Equivalents: 5, Commodities: 5}
+
+# Client notes since the last review that the briefing flags for the RM to confirm (deck slide 9).
+# Keyword match only: a flag asks a question, it never changes the profile.
+client_note_signals:
+  income: {label: Income change flagged, implication: Potential impact on future investable cash flow.,
+           keywords: [salary, income, new role, new job, job change, bonus, redundan, promotion]}
+  liquidity: {label: Cash need flagged, implication: May change near-term liquidity needs.,
+              keywords: [wedding, tuition, medical, renovation, large purchase]}
+  family: {label: Family change flagged, implication: May change goals or dependants.,
+           keywords: [baby, married, divorce, dependant, dependent]}

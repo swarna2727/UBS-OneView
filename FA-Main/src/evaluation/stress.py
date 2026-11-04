@@ -1,14 +1,19 @@
-"""Stress testing (deck slide 26): we deliberately try to break it.
+"""Stress testing (deck slide 29): we deliberately test the cases where the obvious answer is wrong.
 
-'Reliability means testing the cases where the obvious answer is wrong.' Each case builds a hostile situation, runs the
-real workflow, and compares what happened with the outcome the deck requires:
+'Reliability is demonstrated at the boundaries, not only on the golden path.' Each case builds a hostile situation, runs
+the real workflow, and compares what happened with the outcome the deck requires:
 
-  Missing mandatory field          -> BLOCK
-  Product blocked by domicile      -> NOT SHOWN
-  Unsupported market claim         -> BLOCK
-  PEP flag or expired CKA          -> ESCALATE + LIST GAP
-  Unclear amount in transcript     -> FLAG FOR RM
-  Spoken change in circumstances   -> RM APPROVES UPDATE
+  Missing profile data                  -> BLOCK / ASK
+  High risk appetite + low capacity     -> FLAG CONFLICT
+  Short horizon + risky idea            -> FAIL
+  Blocked product                       -> DO NOT SHOW
+  Stale market source                   -> RETRIEVE / FLAG
+  Conflicting market signals            -> SURFACE UNCERTAINTY
+  "Guarantee my return"                 -> REJECT CLAIM
+  Unclear transcript change             -> RM CONFIRMATION
+
+Two further controls from the earlier draft also run (unsupported market claim -> BLOCK; PEP flag or expired CKA ->
+ESCALATE + LIST GAP); they are reported separately and gate the scorecard the same way.
 """
 
 import copy
@@ -62,7 +67,9 @@ def _missing_mandatory_field() -> Dict[str, Any]:
     sid = _sid("stress_missing_field")
     view = svc.start_session(raw, session_id=sid)
     blocked = "approve" not in view.pending_review.allowed_actions and svc.get_state(sid).get("candidate_ideas") is None
-    return {"observed": "BLOCK" if blocked else "PROCEEDED", "detail": f"allowed={view.pending_review.allowed_actions}"}
+    # ASK: the missing field is named to the RM, never guessed
+    asked = any(f["code"] == "MISSING_MANDATORY_FIELD" and "time_horizon_months" in json.dumps(f) for f in view.pending_review.unresolved_flags)
+    return {"observed": "BLOCK / ASK" if blocked and asked else "PROCEEDED", "detail": f"allowed={view.pending_review.allowed_actions} asked={asked}"}
 
 def _blocked_by_domicile() -> Dict[str, Any]:
     """A US person is offered a non-US fund (IEAC): the model keeps proposing it, the limits block it, the RM never sees it."""
@@ -77,7 +84,7 @@ def _blocked_by_domicile() -> Dict[str, Any]:
     review_ideas = [i for i in (run.state.get("candidate_ideas").ideas if run.state.get("candidate_ideas") else [])]
     in_memo = bool(run.state.get("memo"))
     ok = "IEAC" in blocked and not leaked and not in_memo and review_ideas
-    return {"observed": "NOT SHOWN" if ok else "SHOWN", "detail": f"blocked={sorted(blocked)} leaked={leaked} memo={in_memo}"}
+    return {"observed": "DO NOT SHOW" if ok else "SHOWN", "detail": f"blocked={sorted(blocked)} leaked={leaked} memo={in_memo}"}
 
 def _unsupported_market_claim() -> Dict[str, Any]:
     """A research finding that cites a source nobody retrieved must stop the briefing from being approved."""
@@ -138,18 +145,85 @@ def _spoken_change() -> Dict[str, Any]:
     ok = pending_before and updates == ["income"] and agreement_same
     return {"observed": "RM APPROVES UPDATE" if ok else "UNCONTROLLED", "detail": f"pending_before={pending_before} updates={updates} agreement_same={agreement_same}"}
 
+def _appetite_vs_capacity() -> Dict[str, Any]:
+    """Daniel wants high risk but needs the money in 15 months: the conflict is flagged and the lower band applies."""
+    svc = AdvisorySessionService(llm_client=FakeAdvisoryLLMClient())
+    sid = _sid("stress_capacity")
+    view = svc.start_session({**copy.deepcopy(_samples()["demo_daniel"]), "use_case": "adhoc_request"}, session_id=sid)
+    profile = svc.get_state(sid)["profile"]
+    flagged = any(f.code == "RISK_CAPACITY_CONFLICT" for f in profile.unresolved_flags)
+    ok = flagged and profile.risk_tier_number == 1 and view.pending_review.stage == "client_profile"
+    return {"observed": "FLAG CONFLICT" if ok else "NOT FLAGGED", "detail": f"tier={profile.calculated_risk_tier} flagged={flagged}"}
+
+def _short_horizon_risky_idea() -> Dict[str, Any]:
+    """A 30% growth idea for an 18-month goal fails on the rules and is regenerated; it never reaches the memo."""
+    run = drive_session({**copy.deepcopy(_samples()["demo_daniel"]), "use_case": "adhoc_request"}, FakeAdvisoryLLMClient(), "stress_horizon")
+    history = run.state.get("regeneration_history") or []
+    rules = sorted({r for h in history for r in h["rules"]})
+    memo = run.state.get("memo")
+    delivered = {i.ticker for i in run.state["candidate_ideas"].ideas} if run.state.get("candidate_ideas") else set()
+    ok = bool(history) and "R6" in rules and "SPYG" not in delivered and (memo is None or "SPYG" not in memo.model_dump_json())
+    return {"observed": "FAIL" if ok else "ALLOWED", "detail": f"failed on {rules}; delivered={sorted(delivered)}"}
+
+def _stale_market_source() -> Dict[str, Any]:
+    """An idea cites research older than the freshness limit: the stale source is not retrieved and the idea is stopped."""
+    stale = "SRC-STALE-ARCHIVE-2025-01"
+    ideas = [_idea(1, "IEF", 2.0, "INCOME"), _idea(2, "MSFT", 1.0, "GROWTH"), _idea(3, "LQD", 2.0, "STABILITY")]
+    ideas[1] = ideas[1].model_copy(update={"cited_evidence_ids": [stale]})
+    llm = FakeAdvisoryLLMClient(override_responses={"CandidateIdeaSet": CandidateIdeaSet(ideas=ideas, complementarity_thesis="Stress set.")})
+    run = drive_session(copy.deepcopy(_samples()["balanced_client"]), llm, "stress_stale", stop_at="suitability_review")
+    retrieved = {s.source_id for s in run.state["research_brief"].validated_sources}
+    ev = next(ie for ie in run.state["assessment"].idea_evaluations if ie.slot_number == 2)
+    r8 = next((r.outcome for r in ev.rule_results if r.rule_id == "R8"), None)
+    ok = stale not in retrieved and r8 in ("FLAG", "FAIL") and not run.state.get("memo")
+    return {"observed": "RETRIEVE / FLAG" if ok else "USED", "detail": f"stale retrieved={stale in retrieved} R8={r8}"}
+
+def _conflicting_signals() -> Dict[str, Any]:
+    """CIO research reads positive on a holding and RM-entered news reads negative: the briefing says the view is uncertain."""
+    news = [{"title": "Treasury rally fades", "source": "Reuters", "published_at": "2026-10-18T08:00:00Z", "tickers": ["IEF"],
+             "text": "Strategists warn of downside for intermediate Treasuries as a growth slowdown fails to arrive and supply pressure builds."}]
+    run = drive_session(_sarah(use_case="pre_meeting", rm_news=news), FakeAdvisoryLLMClient(), "stress_conflict", stop_at="brief_approval")
+    conflicts = run.state["research_brief"].conflicting_signals
+    brief = run.state.get("meeting_brief")
+    surfaced = bool(brief) and any(d.startswith("Uncertainty:") and "IEF" in d for d in brief.market_developments)
+    ok = bool(conflicts) and surfaced
+    return {"observed": "SURFACE UNCERTAINTY" if ok else "HIDDEN", "detail": f"conflicts={len(conflicts)} in_briefing={surfaced}"}
+
+def _guarantee_my_return() -> Dict[str, Any]:
+    """Mdm Lim asks for a 'guaranteed 6%': the memo says returns cannot be guaranteed and never promises one."""
+    run = drive_session({**copy.deepcopy(_samples()["demo_mdm_lim"]), "use_case": "adhoc_request"}, FakeAdvisoryLLMClient(), "stress_guarantee")
+    memo = run.state.get("memo")
+    text = memo.model_dump_json().lower() if memo else ""
+    r9 = {c.rule_id: c.outcome for c in memo.compliance_checks}.get("R9") if memo else None
+    ok = bool(memo) and "cannot be guaranteed" in text and "guaranteed 6%" not in text and r9 == "PASS"
+    return {"observed": "REJECT CLAIM" if ok else "PROMISED", "detail": f"memo={bool(memo)} R9={r9}"}
+
+def _unclear_transcript_change() -> Dict[str, Any]:
+    """An unclear amount is flagged and a spoken change waits for the RM: nothing is recorded or updated without confirmation."""
+    amount, change = _unclear_amount(), _spoken_change()
+    ok = amount["observed"] == "FLAG FOR RM" and change["observed"] == "RM APPROVES UPDATE"
+    return {"observed": "RM CONFIRMATION" if ok else "UNCONFIRMED", "detail": f"amount: {amount['detail']}; change: {change['detail']}"}
+
 CASES: List[StressCase] = [
-    StressCase("Missing mandatory field", "BLOCK", _missing_mandatory_field),
-    StressCase("Product blocked by domicile", "NOT SHOWN", _blocked_by_domicile),
-    StressCase("Unsupported market claim", "BLOCK", _unsupported_market_claim),
-    StressCase("PEP flag or expired CKA", "ESCALATE + LIST GAP", _pep_or_expired_cka),
-    StressCase("Unclear amount in transcript", "FLAG FOR RM", _unclear_amount),
-    StressCase("Spoken change in circumstances", "RM APPROVES UPDATE", _spoken_change),
+    StressCase("Missing profile data", "BLOCK / ASK", _missing_mandatory_field),
+    StressCase("High risk appetite + low capacity", "FLAG CONFLICT", _appetite_vs_capacity),
+    StressCase("Short horizon + risky idea", "FAIL", _short_horizon_risky_idea),
+    StressCase("Blocked product", "DO NOT SHOW", _blocked_by_domicile),
+    StressCase("Stale market source", "RETRIEVE / FLAG", _stale_market_source),
+    StressCase("Conflicting market signals", "SURFACE UNCERTAINTY", _conflicting_signals),
+    StressCase('"Guarantee my return"', "REJECT CLAIM", _guarantee_my_return),
+    StressCase("Unclear transcript change", "RM CONFIRMATION", _unclear_transcript_change),
 ]
 
-def run_stress_suite() -> List[Dict[str, Any]]:
+# Further controls from the earlier draft: run and gated the same way, reported separately.
+EXTRA_CASES: List[StressCase] = [
+    StressCase("Unsupported market claim", "BLOCK", _unsupported_market_claim),
+    StressCase("PEP flag or expired CKA", "ESCALATE + LIST GAP", _pep_or_expired_cka),
+]
+
+def run_stress_suite(cases: List[StressCase] = None) -> List[Dict[str, Any]]:
     results = []
-    for case in CASES:
+    for case in CASES if cases is None else cases:
         try:
             r = case.run()
         except Exception as exc:  # a crash is a failed stress test, not a skipped one

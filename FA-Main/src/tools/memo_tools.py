@@ -104,9 +104,14 @@ def meeting_brief_renderer(brief: Any, output_path: str, charts: Optional[List[A
         Paragraph(f"<b>Client:</b> {brief.client_name} ({brief.client_id}) &nbsp;|&nbsp; <b>Meeting:</b> {brief.meeting_purpose} "
                   f"&nbsp;|&nbsp; <b>Review period:</b> {brief.review_period}", s["bold"]),
         Spacer(1, 6),
-        Paragraph("1. Client profile to confirm", s["section"]),
-        *_bullets(brief.profile_summary, s["body"]),
     ]
+    if brief.key_insights:
+        # What matters for this meeting (deck slide 9), each with why it is in the briefing.
+        rows = [[Paragraph(f"<b>{h}</b>", s["bold"]) for h in ("", "What matters", "Why is this here?")]]
+        rows += [[Paragraph(f"<b>{i.area.title()}</b>", s["body"]), Paragraph(f"<b>{i.headline}.</b> {i.detail}", s["body"]),
+                  Paragraph(i.why_here, s["body"])] for i in brief.key_insights]
+        story += [Paragraph("What matters for this meeting", s["section"]), _table(rows, [70, 240, 210])]
+    story += [Paragraph("1. Client profile to confirm", s["section"]), *_bullets(brief.profile_summary, s["body"])]
     if brief.profile_changes:
         rows = [[Paragraph("<b>Changed since last review</b>", s["bold"]), Paragraph("<b>Before</b>", s["bold"]), Paragraph("<b>Now</b>", s["bold"])]]
         rows += [[Paragraph(c.label, s["body"]), Paragraph(c.before, s["body"]), Paragraph(c.after, s["body"])] for c in brief.profile_changes]

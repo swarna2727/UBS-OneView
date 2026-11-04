@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, List
 from src.agents.base import BaseAdvisoryAgent
 from src.schemas.advisory import ClientAdvisoryProfile, ResearchBrief, ResearchFinding
 from src.schemas.tools import DocumentSnippet
-from src.tools.market_tools import quantitative_analysis_tool, sentiment_analysis_tool, portfolio_impact_tool
+from src.tools.market_tools import quantitative_analysis_tool, sentiment_analysis_tool, portfolio_impact_tool, conflicting_signals_detector
 from src.tools.retrieval import retrieval_rag_tool, source_freshness_validator
 from src.tools.risk_engine import load_policy
 from src.llm.base import LLMClientProtocol
@@ -141,5 +141,7 @@ Synthesize a comprehensive ResearchBrief. Ensure every finding explicitly refere
         brief_dict["window_days"] = max_age
         brief_dict["external_news_used"] = False
         brief_dict["rm_news_count"] = len(rm_news or [])
+        # Sources that read in opposite directions on the same instrument: surfaced to the RM as uncertainty (slide 29).
+        brief_dict["conflicting_signals"] = conflicting_signals_detector(fresh_snippets)
 
         return ResearchBrief(**brief_dict)

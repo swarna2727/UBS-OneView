@@ -1,9 +1,10 @@
-"""Performance and cost (deck slide 27): is the workflow operationally viable?
+"""Performance and cost (deck slides 4 and 31): is the workflow operationally viable?
 
 End-to-end latency, LLM calls per run, estimated cost per run, where the latency comes from (Research / Ideas / Checks /
-Record), and how much selective regeneration saves. Read from the run log, so it works for any model."""
+Record), how much selective regeneration saves, whether the run needed manual recovery, and the unapproved action
+rate. Read from the run log, so it works for any model."""
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from src.evaluation.runner import RunResult
 
@@ -47,4 +48,37 @@ def performance_report(run: RunResult) -> Dict[str, Any]:
         "slowest_bucket": max(by_bucket, key=by_bucket.get) if total else None,
         "regeneration_rounds": len(regens),
         "idea_generations_saved": 3 * len(regens) - regenerated,  # slots kept instead of regenerated
+        "manual_recovery_actions": recovery_actions(run),
+        "consequential_actions": len(consequential_actions(run.log)),
+        "unapproved_actions": sum(1 for a in consequential_actions(run.log) if not a["approved"]),
     }
+
+# RM actions that repair a run rather than move it forward at an intended checkpoint (slide 31: "ex. intended RM checkpoints").
+RECOVERY_ACTIONS = {"regenerate", "revise", "edit_allocation", "unlock_idea", "reject"}
+# Outputs with consequences outside the workspace: each must follow an RM approval (slide 4: unapproved action rate).
+CONSEQUENTIAL_EVENTS = {"pdf_generated", "profile_updates_approved"}
+
+def recovery_actions(run: RunResult) -> List[str]:
+    return [e["decision"].get("action") for e in run.log
+            if e["event"] == "advisor_decision" and (e.get("decision") or {}).get("action") in RECOVERY_ACTIONS]
+
+def consequential_actions(log: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each PDF or profile update, and whether the RM decision right before it approved it at the final checkpoint."""
+    from src.evaluation.trajectory import FINAL_CHECKPOINTS
+    out, last_approving = [], False
+    for e in log:
+        if e["event"] == "advisor_decision":
+            last_approving = (e.get("decision") or {}).get("action") == "approve" and e.get("stage") in FINAL_CHECKPOINTS
+        elif e["event"] in CONSEQUENTIAL_EVENTS:
+            out.append({"event": e["event"], "approved": last_approving})
+    return out
+
+def operational_summary(runs: List[RunResult]) -> Dict[str, Any]:
+    """Across runs: share completed without manual recovery, and the unapproved action rate (target 0%)."""
+    clean = [r for r in runs if r.completed and not recovery_actions(r)]
+    actions = [a for r in runs for a in consequential_actions(r.log)]
+    unapproved = [a for a in actions if not a["approved"]]
+    return {"runs": len(runs), "runs_without_manual_recovery": len(clean),
+            "runs_without_manual_recovery_pct": round(100.0 * len(clean) / len(runs), 1) if runs else None,
+            "consequential_actions": len(actions), "unapproved_actions": len(unapproved),
+            "unapproved_action_rate_pct": round(100.0 * len(unapproved) / len(actions), 1) if actions else 0.0}

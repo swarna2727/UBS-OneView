@@ -585,7 +585,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             changes=state.get("profile_changes") or [],
             ideas=state.get("candidate_ideas") if approved else None,
             assessment=state.get("assessment") if approved else None,
-            offer_map=state.get("offer_map"), previous_record=raw.get("previous_meeting_record")))
+            offer_map=state.get("offer_map"), previous_record=raw.get("previous_meeting_record"),
+            client_notes=raw.get("client_notes") or [], since=since or ""))
         return {
             "meeting_brief": brief, "pdf_path": None, "current_stage": REVIEW_BRIEF,
             "audit_trail": _agent_audit(state, "meeting_brief", memo_agent, brief, brief_id=brief.brief_id)

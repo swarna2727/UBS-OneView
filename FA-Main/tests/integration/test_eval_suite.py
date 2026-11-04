@@ -1,26 +1,30 @@
-"""The deck's six stress tests and the full scorecard, run end to end on the offline model (deck slides 24-27)."""
+"""The deck's eight stress tests and the full scorecard, run end to end on the offline model (aafs_v3 slides 26-31)."""
 
 import json
 import pytest
 
 from src.evaluation.scorecard import failures, render_markdown, run_scorecard
-from src.evaluation.stress import CASES, run_stress_suite
+from src.evaluation.stress import CASES, EXTRA_CASES, run_stress_suite
 
-DECK_STRESS = {
-    "Missing mandatory field": "BLOCK",
-    "Product blocked by domicile": "NOT SHOWN",
-    "Unsupported market claim": "BLOCK",
-    "PEP flag or expired CKA": "ESCALATE + LIST GAP",
-    "Unclear amount in transcript": "FLAG FOR RM",
-    "Spoken change in circumstances": "RM APPROVES UPDATE",
+DECK_STRESS = {  # slide 29
+    "Missing profile data": "BLOCK / ASK",
+    "High risk appetite + low capacity": "FLAG CONFLICT",
+    "Short horizon + risky idea": "FAIL",
+    "Blocked product": "DO NOT SHOW",
+    "Stale market source": "RETRIEVE / FLAG",
+    "Conflicting market signals": "SURFACE UNCERTAINTY",
+    '"Guarantee my return"': "REJECT CLAIM",
+    "Unclear transcript change": "RM CONFIRMATION",
 }
+FURTHER_CONTROLS = {"Unsupported market claim": "BLOCK", "PEP flag or expired CKA": "ESCALATE + LIST GAP"}
 
 
 def test_stress_cases_match_the_deck_table():
     assert {c.name: c.expected for c in CASES} == DECK_STRESS
+    assert {c.name: c.expected for c in EXTRA_CASES} == FURTHER_CONTROLS
 
 
-@pytest.mark.parametrize("result", run_stress_suite(), ids=lambda r: r["case"])
+@pytest.mark.parametrize("result", run_stress_suite() + run_stress_suite(EXTRA_CASES), ids=lambda r: r["case"])
 def test_each_stress_case_produces_the_required_outcome(result):
     assert result["passed"], f"{result['case']}: expected {result['expected']}, observed {result['observed']} ({result['detail']})"
 
@@ -40,7 +44,10 @@ def scorecard():
 def test_scorecard_passes_all_deterministic_checks_on_all_three_use_cases(scorecard):
     assert scorecard["failures"] == [], scorecard["failures"]
     assert [r["label"] for r in scorecard["runs"]] == ["UC1 Prepare", "UC2 Discover", "UC3 Record"]
-    assert all(len(r["levels"]["component"]) and len(r["levels"]["output quality"]) and len(r["levels"]["workflow"]) for r in scorecard["runs"])
+    assert all(list(r["levels"]) == ["schema", "deterministic", "competency", "trajectory"] and all(r["levels"].values())
+               for r in scorecard["runs"])
+    op = scorecard["operational"]
+    assert op["runs_without_manual_recovery"] == 3 and op["unapproved_actions"] == 0 and op["consequential_actions"] >= 3
 
 
 def test_scorecard_reports_personalisation_and_the_regeneration_saving(scorecard):
@@ -53,10 +60,10 @@ def test_scorecard_reports_personalisation_and_the_regeneration_saving(scorecard
 
 def test_markdown_report_has_every_deck_section(scorecard):
     md = render_markdown(scorecard, offline=True)
-    for heading in ("Component level", "Output Quality level", "Workflow level", "Stress tests", "Performance and cost",
-                    "Personalisation", "ALL DETERMINISTIC CHECKS PASS", "Offline run"):
+    for heading in ("Schema level", "Deterministic level", "Competency level", "Trajectory level", "Stress tests",
+                    "Performance and cost", "Control and recovery", "Personalisation", "ALL DETERMINISTIC CHECKS PASS", "Offline run"):
         assert heading in md
-    for name, outcome in DECK_STRESS.items():
+    for name, outcome in {**DECK_STRESS, **FURTHER_CONTROLS}.items():
         assert f"| {name} | {outcome} | {outcome} | PASS |" in md
     for bucket in ("Research", "Ideas", "Checks", "Record"):
         assert bucket in md
@@ -64,7 +71,7 @@ def test_markdown_report_has_every_deck_section(scorecard):
 
 def test_a_failing_check_is_reported_and_would_fail_the_run(scorecard):
     bad = json.loads(json.dumps(scorecard, default=str))
-    bad["runs"][0]["levels"]["workflow"][0]["passed"] = False
+    bad["runs"][0]["levels"]["trajectory"][0]["passed"] = False
     bad["stress"][0]["passed"] = False
     found = failures(bad)
     assert len(found) == 2 and any("Stress /" in f for f in found)

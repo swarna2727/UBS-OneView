@@ -8,18 +8,20 @@ from src.agents.base import BaseAdvisoryAgent
 from src.schemas.advisory import (
     ClientAdvisoryProfile, CandidateIdeaSet, SuitabilityAssessment, ResearchBrief,
     StructuredMemo, MemoPage1Executive, MemoPage2IdeaDetail,
-    MemoPage3PortfolioView, ExecutiveIdeaGlance, MeetingBrief, ProfileChange, EventImpact, EventDecisionRecord,
+    MemoPage3PortfolioView, ExecutiveIdeaGlance, MeetingBrief, BriefInsight, ProfileChange, EventImpact, EventDecisionRecord,
     OfferMap, MeetingExtraction, MeetingRecord, RecordLine, RecordAction, ProfileChangeProposal, FollowUpEmail
 )
 from src.schemas.tools import RuleResult
 from src.tools.event_tools import stress_impact
 from src.tools.memo_tools import memo_consistency_validator, citation_source_mapper
-from src.tools.risk_engine import prohibited_wording, portfolio_metrics, risk_points, risk_band_points
+from src.tools.profile_tools import client_note_signals
+from src.tools.risk_engine import prohibited_wording, portfolio_metrics, reference_mix_gaps, risk_points, risk_band_points
 from src.tools.transcript_tools import transcript_parser, transcript_fingerprint, index_lines, lines_support_amounts
 from src.llm.base import LLMClientProtocol
 
 CURRENCY_SYMBOLS = {"SGD": "S$", "USD": "US$", "CHF": "CHF ", "EUR": "€", "GBP": "£"}
 NOT_GUARANTEED = "Investment returns are not guaranteed and capital is at risk."
+HONORIFICS = {"Mdm", "Mr", "Mrs", "Ms", "Miss", "Dr"}
 
 class MemoFormatterInputs:
     def __init__(
@@ -41,7 +43,10 @@ class MeetingBriefInputs:
     def __init__(self, profile: ClientAdvisoryProfile, research_brief: ResearchBrief, meeting_purpose: str,
                  review_period: str, changes: Optional[List[dict]] = None, ideas: Optional[CandidateIdeaSet] = None,
                  assessment: Optional[SuitabilityAssessment] = None, offer_map: Optional[OfferMap] = None,
-                 previous_record: Optional[Dict[str, Any]] = None):
+                 previous_record: Optional[Dict[str, Any]] = None, client_notes: Optional[List[Dict[str, Any]]] = None,
+                 since: str = ""):
+        self.client_notes = client_notes or []  # dated RM / client notes; those after `since` may flag a change
+        self.since = since  # date of the last review
         self.offer_map = offer_map  # what UBS can offer this client (approved at the limits checkpoint)
         self.previous_record = previous_record  # the last meeting's compliance record, which feeds this briefing
         self.profile = profile
@@ -223,9 +228,15 @@ class BriefRecordAgent(BaseAdvisoryAgent[Any, Any]):
 
         findings = sorted(brief.findings, key=lambda f: f.materiality_rank)
         developments = [f"{f.theme}: {f.claim} Relevance: {f.relevance_to_client} ({', '.join(f.cited_source_ids)})" for f in findings]
+        developments += [f"Uncertainty: {c}" for c in brief.conflicting_signals]  # surfaced, never resolved by picking a side
 
         changes = [ProfileChange(**c) for c in inputs.changes]
-        talking = []
+        signals = client_note_signals(inputs.client_notes, inputs.since)
+        gaps = reference_mix_gaps(p.current_asset_class_weights, p.calculated_risk_tier)
+        insights = self._brief_insights(p, goals, changes, signals, gaps, findings)
+        talking = [f"Confirm with the client: {s['label'].lower().replace(' flagged', '')} ({s['source']}, {s['date']}). {s['implication']}"
+                   for s in signals]
+        talking += [f"Discuss: {i.detail}" for i in insights if i.area == "DISCUSSION"]
         for c in changes:
             talking.append(f"Confirm the change in {c.label.lower()}: {c.before} -> {c.after}, and what it means for the plan.")
         if not changes:
@@ -262,7 +273,7 @@ class BriefRecordAgent(BaseAdvisoryAgent[Any, Any]):
         result = MeetingBrief(
             brief_id=f"BRIEF-{uuid.uuid4().hex[:8].upper()}", created_at=datetime.now().isoformat(),
             client_name=p.name, client_id=p.client_id, meeting_purpose=inputs.meeting_purpose, review_period=inputs.review_period,
-            profile_summary=summary, profile_changes=changes,
+            profile_summary=summary, profile_changes=changes, key_insights=insights,
             portfolio_summary=f"Current mix: {mix}. Portfolio risk {risk_points(m['risk_score'])} on a 0-100 scale.",
             portfolio_risks=risks, market_developments=developments, talking_points=talking, questions_for_client=questions,
             recommendations=recs, sources=sources, portfolio_impact=brief.portfolio_impact,
@@ -280,6 +291,45 @@ class BriefRecordAgent(BaseAdvisoryAgent[Any, Any]):
                        message=f"Unsupported findings: {', '.join(unsourced)}." if unsourced
                        else f"All {len(findings)} findings cite a retrieved, dated source."),
         ]})
+
+    @staticmethod
+    def _brief_insights(p: ClientAdvisoryProfile, goals: List[str], changes: List[ProfileChange], signals: List[Dict[str, str]],
+                        gaps: List[Dict[str, Any]], findings: List[Any]) -> List[BriefInsight]:
+        """'What the RM sees' (deck slide 9): client, portfolio, market and the discussion point, each with why it is here.
+        Relevance filtering, not summarisation: only what changed or stands out for this client is shown."""
+        parts = p.name.split()
+        first = p.name if parts and parts[0].rstrip('.') in HONORIFICS else parts[0]  # 'Mdm Lim', not 'Mdm'
+        insights: List[BriefInsight] = []
+        if signals:
+            s = signals[0]
+            insights.append(BriefInsight(area="CLIENT", headline=s["label"], detail=s["implication"],
+                                         why_here=f"CLIENT NOTES: {s['source']} on {s['date']}, after the last review. Confirm with {first}; "
+                                                  "the profile is not changed without the RM's approval.", sources=[f"{s['source']} {s['date']}"]))
+        elif changes:
+            c = changes[0]
+            insights.append(BriefInsight(area="CLIENT", headline=f"{c.label} changed", detail=f"{c.before} -> {c.after}.",
+                                         why_here="CLIENT PROFILE: differs from the last review on record."))
+        if gaps:
+            g = gaps[0]
+            side = "below" if g["gap_pp"] < 0 else "above"
+            insights.append(BriefInsight(
+                area="PORTFOLIO", headline=f"{g['asset_class']} {side} reference allocation",
+                detail=f"{g['current_pct']:.0f}% current exposure vs {g['reference_pct']:.0f}% in the CIO's {p.calculated_risk_tier.lower()}-risk reference mix.",
+                why_here="PORTFOLIO + CIO MIX: current holdings compared with the reference mix for the client's risk band.",
+                sources=[g["source_id"]] if g.get("source_id") else []))
+        if findings:
+            f = findings[0]
+            insights.append(BriefInsight(area="MARKET", headline=f.theme, detail=f.claim,
+                                         why_here=f"CIO RESEARCH: {f.relevance_to_client} Dated {', '.join(f.publication_dates)}.",
+                                         sources=list(f.cited_source_ids)))
+        if len(insights) >= 2:
+            fixed_income_gap = next((g for g in gaps if g["asset_class"] == "Fixed Income" and g["gap_pp"] < 0), None)
+            detail = (f"Review whether portfolio stability remains appropriate for {first}'s goal: {goals[0]}." if fixed_income_gap and goals
+                      else f"Review whether the portfolio still fits {first}'s goals and timing.")
+            insights.append(BriefInsight(area="DISCUSSION", headline="Potential implication", detail=detail,
+                                         why_here="CLIENT PROFILE + PORTFOLIO + CIO RESEARCH: the points above, read together.",
+                                         sources=sorted({s for i in insights for s in i.sources})))
+        return insights
 
     def _decision_record(self, inputs: DecisionRecordInputs) -> EventDecisionRecord:
         impact = inputs.impact

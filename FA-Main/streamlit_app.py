@@ -1148,6 +1148,10 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
                                f"<div class='kv'><b>Why it matters for this client</b><br>{esc(finding.relevance_to_client)}</div>"
                                f"<div class='subtle' style='font-size:.78rem'>Evidence: {esc(', '.join(f'{s} ({d})' for s, d in zip(finding.cited_source_ids, finding.publication_dates)))}</div>")
         with right:
+            if brief.conflicting_signals:
+                # Slide 29: conflicting market signals are surfaced as uncertainty, never resolved by picking a side.
+                html_block(f"<div class='callout'><b>{pill('FLAG', 'Uncertain')} Sources disagree</b><br>"
+                           + "<br>".join(esc(c) for c in brief.conflicting_signals) + "</div>")
             with st.container(border=True):
                 st.markdown("**Key market risks / conflicting evidence**")
                 st.markdown("\n".join(f"- {md(r)}" for r in brief.key_market_risks))
@@ -1728,9 +1732,23 @@ def render_brief(ctx: dict[str, Any]) -> None:
     if brief.recommendations:
         lineage_strip(state, "final", final_label(ctx))
     profile = state["profile"]
-    tabs = st.tabs(["Profile & changes", "Portfolio & risks", "Market landscape", "Talking points & questions"]
+    tabs = st.tabs(["What matters", "Profile & changes", "Portfolio & risks", "Market landscape", "Talking points & questions"]
                    + (["Ideas to discuss"] if brief.recommendations else []))
     with tabs[0]:
+        # Deck slide 9: relevance filtering, not summarisation. Each card says why it is in the briefing.
+        if brief.key_insights:
+            cols = st.columns(len(brief.key_insights))
+            for n, (col, ins) in enumerate(zip(cols, brief.key_insights), start=1):
+                with col, st.container(border=True, height="stretch"):
+                    html_block(f"<div class='eyebrow'>{n:02d} · {esc(ins.area)}</div><div class='card-ticker'>{esc(ins.headline)}</div>"
+                               f"<div class='kv'>{esc(ins.detail)}</div>")
+                    with st.expander("Why is this here?"):
+                        st.markdown(md(ins.why_here))
+                        if ins.sources:
+                            st.caption("Sources: " + ", ".join(ins.sources))
+        else:
+            st.info("Nothing stands out for this client this period: no client notes since the last review, no gap to the reference mix.")
+    with tabs[1]:
         left, right = st.columns([1, 1.2])
         with left, st.container(border=True, height="stretch"):
             html_block(f"<div class='eyebrow'>{esc(brief.meeting_purpose)} · {esc(brief.review_period)}</div>")
@@ -1741,7 +1759,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
                     f"<tr><td>{esc(c.label)}</td><td>{esc(c.before)}</td><td><b>{esc(c.after)}</b></td></tr>" for c in brief.profile_changes) + "</table>")
             else:
                 st.success("No change in the client's profile since the last review.")
-    with tabs[1]:
+    with tabs[2]:
         left, mid, right = st.columns([1, 1.2, 1.1])
         with left:
             show_chart(donut(profile.current_asset_class_weights, "Current allocation"))
@@ -1751,13 +1769,13 @@ def render_brief(ctx: dict[str, Any]) -> None:
         with right, st.container(border=True, height="stretch"):
             st.markdown("**Portfolio risks to raise**")
             st.markdown("\n".join(f"- {md(r)}" for r in brief.portfolio_risks))
-    with tabs[2]:
+    with tabs[3]:
         with st.container(border=False):
             for line in brief.market_developments:
                 with st.container(border=True):
                     st.markdown(md(line))
     selecting = not approved and ctx["stage"] == "brief_approval"
-    with tabs[3]:
+    with tabs[4]:
         left, right = st.columns(2)
         with left, st.container(border=True, height="stretch"):
             if selecting:
@@ -1772,7 +1790,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
         with right, st.container(border=True, height="stretch"):
             st.markdown("**Questions for the client**\n" + "\n".join(f"- {md(q)}" for q in brief.questions_for_client))
     if brief.recommendations:
-        with tabs[4]:
+        with tabs[5]:
             html_block("<table class='grid'><tr><th>#</th><th>Idea</th><th>Action</th><th>Target</th><th>Role</th><th>Why it fits</th></tr>" + "".join(
                 f"<tr><td>{g.slot_number}</td><td><b>{esc(g.ticker)}</b> · {esc(g.name)}</td><td>{esc(g.action)}</td><td>{g.target_weight_pct:.1f}%</td>"
                 f"<td>{esc(g.portfolio_role.title())}</td><td>{esc(g.why_it_fits)}</td></tr>" for g in brief.recommendations) + "</table>")

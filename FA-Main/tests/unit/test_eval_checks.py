@@ -228,4 +228,13 @@ def test_cost_is_estimated_from_reported_token_usage(runs):
 
 def test_evaluate_run_bundles_levels_judge_performance_and_trajectory(runs):
     out = evaluate_run(runs["pre_meeting"], HeuristicJudge())
-    assert set(out["levels"]) == {"component", "output quality", "workflow"} and out["label"] == "UC1 Prepare" and out["trajectory"]
+    assert set(out["levels"]) == {"schema", "deterministic", "competency", "trajectory"} and out["label"] == "UC1 Prepare" and out["trajectory"]
+    assert out["performance"]["unapproved_actions"] == 0 and out["performance"]["manual_recovery_actions"] == []
+
+
+def test_unapproved_action_rate_catches_a_pdf_without_rm_approval(runs):
+    from src.evaluation.performance import consequential_actions, operational_summary
+    run = runs["pre_meeting"]
+    seeded = dataclasses.replace(run, log=[e for e in run.log if not (e["event"] == "advisor_decision" and e["stage"] == "brief_approval")])
+    assert any(not a["approved"] for a in consequential_actions(seeded.log))
+    assert operational_summary([seeded])["unapproved_action_rate_pct"] > 0

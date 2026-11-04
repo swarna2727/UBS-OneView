@@ -61,6 +61,13 @@
       }
     ],
     "advisor_notes": "Illustrative client for the OneView prototype. ETF investor. Portfolio mix: 45% global equities, 30% investment-grade bonds, 15% cash or money market funds and 10% other diversifying assets. The S$800,000 portfolio value is a prototype assumption.",
+    "client_notes": [
+      {
+        "date": "2026-09-30",
+        "source": "RM call note",
+        "text": "Sarah mentioned she has been offered a new role at a regional firm; her salary and bonus structure may change from January."
+      }
+    ],
     "last_review": {
       "date": "2026-07-15",
       "goals": [

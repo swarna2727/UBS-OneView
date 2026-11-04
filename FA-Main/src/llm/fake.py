@@ -184,8 +184,8 @@ class FakeAdvisoryLLMClient:
                 cited_source_ids=["SRC-FED-MINUTES-2026-09"], publication_dates=["2026-09-28"])
         elif "Quarterly client review" in user_prompt:
             lead = ResearchFinding(
-                finding_id="FND-QUARTER", theme="Quarter in review", materiality_rank=1, finding_type="MACRO_POLICY",
-                claim="Over the quarter, central banks moved toward gradual easing while equity leadership broadened beyond US technology.",
+                finding_id="FND-QUARTER", theme="Rates outlook has shifted", materiality_rank=1, finding_type="MACRO_POLICY",
+                claim="Over the quarter, central banks moved toward gradual easing and the CIO favours quality fixed income, while equity leadership broadened beyond US technology.",
                 relevance_to_client="Supports reviewing the balance between growth assets and bonds as the client's goal gets closer.",
                 cited_source_ids=["SRC-UBS-CIO-2026-101", "SRC-FED-MINUTES-2026-09"], publication_dates=["2026-10-10", "2026-09-28"])
         else:
