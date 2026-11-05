@@ -3,8 +3,9 @@ toolbarMode = "viewer"  # hide developer controls (Deploy) in the advisor worksp
 
 [theme]
 primaryColor = "#c8102e"
-backgroundColor = "#f4f4f2"
-secondaryBackgroundColor = "#f7f7f5"
+# the page canvas is painted by the stylesheet; widgets and table cells read these, so they stay white
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#ffffff"
 textColor = "#1a1a1a"
 borderColor = "#e6e6e3"
 baseRadius = "0.6rem"

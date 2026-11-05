@@ -173,7 +173,15 @@ st.html("""
   .crumb-sep, .crumb-here { font-size: 13px; line-height: 20px; color: var(--ink-muted); }
   .crumb-sep { padding: 0 2px; }
   .crumb-here { color: var(--ink); font-weight: 500; }
-  .topbar { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); padding: 0 0 var(--space-3); border-bottom: 1px solid var(--border); }
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); padding: 0 0 var(--space-3); }
+  .progress { display: flex; gap: var(--space-1); }
+  .progress .seg { flex: 1; height: 6px; border-radius: 3px; background: var(--border); }
+  .progress .seg.done { background: var(--focus); }
+  .progress .seg.action { background: #b7791f; }
+  .progress .seg.failed { background: var(--danger); }
+  .progress .seg.here { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 3px var(--ink); }
+  .progress-meta { display: flex; justify-content: space-between; margin-top: var(--space-2); font-size: 12px; line-height: 16px; color: var(--ink-muted);
+    font-variant-numeric: tabular-nums; }
   .topbar .title { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -.01em; }
   [data-baseweb="tab-list"] { gap: var(--space-5); border-bottom: 1px solid var(--border); }
   [data-baseweb="tab"] { padding: var(--space-2) 0 var(--space-3) !important; }
@@ -237,6 +245,17 @@ st.html("""
   [data-testid="stTextInputRootElement"], [data-baseweb="select"] > div, [data-testid="stNumberInputContainer"], [data-testid="stDateInput"] > div > div,
   textarea { border-radius: var(--radius-md) !important; }
   [data-testid="stWidgetLabel"] p { font-size: 12px !important; font-weight: 500; color: var(--ink-muted); }
+  /* editable fields: white with a visible border, so they never blend into the page or the action bar */
+  [data-testid="stTextInputRootElement"], [data-testid="stTextAreaRootElement"], [data-testid="stNumberInputContainer"],
+  [data-testid="stSelectbox"] div:has(> input), [data-testid="stDateInput"] div:has(> input) {
+    background: var(--surface) !important; border: 1px solid var(--border-strong) !important; }
+  [data-testid="stTextInputRootElement"]:focus-within, [data-testid="stTextAreaRootElement"]:focus-within, [data-testid="stNumberInputContainer"]:focus-within,
+  [data-testid="stSelectbox"] div:has(> input):focus-within, [data-testid="stDateInput"] div:has(> input):focus-within { border-color: var(--focus) !important; }
+  /* read-only fields stay grey */
+  [data-testid="stTextInputRootElement"]:has(input:disabled), [data-testid="stTextAreaRootElement"]:has(textarea:disabled),
+  [data-testid="stNumberInputContainer"]:has(input:disabled), [data-testid="stSelectbox"] div:has(> input:disabled) {
+    background: var(--surface-subtle) !important; border-color: var(--border) !important; }
+  [data-testid="stDataFrame"], [data-testid="stDataEditor"] { background: var(--surface); }
   [data-testid="stNumberInputStepDown"], [data-testid="stNumberInputStepUp"] { display: none; }
   input, textarea { font-variant-numeric: tabular-nums; }
 
@@ -832,7 +851,21 @@ def page_header(ctx: dict[str, Any], key: str, title: str, subtitle: str, status
     checkpoint = f" · Checkpoint {cp[2:]}" if cp and cp.startswith("CP") else (" · Advisor decision" if cp else "")
     label = next((lbl for k, lbl, _ in visible_steps(ctx) if k == key), title)
     breadcrumb(USE_CASES[ctx["use_case"]][0])
-    html_block(f"<div class='topbar'><div class='title'>{esc(label)}</div><div>{status_html}</div></div>")
+    html_block(f"<div class='topbar'><div class='title'>{esc(label)}</div><div>{status_html}</div></div>" + progress_bar(ctx, key))
+
+
+def progress_bar(ctx: dict[str, Any], current: str) -> str:
+    """Workflow progress: one segment per step, filled when done; the page you are on is outlined."""
+    steps = [(k, lbl) for k, lbl, _ in visible_steps(ctx) if k != "audit"]
+    if not steps:
+        return ""
+    states = [nav_status(k, ctx) for k, _ in steps]
+    done = sum(s == "done" for s in states)
+    segs = "".join(f"<span class='seg {s}{' here' if k == current else ''}' title='{esc(lbl)}'></span>" for (k, lbl), s in zip(steps, states))
+    here = next((i + 1 for i, (k, _) in enumerate(steps) if k == current), None)
+    left = f"Step {here} of {len(steps)}" if here else f"{len(steps)} steps"
+    return (f"<div class='progress' role='progressbar' aria-valuemin='0' aria-valuemax='{len(steps)}' aria-valuenow='{done}'>{segs}</div>"
+            f"<div class='progress-meta'><span>{left}</span><span>{done} of {len(steps)} done</span></div>")
 
 
 def breadcrumb(here: str | None = None) -> None:
