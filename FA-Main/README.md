@@ -91,10 +91,13 @@ A rule layer, not an AI judgement. It reads `regulatory_profile` from the intake
 | Missing `domicile`, `booking_centre`, `agreement_type` or `investor_classification` | Gap listed, status `BLOCKED`, nothing offered (never guessed) |
 | `agreement_type` Execution-only | No recommendations: `BLOCKED` |
 | US person (`domicile: US`) | Non-US-domiciled funds blocked |
+| `booking_centre` not distributing a fund's registration jurisdiction, or an asset class | Cross-border restriction (see below): those products are blocked as areas such as *Cross-border restriction: US-domiciled funds* with the rationale *Fund not registered for distribution in booking centre [Hong Kong]*. A booking centre with no entry in the matrix is a gap and blocks everything (never guessed) |
 | CKA missing / expired | Specified products (complexity ≥ 2) blocked, gap listed, escalation flag. Expiring within 60 days: gap only |
 | US-domiciled products | Need a valid W-9 (US person) or W-8BEN; missing or expired blocks them |
 | `pep_status` | Gap and escalation flag; the RM documents the handling at the limits checkpoint |
 | `restrictions` (`no_single_stocks`, `no_high_yield`, `no_commodities`) | That area is blocked |
+
+**Cross-border distribution (deck slide 26)**: `cross_border_distribution_matrix` in `config/suitability_policy.yaml` maps each booking centre (Singapore, Hong Kong, Switzerland, UK) to the fund jurisdictions it may distribute and the asset classes it may offer; `_filter_universe()` applies it deterministically to the whole universe (funds and cash instruments by legal domicile; every product by asset class; single stocks are not registered funds). Shifting the booking centre therefore prunes unregistered products with the same result every time, and a spoken change of booking centre in UC3 is checked the same way.
 
 Illustrative thresholds: calibrate against UBS / MAS / SFC distribution rules before any pilot. In UC3 the Critic reuses the layer to test a spoken change (e.g. a move of domicile): it re-runs the offer map with the change applied to a copy and reports newly blocked areas, gaps and escalations; income, employment and horizon changes are checked against the risk band or flagged as a capacity change.
 
@@ -115,6 +118,7 @@ Illustrative thresholds: calibrate against UBS / MAS / SFC distribution rules be
 | R9 | Prohibited wording ("guaranteed", "risk-free"); negated uses allowed | any match | FAIL |
 | R10 | Automatic regenerations of the same idea | max 2 | Escalate to advisor |
 | E1 | Client limits: product is in the client's offer map | not eligible | FAIL (never shown to the RM) |
+| M1 | MARKET_SIGNAL_CONFLICT: research disagrees on the idea's instrument (see Research freshness) | conflict on the ticker, or a sector / theme conflict among sources covering it | FLAG (the RM documents how they weighed it) |
 | L1 | Liquid assets cover liquidity needs due within 24 months | 1.0x | FAIL (FLAG if existing, not worsened) |
 
 Thresholds are illustrative defaults held in configuration and must be calibrated against UBS suitability policy before any pilot. Passing risk is not the same as being eligible or suitable: E1 is independent of R4. A portfolio-level FAIL is attributed to the smallest set of ideas whose removal fixes it, so only those slots are regenerated.
@@ -140,6 +144,13 @@ Deterministic UC tools: `profile_change_detector` (UC1, changes since the last r
 
 ---
 
+### Research freshness, lifecycle status and conflicting signals (deck slides 26 and 29)
+
+- **Lifecycle status**: every source has `status` (`active`, `superseded`, `withdrawn`; default `active`) and, for superseded notes, `superseded_by`. `source_freshness_validator` (in `retrieval.py`, re-exported from `market_tools.py`) checks status **before** age: a withdrawn or superseded note is refused even if published yesterday. Every refusal is kept in `dropped_snippets` with a `drop_category` (`withdrawn` / `superseded` / `stale`) and an explicit reason (*Withdrawn research…*, *Superseded research: replaced by …*, *Age > 30d…*). The research brief lists them as `excluded_sources` and the Research page shows them under "Not used"; they never reach the model as evidence. The demo corpus includes a superseded draft and a withdrawn note.
+- **Conflict detector**: `detect_market_signal_conflicts()` replaces model judgement. Each active source gets a quantitative sentiment score `(bullish - bearish keyword hits) / total hits`; sources are grouped by ticker, asset class (sector proxy) and macro theme; a group conflicts when it holds a bullish and a bearish reading that diverge by at least `divergence_threshold` and were published within `max_gap_days` (`market_signals:` in the policy). Each conflict is a structured `MarketSignalConflict` (`MARKET_SIGNAL_CONFLICT`, dimension, key, source ids, scores, divergence, gap). It is passed to the Market Intelligence Agent as structured evidence (report as uncertainty, never resolve) and to the Fit & Eligibility Critic, which raises rule M1 as a FLAG on an idea whose instrument is affected. Withdrawn and superseded notes never count as a signal.
+
+---
+
 ## 5. Models (OpenRouter)
 
 The Streamlit workspace has two run modes, chosen on the landing page. **Offline · test data stubs** uses `FakeAdvisoryLLMClient`, so every demo runs locally without a key or external model calls. **Live · OpenRouter** runs the same LangGraph workflow in-process with `OpenRouterLLMClient`; it needs `OPENROUTER_API_KEY` in the environment or in a `.env` file. The REST API uses OpenRouter when the key is set and otherwise falls back to the offline client.
@@ -153,6 +164,10 @@ export OPENROUTER_MODEL_OPPORTUNITYAGENT=openai/gpt-4.1      # optional per-agen
 Agent outputs are validated against their Pydantic schema; invalid output is retried once with the validation errors, then the agent raises `LLMUnavailableError` ("data unavailable") instead of guessing. The model and prompt version of every agent call are written to the run log.
 
 ---
+
+### Token and latency accounting (deck slide 31)
+
+Every attempt is paid for, so every attempt is counted. `OpenRouterLLMClient` sums `prompt_tokens` and `completion_tokens` over all attempts of a call, including replies that fail schema validation, and keeps a run-level counter (`usage_total`, `reset_usage()`). `BaseAdvisoryAgent.run` accumulates every model call and retry of one agent run and records `usage: {prompt_tokens, completion_tokens, total_tokens, attempts, calls}` (`None` for an agent that makes no model call; a failed run keeps the tokens it spent in `last_run`). The performance report and the Audit tab read these cumulative figures, and show retries.
 
 ## 6. Audit Run Log
 
@@ -251,5 +266,8 @@ The single-LLM baseline comparison (`src/evaluation/baseline.py`, `harness.py`) 
 - `tests/integration/test_eval_suite.py`: the deck's eight stress tests and two further controls (one parametrised test each), the full scorecard at four levels on all three use cases, the control metrics, the report sections and the CLI exit code.
 - `tests/integration/test_trajectories.py`: full trajectory with PDF only after approval; automatic regeneration then R10 escalation; a FAIL never reaches the memo; selective revision locks other ideas; allocation edits re-validated; FLAG needs a documented exception; demo-client controls; audit log contents; idea-set lineage (candidate → checked → locked-in set, cleared again after a revision).
 - `tests/integration/test_use_cases.py`: UC1 four checkpoints (and the RM opting in to ideas), UC2 new capital and selective regeneration, market-event maintain/monitor validation, the decision record and the revise path, R1 still blocking, unknown use case rejected.
-- `tests/unit/test_client_limits.py`: the limits layer (domicile, CKA, tax forms, PEP, restrictions, missing data, agreement type) and spoken-change checks.
+- `tests/unit/test_client_limits.py`: the limits layer (domicile, CKA, tax forms, PEP, restrictions, missing data, agreement type, cross-border booking-centre matrix) and spoken-change checks.
+- `tests/unit/test_retrieval_freshness.py`: freshness plus lifecycle status (withdrawn / superseded dropped with explicit reasons).
+- `tests/unit/test_market_signal_conflicts.py`: the deterministic conflict detector, its use by the agent and rule M1 in the Critic.
+- `tests/unit/test_token_accounting.py` and `test_openrouter_client.py`: tokens summed across retries, calls and failed runs.
 - `tests/integration/test_oneview_workflow.py`: the orchestration plan, the limits checkpoint, two lanes with fit and eligibility checks, a blocked idea regenerated and never shown (also after R10 escalation), RM news and 3-month sources, portfolio impact, the record feeding the next briefing, and UC3 end to end (flagged action, unclear amount, untraceable line, guarantee wording, spoken change vs limits, RM approval, agreement unchanged).
