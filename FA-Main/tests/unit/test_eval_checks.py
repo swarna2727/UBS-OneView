@@ -79,6 +79,19 @@ def test_source_validity_catches_stale_uncited_and_unlabelled_sources(runs):
     assert "source:ideas-cite-retrieved" in failed(components.source_validity(run))
 
 
+def test_source_validity_catches_a_withdrawn_source_in_use_and_an_unexplained_exclusion(runs):
+    run = copy.deepcopy(runs["pre_meeting"])
+    brief = run.state["research_brief"]
+    withdrawn = brief.validated_sources[0].model_copy(update={"status": "withdrawn"})
+    run.state["research_brief"] = brief.model_copy(update={"validated_sources": [withdrawn] + brief.validated_sources[1:]})
+    assert "source:all-active" in failed(components.source_validity(run))
+    run = copy.deepcopy(runs["pre_meeting"])
+    brief = run.state["research_brief"]
+    assert brief.excluded_sources, "the demo corpus holds superseded, withdrawn and stale notes"
+    run.state["research_brief"] = brief.model_copy(update={"excluded_sources": [brief.excluded_sources[0].model_copy(update={"reason": ""})]})
+    assert "source:exclusions-explained" in failed(components.source_validity(run))
+
+
 # ------------------------------------------------------------------ output quality, per use case
 
 def test_uc1_catches_an_unsourced_development_and_a_wrong_impact(runs):

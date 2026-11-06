@@ -84,12 +84,31 @@ class DocumentSnippet(BaseModel):
     is_fresh: bool = True
     age_days: Optional[int] = None
     url: Optional[str] = None  # link the RM can open; the prototype corpus links to the publisher's page
+    # Document lifecycle (deck slide 26): independent of age. Only "active" research may be cited.
+    status: Literal["active", "superseded", "withdrawn"] = "active"
+    superseded_by: Optional[str] = None  # source_id of the note that replaced this one, when known
 
 class ValidatedSnippets(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kept_snippets: List[DocumentSnippet]
-    discarded_snippets: List[Dict[str, Any]] = Field(default_factory=list)
+    discarded_snippets: List[Dict[str, Any]] = Field(default_factory=list)  # each carries drop_category and drop_reason
     rejection_reasons: Dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def dropped_snippets(self) -> List[Dict[str, Any]]:
+        """Every snippet the freshness layer refused, with the explicit reason (withdrawn, superseded or stale)."""
+        return self.discarded_snippets
+
+class ExcludedSource(BaseModel):
+    """A retrieved source the freshness layer refused to use, shown to the RM with its lifecycle status and reason."""
+    model_config = ConfigDict(extra="forbid")
+    source_id: str
+    title: str
+    publisher: str
+    published_at: str
+    status: Literal["active", "superseded", "withdrawn"]
+    category: Literal["withdrawn", "superseded", "stale"]
+    reason: str
 
 class ApprovedInstrument(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -174,3 +193,20 @@ class TranscriptLine(BaseModel):
     line_no: int
     speaker: str
     text: str
+
+
+class MarketSignalConflict(BaseModel):
+    """Sources that point in opposite directions on the same ticker, sector or macro theme (deck slide 29).
+    Computed deterministically from quantitative sentiment scores; reported as uncertainty, never resolved."""
+    model_config = ConfigDict(extra="forbid")
+    code: Literal["MARKET_SIGNAL_CONFLICT"] = "MARKET_SIGNAL_CONFLICT"
+    dimension: Literal["ticker", "sector", "macro_theme"]
+    key: str  # the ticker, asset class (sector proxy) or macro theme the sources disagree on
+    bullish_source_ids: List[str]
+    bearish_source_ids: List[str]
+    bullish_score: float = Field(..., ge=-1.0, le=1.0)  # strongest positive reading, (bull - bear) / (bull + bear)
+    bearish_score: float = Field(..., ge=-1.0, le=1.0)  # strongest negative reading
+    divergence: float = Field(..., ge=0.0, le=2.0)  # bullish_score - bearish_score
+    gap_days: int = Field(..., ge=0)  # days between the two readings' publication dates
+    severity: Literal["FLAG"] = "FLAG"
+    message: str

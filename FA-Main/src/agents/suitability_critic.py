@@ -130,7 +130,7 @@ class FitEligibilityCriticAgent(BaseAdvisoryAgent[Any, Any]):
 
         # De-duplicate breaches: portfolio-level issues plus idea-only issues (R2/R8/R9).
         breaches = [to_breach(r) for r in portfolio_issues]
-        breaches += [b for ie in idea_evaluations for b in ie.detected_breaches if b.rule_id in ("R2", "R8", "R9", "E1")]
+        breaches += [b for ie in idea_evaluations for b in ie.detected_breaches if b.rule_id in ("R2", "R8", "R9", "E1", "M1")]
 
         return SuitabilityAssessment(
             overall_status=overall,

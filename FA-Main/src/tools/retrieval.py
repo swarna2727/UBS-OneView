@@ -58,6 +58,8 @@ def retrieval_rag_tool(query: str, asset_universe: Optional[List[str]] = None) -
                 asset_classes=item.get("asset_classes", []),
                 macro_themes=item.get("macro_themes", []),
                 url=item.get("url"),
+                status=item.get("status", "active"),
+                superseded_by=item.get("superseded_by"),
                 is_fresh=True
             )
             results.append((score, snippet))
@@ -72,8 +74,10 @@ def source_freshness_validator(
     reference_date_iso: Optional[str] = "2026-10-21T00:00:00Z"
 ) -> ValidatedSnippets:
     """
-    Validate that research snippets are not stale (e.g. older than max_age_days).
-    Every market-dependent claim requires explicit fresh evidence.
+    Validate that research snippets are usable: active (not withdrawn or superseded) AND not stale.
+    Every market-dependent claim requires explicit, current evidence. Lifecycle status is checked first and is
+    independent of age: a withdrawn note published yesterday is still refused. Every refusal records its category
+    ("withdrawn", "superseded" or "stale") and an explicit reason.
     """
     if reference_date_iso:
         try:
@@ -97,9 +101,14 @@ def source_freshness_validator(
         if age_days < 0:
             age_days = 0
 
-        if age_days > max_age_days:
-            reason = f"Snippet published {age_days} days ago exceeds max allowed age ({max_age_days} days)."
-            discarded.append(s.model_dump())
+        if s.status in ("withdrawn", "superseded"):
+            reason = ("Withdrawn research: the publisher has retracted this note." if s.status == "withdrawn"
+                      else "Superseded research" + (f": replaced by {s.superseded_by}." if s.superseded_by else ": a newer note replaced it."))
+            discarded.append({**s.model_dump(), "age_days": age_days, "drop_category": s.status, "drop_reason": reason})
+            reasons[s.source_id] = reason
+        elif age_days > max_age_days:
+            reason = f"Age > {max_age_days}d: published {age_days} days ago."
+            discarded.append({**s.model_dump(), "age_days": age_days, "drop_category": "stale", "drop_reason": reason})
             reasons[s.source_id] = reason
         else:
             s_dict = s.model_dump()

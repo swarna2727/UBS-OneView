@@ -102,6 +102,12 @@ def source_validity(run: RunResult) -> List[Dict[str, Any]]:
     rm_news = [x for x in brief.validated_sources if x.source_id.startswith("RM-NEWS")]
     out.append(check("source:rm-news-labelled", all(x.publisher.startswith("RM-entered") for x in rm_news)))
     out.append(check("source:no-external-news", brief.external_news_used is False))
+    # Document lifecycle (deck slide 26): only active research is used; everything refused is listed with its reason.
+    out.append(check("source:all-active", all(x.status == "active" for x in brief.validated_sources),
+                     ",".join(x.source_id for x in brief.validated_sources if x.status != "active")))
+    out.append(check("source:exclusions-explained", all(x.reason and x.category in ("withdrawn", "superseded", "stale")
+                                                         for x in brief.excluded_sources)
+                     and not {x.source_id for x in brief.excluded_sources} & ids))
     return out
 
 def component_level(run: RunResult) -> List[Dict[str, Any]]:

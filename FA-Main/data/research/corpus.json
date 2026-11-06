@@ -7,9 +7,28 @@
     "published_at": "2026-10-10T08:00:00Z",
     "retrieved_at": "2026-10-15T10:00:00Z",
     "text": "UBS CIO maintains an overweight stance on high-quality Fixed Income (US Investment Grade Corporates and European credit), noting attractive real yields of 2.3% and solid balance sheets. In Equities, we recommend a barbell strategy pairing AI infrastructure leaders (TSM, MSFT, NVDA) with defensive quality dividend payers (NESN, AZN). Core sovereign duration offers essential asymmetric hedging against growth slowdown. The CIO moderate-risk reference mix holds 40% in fixed income; short-duration investment grade corporates (VCSH) capture most of the carry with limited sensitivity to rate moves.",
-    "tickers": ["MSFT", "NVDA", "LQD", "NESN", "AZN", "TSM", "IEF", "IEAC", "VCSH"],
-    "asset_classes": ["Equities", "Fixed Income"],
-    "macro_themes": ["Quality Yield", "AI Infrastructure", "Defensive Growth", "Geopolitical Hedging"]
+    "tickers": [
+      "MSFT",
+      "NVDA",
+      "LQD",
+      "NESN",
+      "AZN",
+      "TSM",
+      "IEF",
+      "IEAC",
+      "VCSH"
+    ],
+    "asset_classes": [
+      "Equities",
+      "Fixed Income"
+    ],
+    "macro_themes": [
+      "Quality Yield",
+      "AI Infrastructure",
+      "Defensive Growth",
+      "Geopolitical Hedging"
+    ],
+    "status": "active"
   },
   {
     "source_id": "SRC-UBS-CIO-2026-102",
@@ -19,9 +38,20 @@
     "published_at": "2026-10-14T09:30:00Z",
     "retrieved_at": "2026-10-16T11:00:00Z",
     "text": "Enterprise cloud monetization and generative AI inference workloads continue to drive high-margin backlog expansions for MSFT and TSM. Forward P/E multiples reflect premium valuations (28x-32x), warranting phased entry or volatility-gated position sizing rather than unhedged momentum allocation. For diversified investors, a thematic robotics and AI fund (BOTZ) gives exposure to the theme without single-stock concentration.",
-    "tickers": ["MSFT", "TSM", "NVDA", "BOTZ"],
-    "asset_classes": ["Equities"],
-    "macro_themes": ["Cloud Monetization", "Semiconductor Cycle"]
+    "tickers": [
+      "MSFT",
+      "TSM",
+      "NVDA",
+      "BOTZ"
+    ],
+    "asset_classes": [
+      "Equities"
+    ],
+    "macro_themes": [
+      "Cloud Monetization",
+      "Semiconductor Cycle"
+    ],
+    "status": "active"
   },
   {
     "source_id": "SRC-FED-MINUTES-2026-09",
@@ -31,9 +61,19 @@
     "published_at": "2026-09-28T18:00:00Z",
     "retrieved_at": "2026-10-02T12:00:00Z",
     "text": "The committee observed that inflation prints have settled near the 2.2% headline target. Benchmark policy rates are poised for gradual recalibration, supporting the intermediate belly of the curve (7-10 Year Treasuries) as duration risk becomes an effective portfolio shock absorber.",
-    "tickers": ["IEF", "BIL"],
-    "asset_classes": ["Fixed Income", "Cash Equivalents"],
-    "macro_themes": ["Rate Recalibration", "Duration Hedging"]
+    "tickers": [
+      "IEF",
+      "BIL"
+    ],
+    "asset_classes": [
+      "Fixed Income",
+      "Cash Equivalents"
+    ],
+    "macro_themes": [
+      "Rate Recalibration",
+      "Duration Hedging"
+    ],
+    "status": "active"
   },
   {
     "source_id": "SRC-GOLD-MONITOR-2026-10",
@@ -43,9 +83,17 @@
     "published_at": "2026-10-05T07:15:00Z",
     "retrieved_at": "2026-10-12T14:20:00Z",
     "text": "Central bank gold demand reached record net purchases in Q3 2026. Gold (GLD) continues to act as an unhedged sovereign reserve asset and structural diversifier against sovereign debt expansion and currency debasement pressures.",
-    "tickers": ["GLD"],
-    "asset_classes": ["Commodities"],
-    "macro_themes": ["Reserve Diversification", "Geopolitical Hedging"]
+    "tickers": [
+      "GLD"
+    ],
+    "asset_classes": [
+      "Commodities"
+    ],
+    "macro_themes": [
+      "Reserve Diversification",
+      "Geopolitical Hedging"
+    ],
+    "status": "active"
   },
   {
     "source_id": "SRC-EURO-CREDIT-2026-10",
@@ -55,9 +103,17 @@
     "published_at": "2026-10-08T11:00:00Z",
     "retrieved_at": "2026-10-14T09:00:00Z",
     "text": "Euro-denominated investment grade corporate credit spreads trade near 115 bps, offering compelling carry with default expectations below 0.8%. Highly recommended for conservative and balanced portfolios seeking income stability.",
-    "tickers": ["IEAC"],
-    "asset_classes": ["Fixed Income"],
-    "macro_themes": ["Quality Yield", "European Credit"]
+    "tickers": [
+      "IEAC"
+    ],
+    "asset_classes": [
+      "Fixed Income"
+    ],
+    "macro_themes": [
+      "Quality Yield",
+      "European Credit"
+    ],
+    "status": "active"
   },
   {
     "source_id": "SRC-STALE-ARCHIVE-2025-01",
@@ -66,8 +122,55 @@
     "published_at": "2025-01-15T08:00:00Z",
     "retrieved_at": "2025-01-20T10:00:00Z",
     "text": "Outdated speculation on previous monetary cycles that is now older than 365 days. Should be discarded by freshness validator.",
-    "tickers": ["MSFT"],
-    "asset_classes": ["Equities"],
-    "macro_themes": ["Outdated"]
+    "tickers": [
+      "MSFT"
+    ],
+    "asset_classes": [
+      "Equities"
+    ],
+    "macro_themes": [
+      "Outdated"
+    ],
+    "status": "active"
+  },
+  {
+    "source_id": "SRC-UBS-CIO-2026-099",
+    "url": "https://www.ubs.com/global/en/wealthmanagement/insights.html",
+    "title": "UBS CIO Global Wealth Management: Q4 Macro Strategy (preliminary draft)",
+    "publisher": "UBS Chief Investment Office",
+    "published_at": "2026-10-06T08:00:00Z",
+    "retrieved_at": "2026-10-07T10:00:00Z",
+    "status": "superseded",
+    "superseded_by": "SRC-UBS-CIO-2026-101",
+    "text": "Preliminary CIO view: underweight high-quality Fixed Income with a bearish duration stance as rate pressure builds. This draft was replaced by the final Q4 strategy.",
+    "tickers": [
+      "IEF",
+      "LQD"
+    ],
+    "asset_classes": [
+      "Fixed Income"
+    ],
+    "macro_themes": [
+      "Quality Yield"
+    ]
+  },
+  {
+    "source_id": "SRC-BROKER-NOTE-2026-10",
+    "url": "https://www.ubs.com/global/en/wealthmanagement/insights.html",
+    "title": "Third-party note on European credit (retracted)",
+    "publisher": "Retracted Research Desk",
+    "published_at": "2026-10-12T09:00:00Z",
+    "retrieved_at": "2026-10-13T10:00:00Z",
+    "status": "withdrawn",
+    "text": "European fixed income credit spreads will tighten sharply; strongly overweight yield and macro duration with compelling upside. The publisher withdrew this note after a data error.",
+    "tickers": [
+      "IEAC"
+    ],
+    "asset_classes": [
+      "Fixed Income"
+    ],
+    "macro_themes": [
+      "European Credit"
+    ]
   }
 ]

@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from src.schemas.tools import (
     Holding, StandardizedHoldings, QuantMetrics, SentimentBreakdown, 
-    DocumentSnippet, Breach, RiskMetrics, RuleResult, HoldingMove
+    DocumentSnippet, Breach, RiskMetrics, RuleResult, HoldingMove, ExcludedSource, MarketSignalConflict
 )
 
 # ==========================================
@@ -93,6 +93,8 @@ class ResearchBrief(BaseModel):
     window_days: int = 30  # look-back used for the freshness limit (UC1: 3 months)
     external_news_used: bool = False  # external news only by exception; the prototype never uses it
     rm_news_count: int = 0  # items the RM entered
+    excluded_sources: List[ExcludedSource] = Field(default_factory=list)  # withdrawn, superseded or stale: retrieved but never used
+    signal_conflicts: List[MarketSignalConflict] = Field(default_factory=list)  # deterministic: fed to the agent and the Critic
     conflicting_signals: List[str] = Field(default_factory=list)  # sources that disagree: surfaced as uncertainty, never resolved
 
 # ==========================================

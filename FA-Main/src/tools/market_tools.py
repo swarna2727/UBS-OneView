@@ -3,7 +3,9 @@
 import os
 import json
 from typing import Dict, Any, List
-from src.schemas.tools import QuantMetrics, SentimentBreakdown, DocumentSnippet, HoldingMove, Holding
+from datetime import datetime, timezone
+from src.schemas.tools import QuantMetrics, SentimentBreakdown, DocumentSnippet, HoldingMove, Holding, MarketSignalConflict
+from src.tools.retrieval import source_freshness_validator  # noqa: F401  (freshness + lifecycle status live with retrieval; re-exported here)
 
 DATA_MARKET_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -62,29 +64,69 @@ BEARISH_KEYWORDS = [
     "elevated valuation", "spread widening", "breach", "pressure", "decline"
 ]
 
-def _tone(text: str) -> int:
-    """+1 / -1 / 0: which way one document reads, from the same lexicon as the sentiment tool."""
+def sentiment_score(text: str) -> float:
+    """Quantitative sentiment of one document: (bullish - bearish keyword hits) / total hits, 0.0 when neither appears."""
     text = text.lower()
-    score = sum(w in text for w in BULLISH_KEYWORDS) - sum(w in text for w in BEARISH_KEYWORDS)
-    return (score > 0) - (score < 0)
+    bull = sum(w in text for w in BULLISH_KEYWORDS)
+    bear = sum(w in text for w in BEARISH_KEYWORDS)
+    return round((bull - bear) / (bull + bear), 3) if bull + bear else 0.0
+
+def _published(doc: DocumentSnippet) -> datetime:
+    try:
+        d = datetime.fromisoformat(doc.published_at.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+def detect_market_signal_conflicts(snippets: List[DocumentSnippet]) -> List[MarketSignalConflict]:
+    """Deterministic comparator for conflicting research (deck slide 29), replacing model judgement.
+
+    Groups sources by ticker, asset class (sector proxy) and macro theme, scores each source, and emits one
+    MARKET_SIGNAL_CONFLICT per group that holds a bullish and a bearish reading diverging by at least the policy
+    threshold and published within the policy window. Withdrawn or superseded sources are ignored: they never
+    count as a signal. The same input always gives the same output."""
+    from src.tools.risk_engine import load_policy
+    cfg = load_policy()["market_signals"]
+    direction, min_div, max_gap = cfg["direction_threshold"], cfg["divergence_threshold"], cfg["max_gap_days"]
+
+    groups: Dict[tuple, List[DocumentSnippet]] = {}
+    for doc in snippets:
+        if doc.status != "active":
+            continue
+        for ticker in doc.tickers:
+            groups.setdefault(("ticker", ticker.upper()), []).append(doc)
+        for asset_class in doc.asset_classes:
+            groups.setdefault(("sector", asset_class), []).append(doc)
+        for theme in doc.macro_themes:
+            groups.setdefault(("macro_theme", theme), []).append(doc)
+
+    conflicts: List[MarketSignalConflict] = []
+    for (dimension, key), docs in sorted(groups.items()):
+        scored = [(sentiment_score(d.text), d) for d in docs]
+        bulls = [(s, d) for s, d in scored if s > direction]
+        bears = [(s, d) for s, d in scored if s < -direction]
+        if not bulls or not bears:
+            continue
+        top_bull = max(bulls, key=lambda sd: (sd[0], sd[1].source_id))
+        top_bear = min(bears, key=lambda sd: (sd[0], sd[1].source_id))
+        divergence = round(top_bull[0] - top_bear[0], 3)
+        gap = abs((_published(top_bull[1]) - _published(top_bear[1])).days)
+        if divergence < min_div or gap > max_gap:
+            continue
+        label = {"ticker": key, "sector": f"the {key} sector", "macro_theme": f"the '{key}' theme"}[dimension]
+        conflicts.append(MarketSignalConflict(
+            dimension=dimension, key=key,
+            bullish_source_ids=sorted(d.source_id for _, d in bulls), bearish_source_ids=sorted(d.source_id for _, d in bears),
+            bullish_score=top_bull[0], bearish_score=top_bear[0], divergence=divergence, gap_days=gap,
+            message=(f"MARKET_SIGNAL_CONFLICT on {label}: {top_bull[1].publisher} reads bullish ({top_bull[0]:+.2f}) and "
+                     f"{top_bear[1].publisher} reads bearish ({top_bear[0]:+.2f}), divergence {divergence:.2f}. Treat the view as "
+                     f"uncertain and weigh both before discussing it ({top_bull[1].source_id}, {top_bear[1].source_id}).")))
+    return conflicts
 
 def conflicting_signals_detector(snippets: List[DocumentSnippet]) -> List[str]:
-    """Retrieved sources that read in opposite directions on the same instrument (deck slide 29: surface uncertainty).
-
-    Deterministic. A conflict is reported to the RM with both sources; it is never resolved by picking a side."""
-    by_ticker: Dict[str, List[DocumentSnippet]] = {}
-    for doc in snippets:
-        for ticker in doc.tickers:
-            by_ticker.setdefault(ticker.upper(), []).append(doc)
-    conflicts = []
-    for ticker, docs in sorted(by_ticker.items()):
-        positive = [d for d in docs if _tone(d.text) > 0]
-        negative = [d for d in docs if _tone(d.text) < 0]
-        if positive and negative:
-            pos, neg = positive[0], negative[0]
-            conflicts.append(f"Sources disagree on {ticker}: {pos.publisher} reads positive, {neg.publisher} reads negative. "
-                             f"Treat the view as uncertain and weigh both before discussing it ({pos.source_id}, {neg.source_id}).")
-    return conflicts
+    """The conflicts as messages for the briefing's 'Uncertainty' lines. A conflict is reported with both sources and is
+    never resolved by picking a side."""
+    return [c.message for c in detect_market_signal_conflicts(snippets)]
 
 def sentiment_analysis_tool(corpus_docs: List[DocumentSnippet]) -> SentimentBreakdown:
     """

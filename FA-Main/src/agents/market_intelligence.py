@@ -4,8 +4,8 @@ import json
 from typing import Any, Dict, Optional, List
 from src.agents.base import BaseAdvisoryAgent
 from src.schemas.advisory import ClientAdvisoryProfile, ResearchBrief, ResearchFinding
-from src.schemas.tools import DocumentSnippet
-from src.tools.market_tools import quantitative_analysis_tool, sentiment_analysis_tool, portfolio_impact_tool, conflicting_signals_detector
+from src.schemas.tools import DocumentSnippet, ExcludedSource
+from src.tools.market_tools import quantitative_analysis_tool, sentiment_analysis_tool, portfolio_impact_tool, detect_market_signal_conflicts
 from src.tools.retrieval import retrieval_rag_tool, source_freshness_validator
 from src.tools.risk_engine import load_policy
 from src.llm.base import LLMClientProtocol
@@ -18,7 +18,7 @@ CRITICAL GOVERNANCE RULES:
 3. Filter research specifically to address gaps in the client's current asset allocation and constraints.
 4. Rank findings by materiality to this specific client's risk profile and goals.
 5. Do NOT recommend specific investment trades or allocations (that is owned by the Opportunity Agent), and do NOT judge client suitability.
-6. Report facts only: no forecasts and no assumptions beyond the evidence. CIO research comes first; RM-entered news is labelled as such.
+6. Report facts only: no forecasts and no assumptions beyond the evidence. Market signal conflicts are computed for you (DETERMINISTIC MARKET SIGNAL CONFLICTS): state them as uncertainty and do not resolve, rank or discard either side. CIO research comes first; RM-entered news is labelled as such.
 """
 
 REFERENCE_DATE = "2026-10-21T00:00:00Z"  # matches the research corpus snapshot
@@ -67,6 +67,14 @@ class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchB
         max_age = window_days or load_policy()["rules"]["R8_evidence_freshness"]["max_age_days"]
         freshness_result = source_freshness_validator(raw_snippets, max_age_days=max_age)
         fresh_snippets = freshness_result.kept_snippets
+        # Withdrawn, superseded and stale sources are never used; they are shown to the RM with the explicit reason.
+        excluded = [ExcludedSource(source_id=d["source_id"], title=d["title"], publisher=d["publisher"], published_at=d["published_at"],
+                                   status=d["status"], category=d["drop_category"], reason=d["drop_reason"])
+                    for d in freshness_result.dropped_snippets]
+
+        # 3b. Deterministic conflict detector: opposite readings on one ticker / sector / theme. Computed by code, so the
+        # model reports them as uncertainty instead of inventing or smoothing over a disagreement.
+        conflicts = detect_market_signal_conflicts(fresh_snippets)
 
         # 4. Deterministic quantitative signals for primary universe tickers
         key_tickers = list(set(["MSFT", "IEF", "NESN", "LQD"] + tickers[:3]))
@@ -94,6 +102,9 @@ DETERMINISTIC QUANT SIGNALS:
 
 DETERMINISTIC SENTIMENT:
 {json.dumps(sentiment_breakdown.model_dump(), indent=2)}
+
+DETERMINISTIC MARKET SIGNAL CONFLICTS (structured evidence, computed by code: report each as uncertainty, never pick a side):
+{json.dumps([c.model_dump() for c in conflicts], indent=2)}
 
 TASK:
 Synthesize a comprehensive ResearchBrief. Ensure every finding explicitly references fresh source IDs and publication dates.
@@ -142,6 +153,8 @@ Synthesize a comprehensive ResearchBrief. Ensure every finding explicitly refere
         brief_dict["external_news_used"] = False
         brief_dict["rm_news_count"] = len(rm_news or [])
         # Sources that read in opposite directions on the same instrument: surfaced to the RM as uncertainty (slide 29).
-        brief_dict["conflicting_signals"] = conflicting_signals_detector(fresh_snippets)
+        brief_dict["signal_conflicts"] = conflicts
+        brief_dict["conflicting_signals"] = [c.message for c in conflicts]
+        brief_dict["excluded_sources"] = excluded
 
         return ResearchBrief(**brief_dict)

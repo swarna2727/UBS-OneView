@@ -277,6 +277,21 @@ def evaluate_idea_rules(
             outcome, msg = "PASS", "Eligible for this client. Required: " + "; ".join(offered.required_disclosures) + "."
         results.append(RuleResult(rule_id="E1", name="Client limits (eligibility)", idea_id=idea.idea_id, outcome=outcome, message=msg))
 
+    # M1 MARKET_SIGNAL_CONFLICT (deck slide 29): the idea leans on an instrument or source whose research disagrees.
+    # A judgement case for the RM (FLAG), never a silent pass and never an automatic block.
+    # Relevant when the conflict is on the idea's own ticker, or (sector / theme conflicts) when the idea's instrument
+    # is covered by one of the disagreeing sources. Merely citing a source that disagrees elsewhere is not enough.
+    conflicts = getattr(research_brief, "signal_conflicts", None) or []
+    covered = {s.source_id: {t.upper() for t in s.tickers} for s in getattr(research_brief, "validated_sources", [])}
+    ticker = idea.ticker.upper()
+    hit = [c for c in conflicts
+           if (c.key == ticker if c.dimension == "ticker"
+               else any(ticker in covered.get(sid, set()) for sid in c.bullish_source_ids + c.bearish_source_ids))]
+    results.append(RuleResult(
+        rule_id="M1", name="MARKET_SIGNAL_CONFLICT", idea_id=idea.idea_id, outcome="FLAG" if hit else "PASS",
+        message=(" ".join(c.message for c in hit) + " Document how you weighed the conflicting research." if hit
+                 else "No conflicting research on this idea's instrument or cited sources.")))
+
     # R2 Approved universe
     in_universe = idea.ticker.upper() in approved_tickers
     results.append(RuleResult(
