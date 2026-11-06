@@ -53,6 +53,32 @@ def _restriction_hit(rule: Dict[str, str], product: Any) -> bool:
         return True
     return "sub_asset_contains" in rule and rule["sub_asset_contains"] in product.sub_asset_class.lower()
 
+def _booking_rules(booking_centre: Any) -> Optional[Dict[str, Any]]:
+    """The cross-border distribution rules for a booking centre (case-insensitive), or None when none are on file."""
+    matrix = _policy().get("cross_border_distribution_matrix") or {}
+    wanted = str(booking_centre or "").strip().lower()
+    return next((rules for name, rules in matrix.items() if name.lower() == wanted), None)
+
+def _filter_universe(universe: List[Any], booking_centre: Any) -> Dict[str, List[Tuple[str, str]]]:
+    """Cross-border distribution (deck slide 26): ticker -> [(blocked area, deterministic rationale)] for every product
+    the client's booking centre may not distribute. Funds and cash instruments must be registered in a permitted jurisdiction (single stocks are securities, not registered funds); every
+    product must be in a permitted asset class. Empty when the booking centre has no rules (the engine lists that gap)."""
+    rules = _booking_rules(booking_centre)
+    if rules is None:
+        return {}
+    centre = str(booking_centre).strip()
+    pruned: Dict[str, List[Tuple[str, str]]] = {}
+    for p in universe:
+        if p.instrument_type != "Single Stock" and p.fund_domicile not in rules["fund_jurisdictions"]:
+            pruned.setdefault(p.ticker, []).append((
+                f"Cross-border restriction: {p.fund_domicile}-domiciled funds",
+                f"Cross-border restriction: Fund not registered for distribution in booking centre [{centre}]"))
+        if p.asset_class not in rules["asset_classes"]:
+            pruned.setdefault(p.ticker, []).append((
+                f"Cross-border restriction: {p.asset_class}",
+                f"Cross-border restriction: {p.asset_class} not permitted for distribution in booking centre [{centre}]"))
+    return pruned
+
 def client_limits_engine(raw_input: Dict[str, Any], reference_date_iso: str = DEFAULT_REFERENCE_DATE) -> OfferMap:
     """Read the regulatory profile, match it against the product universe, attach disclosures, mark blocked areas and gaps."""
     cfg = _policy()
@@ -118,7 +144,13 @@ def client_limits_engine(raw_input: Dict[str, Any], reference_date_iso: str = DE
 
     # 5. Product-by-product eligibility.
     universe = approved_product_universe_tool()
-    cannot_determine = bool(missing) or no_advice
+    booking = reg.get("booking_centre")
+    unknown_centre = bool(booking) and _booking_rules(booking) is None
+    if unknown_centre:
+        gaps.append(LimitGap(code="MISSING_REGULATORY_FIELD", message=f"Booking centre '{booking}' has no cross-border distribution rules on file.",
+                             resolution="Add the centre to the cross-border distribution matrix, or correct the booking centre."))
+    cross_border = _filter_universe(universe, booking)
+    cannot_determine = bool(missing) or no_advice or unknown_centre
     eligible: List[OfferedProduct] = []
     all_disclosures: List[str] = [cfg["disclosures"]["all"]]
     restrictions = [r for r in reg.get("restrictions") or [] if r in cfg["restriction_rules"]]
@@ -132,6 +164,8 @@ def client_limits_engine(raw_input: Dict[str, Any], reference_date_iso: str = DE
         if cannot_determine:
             block(p.ticker, "All products", "Eligibility cannot be determined until the gaps below are resolved.")
             continue
+        for area, reason in cross_border.get(p.ticker, []):
+            block(p.ticker, area, reason)
         if us_person and p.fund_domicile in cfg["us_person_blocked_fund_domiciles"]:
             block(p.ticker, "Non-US-domiciled funds", "Not distributable to US persons.")
         if classification == "retail" and p.complexity_rating > cfg["retail_max_complexity"]:

@@ -58,6 +58,18 @@ client_limits:
   specified_product_min_complexity: 2                         # needs a valid CKA (Customer Knowledge Assessment)
   retail_max_complexity: 2
   expiring_soon_days: 60                                      # warn (gap) before a CKA / tax form lapses
+  # Cross-border distribution (deck slide 26): which fund jurisdictions a booking centre may distribute, and which
+  # asset classes it may offer. Applies to funds and cash instruments (single stocks are securities, not registered funds); asset classes
+  # apply to everything. A booking centre with no entry cannot be assessed: a gap is listed, never guessed.
+  cross_border_distribution_matrix:
+    Singapore:   {fund_jurisdictions: [US, Ireland, Luxembourg, Singapore],
+                  asset_classes: [Equities, Fixed Income, Commodities, Real Estate, Cash Equivalents]}
+    Hong Kong:   {fund_jurisdictions: [Ireland, Luxembourg, Hong Kong],
+                  asset_classes: [Equities, Fixed Income, Commodities, Real Estate, Cash Equivalents]}
+    Switzerland: {fund_jurisdictions: [Ireland, Luxembourg, Switzerland],
+                  asset_classes: [Equities, Fixed Income, Commodities, Real Estate, Cash Equivalents]}
+    UK:          {fund_jurisdictions: [Ireland, Luxembourg, United Kingdom],
+                  asset_classes: [Equities, Fixed Income, Commodities, Cash Equivalents]}
   restriction_rules:                                          # client-specific restrictions -> blocked areas
     no_single_stocks: {instrument_type: Single Stock}
     no_high_yield: {sub_asset_contains: high yield}
@@ -92,3 +104,12 @@ client_note_signals:
               keywords: [wedding, tuition, medical, renovation, large purchase]}
   family: {label: Family change flagged, implication: May change goals or dependants.,
            keywords: [baby, married, divorce, dependant, dependent]}
+
+# Deterministic market signal conflict detector (deck slide 29). Each source gets a quantitative sentiment score,
+# (bullish - bearish keyword hits) / (total hits), in [-1, 1]. Sources are grouped by ticker, asset class (sector
+# proxy) and macro theme; a group conflicts when it holds a bullish and a bearish reading whose scores diverge by at
+# least the threshold and whose publication dates are within max_gap_days. Conflicts are flagged, never resolved.
+market_signals:
+  direction_threshold: 0.2            # score above +t is bullish, below -t is bearish (same as the sentiment tool)
+  divergence_threshold: 0.6           # bullish score minus bearish score
+  max_gap_days: 30

@@ -93,3 +93,61 @@ def test_spoken_income_change_is_flagged_for_the_rm(sample_profiles):
 def test_unreadable_horizon_is_flagged_not_guessed(sample_profiles):
     check = profile_change_limits_check(sarah(sample_profiles), "time_horizon_months", "soonish")
     assert check.status == "FLAG" and "Could not read" in check.implications[0]
+
+
+# ------------------------------------------------------------------ cross-border distribution (deck slide 26)
+
+US_FUNDS = {"IEF", "LQD", "HYG", "SPYG", "GLD", "VNQ", "BIL", "ACWI", "VYMI"}
+
+
+def test_singapore_booking_centre_distributes_every_fund_jurisdiction_in_the_universe(sample_profiles):
+    om = client_limits_engine(sarah(sample_profiles))
+    assert not any(a.area.startswith("Cross-border") for a in om.blocked_areas)
+    assert US_FUNDS | {"IEAC", "AGGG"} <= set(om.eligible_tickers)
+
+
+def test_shifting_the_booking_centre_prunes_unregistered_funds_deterministically(sample_profiles):
+    hk = client_limits_engine(sarah(sample_profiles, booking_centre="Hong Kong"))
+    assert US_FUNDS <= set(hk.blocked_tickers) and {"IEAC", "AGGG"} <= set(hk.eligible_tickers)
+    assert hk.eligible_tickers == client_limits_engine(sarah(sample_profiles, booking_centre="Hong Kong")).eligible_tickers
+    area = next(a for a in hk.blocked_areas if a.area == "Cross-border restriction: US-domiciled funds")
+    assert area.reason == "Cross-border restriction: Fund not registered for distribution in booking centre [Hong Kong]"
+    ch = client_limits_engine(sarah(sample_profiles, booking_centre="Switzerland"))
+    assert US_FUNDS <= set(ch.blocked_tickers) and "IEAC" in ch.eligible_tickers
+    sg = client_limits_engine(sarah(sample_profiles))
+    assert set(hk.eligible_tickers) < set(sg.eligible_tickers)  # moving off Singapore only removes products
+
+
+def test_booking_centre_permitted_jurisdictions_follow_the_matrix(sample_profiles):
+    uk = client_limits_engine(sarah(sample_profiles, booking_centre="UK"))
+    assert "IEAC" in uk.eligible_tickers and "AGGG" in uk.eligible_tickers and "IEF" in uk.blocked_tickers
+
+
+def test_booking_centre_asset_class_restriction(sample_profiles):
+    uk = client_limits_engine(sarah(sample_profiles, booking_centre="UK"))
+    reason = next(a.reason for a in uk.blocked_areas if a.area == "Cross-border restriction: Real Estate")
+    assert reason == "Cross-border restriction: Real Estate not permitted for distribution in booking centre [UK]"
+    assert "VNQ" in uk.blocked_tickers
+
+
+def test_booking_centre_is_matched_case_insensitively(sample_profiles):
+    a = client_limits_engine(sarah(sample_profiles, booking_centre="hong kong"))
+    b = client_limits_engine(sarah(sample_profiles, booking_centre="Hong Kong"))
+    assert a.eligible_tickers == b.eligible_tickers
+
+
+def test_cross_border_blocks_are_areas_not_product_names(sample_profiles):
+    om = client_limits_engine(sarah(sample_profiles, booking_centre="Hong Kong"))
+    shown = str(om.rm_view())
+    assert "IEF" not in shown and "blocked_tickers" not in shown
+
+
+def test_unknown_booking_centre_is_a_gap_not_a_guess(sample_profiles):
+    om = client_limits_engine(sarah(sample_profiles, booking_centre="Atlantis"))
+    assert om.status == "BLOCKED" and om.eligible_products == []
+    assert any("Atlantis" in g.message and "cross-border" in g.message for g in om.gaps)
+
+
+def test_a_spoken_booking_centre_change_is_checked_against_the_matrix(sample_profiles):
+    check = profile_change_limits_check(sarah(sample_profiles), "booking_centre", "Hong Kong")
+    assert check.status == "FLAG" and "Cross-border restriction: US-domiciled funds" in check.newly_blocked_areas
