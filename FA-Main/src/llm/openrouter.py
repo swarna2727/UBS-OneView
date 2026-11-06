@@ -45,6 +45,26 @@ class OpenRouterLLMClient:
         self.max_retries = max_retries
         self._http = httpx.Client(timeout=timeout_s, transport=transport)
         self.last_call: Dict[str, Any] = {}
+        self.reset_usage()
+
+    # ---- token accounting (deck slide 31): every attempt is paid for, so every attempt is counted ----
+
+    def reset_usage(self) -> None:
+        """Start a new run-level counter. `usage_total` accumulates across every call and every retry since the reset."""
+        self.usage_total: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0, "attempts": 0}
+
+    @staticmethod
+    def _usage_dict(prompt: int, completion: int, attempts: int) -> Dict[str, int]:
+        return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion, "attempts": attempts}
+
+    def _finish_call(self, model: str, prompt: int, completion: int, attempts: int, **extra: Any) -> None:
+        """Record one logical call: `last_call.usage` holds the totals over ALL its attempts, and the run counter grows by them."""
+        self.last_call = {"model": model, "attempts": attempts, "usage": self._usage_dict(prompt, completion, attempts), **extra}
+        self.usage_total["prompt_tokens"] += prompt
+        self.usage_total["completion_tokens"] += completion
+        self.usage_total["total_tokens"] += prompt + completion
+        self.usage_total["calls"] += 1
+        self.usage_total["attempts"] += attempts
 
     def model_for(self, agent_name: Optional[str]) -> str:
         if agent_name:
@@ -97,12 +117,16 @@ class OpenRouterLLMClient:
         ]
 
         last_error: Optional[str] = None
+        prompt_tokens = completion_tokens = 0  # summed over every attempt, including those that fail validation
         for attempt in range(self.max_retries + 1):
             try:
                 data = self._chat(model, messages, response_model, temperature)
+                reported = data.get("usage") or {}
+                prompt_tokens += int(reported.get("prompt_tokens") or 0)  # counted before parsing: a rejected reply still cost tokens
+                completion_tokens += int(reported.get("completion_tokens") or 0)
                 content = data["choices"][0]["message"]["content"] or ""
                 result = response_model.model_validate_json(self._extract_json(content))
-                self.last_call = {"model": data.get("model", model), "attempts": attempt + 1, "usage": data.get("usage")}
+                self._finish_call(data.get("model", model), prompt_tokens, completion_tokens, attempt + 1)
                 return result
             except ValidationError as e:
                 last_error = str(e)
@@ -115,7 +139,7 @@ class OpenRouterLLMClient:
                 last_error = str(e)
                 logger.warning(f"[{agent_name}] OpenRouter call failed (attempt {attempt + 1}): {e}")
 
-        self.last_call = {"model": model, "attempts": self.max_retries + 1, "error": last_error}
+        self._finish_call(model, prompt_tokens, completion_tokens, self.max_retries + 1, error=last_error)
         raise LLMUnavailableError(
             f"{agent_name or 'Agent'}: model '{model}' did not return a valid {response_model.__name__} "
             f"after {self.max_retries + 1} attempts ({last_error}). Data unavailable."

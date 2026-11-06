@@ -20,7 +20,13 @@ def make_client(replies, seen):
         reply = replies.pop(0)
         if isinstance(reply, int):
             return httpx.Response(reply, json={"error": "boom"})
-        return httpx.Response(200, json={"model": seen[-1]["model"], "choices": [{"message": {"content": reply}}]})
+        usage = None
+        if isinstance(reply, tuple):  # (content, usage): the provider reports tokens for this attempt
+            reply, usage = reply
+        body = {"model": seen[-1]["model"], "choices": [{"message": {"content": reply}}]}
+        if usage:
+            body["usage"] = usage
+        return httpx.Response(200, json=body)
 
     return OpenRouterLLMClient(api_key="test-key", default_model="test/default", transport=httpx.MockTransport(handler))
 
@@ -59,3 +65,41 @@ def test_default_client_is_offline_without_api_key(monkeypatch):
     assert isinstance(default_llm_client(), FakeAdvisoryLLMClient)
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     assert isinstance(default_llm_client(), OpenRouterLLMClient)
+
+
+# ------------------------------------------------------------------ cumulative token accounting (deck slide 31)
+
+def u(prompt, completion):
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
+
+def test_tokens_are_summed_over_every_attempt_not_overwritten():
+    client = make_client([('{"ticker": "IEF"}', u(100, 20)), ('{"ticker": "IEF", "weight_pct": 5}', u(150, 30))], [])
+    client.generate_structured("sys", "user", Answer)
+    assert client.last_call["usage"] == {"prompt_tokens": 250, "completion_tokens": 50, "total_tokens": 300, "attempts": 2}
+    assert client.last_call["attempts"] == 2
+
+def test_a_single_attempt_reports_its_own_tokens():
+    client = make_client([('{"ticker": "IEF", "weight_pct": 1}', u(40, 8))], [])
+    client.generate_structured("sys", "user", Answer)
+    assert client.last_call["usage"] == {"prompt_tokens": 40, "completion_tokens": 8, "total_tokens": 48, "attempts": 1}
+
+def test_tokens_spent_on_a_failed_call_are_not_lost():
+    client = make_client([('{"ticker": "IEF"}', u(100, 20)), ('{"nope": 1}', u(110, 25))], [])
+    with pytest.raises(LLMUnavailableError):
+        client.generate_structured("sys", "user", Answer)
+    assert client.last_call["usage"] == {"prompt_tokens": 210, "completion_tokens": 45, "total_tokens": 255, "attempts": 2}
+    assert client.usage_total["total_tokens"] == 255 and client.usage_total["attempts"] == 2
+
+def test_the_run_counter_accumulates_across_calls_until_reset():
+    client = make_client([('{"ticker": "A", "weight_pct": 1}', u(10, 1)), ('{"ticker": "B"}', u(20, 2)),
+                          ('{"ticker": "B", "weight_pct": 2}', u(30, 3))], [])
+    client.generate_structured("sys", "user", Answer)
+    client.generate_structured("sys", "user", Answer)
+    assert client.usage_total == {"prompt_tokens": 60, "completion_tokens": 6, "total_tokens": 66, "calls": 2, "attempts": 3}
+    client.reset_usage()
+    assert client.usage_total == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0, "attempts": 0}
+
+def test_missing_usage_from_the_provider_counts_as_zero_not_an_error():
+    client = make_client(['{"ticker": "IEF", "weight_pct": 1}'], [])
+    client.generate_structured("sys", "user", Answer)
+    assert client.last_call["usage"]["total_tokens"] == 0 and client.last_call["usage"]["attempts"] == 1

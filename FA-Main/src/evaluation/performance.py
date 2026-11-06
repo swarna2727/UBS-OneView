@@ -20,10 +20,17 @@ BUCKETS = {
 STAGE_BUCKET = {stage: bucket for bucket, stages in BUCKETS.items() for stage in stages}
 
 def llm_calls(run: RunResult) -> int:
+    """Logical model calls in the run (a retry is not a new call: see `llm_attempts`)."""
     history = getattr(run.llm, "call_history", None)
     if history is not None:
         return len(history)
-    return sum(1 for e in run.log if e["event"] == "agent_output" and e.get("usage"))
+    return sum((e.get("usage") or {}).get("calls", 1) for e in run.log if e["event"] == "agent_output" and e.get("usage"))
+
+def llm_attempts(run: RunResult) -> int:
+    """Every HTTP attempt, including retries after a schema-validation failure: what the provider actually billed."""
+    history = getattr(run.llm, "call_history", None)
+    usage_attempts = sum((e.get("usage") or {}).get("attempts", 0) for e in run.log if e["event"] == "agent_output")
+    return usage_attempts or (len(history) if history is not None else 0)
 
 def performance_report(run: RunResult) -> Dict[str, Any]:
     outputs = [e for e in run.log if e["event"] == "agent_output"]
@@ -31,7 +38,7 @@ def performance_report(run: RunResult) -> Dict[str, Any]:
     prompt_t = completion_t = 0
     for e in outputs:
         by_bucket[STAGE_BUCKET.get(e["stage"], "Research")] += e.get("duration_ms") or 0.0
-        usage = e.get("usage") or {}
+        usage = e.get("usage") or {}  # cumulative over the agent's calls and retries, so retries are not lost
         prompt_t += usage.get("prompt_tokens", 0)
         completion_t += usage.get("completion_tokens", 0)
     total = sum(by_bucket.values())
@@ -41,7 +48,8 @@ def performance_report(run: RunResult) -> Dict[str, Any]:
     return {
         "end_to_end_ms": round(total, 1),
         "llm_calls": llm_calls(run),
-        "tokens": {"prompt": prompt_t, "completion": completion_t},
+        "llm_attempts": llm_attempts(run),
+        "tokens": {"prompt": prompt_t, "completion": completion_t, "total": prompt_t + completion_t},
         "cost_usd": round(cost, 4) if (prompt_t or completion_t) else None,  # None: the model reported no token usage
         "latency_by_bucket_ms": {b: round(v, 1) for b, v in by_bucket.items()},
         "latency_share": {b: round(v / total, 3) if total else 0.0 for b, v in by_bucket.items()},

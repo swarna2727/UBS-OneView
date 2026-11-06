@@ -1498,6 +1498,16 @@ def research_tabs(brief: Any, profile: Any, names: list[str]) -> None:
             show_chart((bars + limit).properties(height=45 * len(frame) + 60))
         with right, card():
             html_block(source_links([s.source_id for s in brief.validated_sources]))
+            if brief.excluded_sources:
+                st.markdown("**Not used** · lifecycle status and age")
+                html_block("<table class='grid'><tr><th>Source</th><th>Status</th><th>Why</th></tr>" + "".join(
+                    f"<tr><td>{esc(x.title)}<br><span class='subtle'>{esc(x.source_id)} · {esc(x.published_at[:10])}</span></td>"
+                    f"<td>{pill('FAIL' if x.category != 'stale' else 'FLAG', x.category.title())}</td><td>{esc(x.reason)}</td></tr>"
+                    for x in brief.excluded_sources) + "</table>")
+            if brief.signal_conflicts:
+                st.markdown("**Conflicting signals** (computed, not resolved)")
+                for c in brief.signal_conflicts:
+                    st.markdown(f"- {md(c.message)}")
 
 
 def render_research(ctx: dict[str, Any]) -> None:
@@ -2179,17 +2189,22 @@ def render_audit(ctx: dict[str, Any]) -> None:
         calls = [e for e in state.get("audit_trail") or [] if e.get("duration_ms") is not None]
         frame = pd.DataFrame([{"Call": f"{i + 1}. {e['agent'].replace('Agent', '')}", "Agent": e["agent"], "Latency (ms)": e["duration_ms"],
                                "Model": e.get("model", ""), "Prompt": e.get("prompt_version", ""),
+                               # Cumulative over every attempt of the call, so retries after a schema failure are counted.
                                "Prompt tokens": (e.get("usage") or {}).get("prompt_tokens", 0),
-                               "Completion tokens": (e.get("usage") or {}).get("completion_tokens", 0)} for i, e in enumerate(calls)])
+                               "Completion tokens": (e.get("usage") or {}).get("completion_tokens", 0),
+                               "Attempts": (e.get("usage") or {}).get("attempts", 1 if e.get("usage") else 0)} for i, e in enumerate(calls)])
         if frame.empty:
             st.info("No agent calls yet")
         else:
             prompt_t, completion_t = frame["Prompt tokens"].sum(), frame["Completion tokens"].sum()
+            retries = int((frame["Attempts"] - (frame["Attempts"] > 0)).sum())
             cost = prompt_t / 1e6 * ASSUMED_PRICE_PER_MTOK["prompt"] + completion_t / 1e6 * ASSUMED_PRICE_PER_MTOK["completion"]
             a, b, c, d = st.columns(4)
             a.metric("Agent calls", len(frame))
             b.metric("Total agent latency", f"{frame['Latency (ms)'].sum() / 1000:.2f} s", help="Pilot target: p95 ≤ 2 min end-to-end")
-            c.metric("Tokens", f"{int(prompt_t + completion_t):,}", "offline stubs use none" if prompt_t + completion_t == 0 else None, delta_color="off", delta_arrow="off")
+            c.metric("Tokens (all attempts)", f"{int(prompt_t + completion_t):,}",
+                     "offline stubs use none" if prompt_t + completion_t == 0 else f"{int(prompt_t):,} prompt · {int(completion_t):,} completion"
+                     + (f" · {retries} retr{'y' if retries == 1 else 'ies'}" if retries else ""), delta_color="off", delta_arrow="off")
             d.metric("Estimated model cost", f"US${cost:.3f}", "target ≤ US$0.50 per memo", delta_color="off", delta_arrow="off",
                      help=f"Assumed rates: US${ASSUMED_PRICE_PER_MTOK['prompt']}/M prompt, US${ASSUMED_PRICE_PER_MTOK['completion']}/M completion tokens")
             agents = list(dict.fromkeys(frame["Agent"]))
