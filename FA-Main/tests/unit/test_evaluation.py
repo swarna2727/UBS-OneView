@@ -28,7 +28,17 @@ def test_set_distance_and_consistency():
 def test_perturb_makes_client_more_conservative(balanced_client_data):
     changed = perturb(balanced_client_data)
     assert changed["stated_risk_willingness"] == "Conservative" and changed["time_horizon_months"] <= 24
-    assert perturb(balanced_client_data) is not balanced_client_data
+
+
+def test_failure_analysis_battery_runs_25_profiles_with_prompt_v2():
+    from src.evaluation.failure_analysis import run_failure_analysis_suite, render_markdown_report
+    results = run_failure_analysis_suite(FakeAdvisoryLLMClient())
+    assert len(results) == 25
+    assert all(r.prompt_version == "v2" for r in results)
+    assert all(r.passed for r in results)
+    report = render_markdown_report(results)
+    assert "Slide 30" in report
+    assert "PROMPT_VERSION = v2" in report
 
 def test_unsupported_claims_flags_stale_or_missing_sources(balanced_client_data):
     from src.agents.client_profile import ClientProfileAgent

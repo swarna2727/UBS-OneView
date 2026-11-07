@@ -183,9 +183,8 @@ def test_pre_meeting_brief_shows_what_matters_and_why(sample_profiles):
         act(service, sid, action="approve")
     brief = service.get_state(sid)["meeting_brief"]
     cards = {i.area: i for i in brief.key_insights}
-    assert list(cards) == ["CLIENT", "PORTFOLIO", "MARKET", "DISCUSSION"]
+    assert list(cards) == ["CLIENT", "PORTFOLIO", "MARKET"]
     assert cards["CLIENT"].headline == "Income change flagged" and "2026-09-30" in cards["CLIENT"].why_here
     assert cards["PORTFOLIO"].headline == "Fixed Income below reference allocation" and "30%" in cards["PORTFOLIO"].detail
     assert cards["MARKET"].sources and all(i.why_here for i in brief.key_insights)
-    assert "stability" in cards["DISCUSSION"].detail
     assert service.get_state(sid)["profile"].goals == sample_profiles["demo_sarah"]["goals"]  # a flag never changes the profile

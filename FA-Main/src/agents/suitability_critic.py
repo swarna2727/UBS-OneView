@@ -59,6 +59,8 @@ class FitEligibilityCriticAgent(BaseAdvisoryAgent[Any, Any]):
     In UC3 it also checks each spoken profile change against the limits and the risk band.
     """
 
+    PROMPT_VERSION = "v2"
+
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
         super().__init__("FitEligibilityCritic", llm_client)
 

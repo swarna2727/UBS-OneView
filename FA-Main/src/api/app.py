@@ -122,7 +122,7 @@ def download_advisory_memo_pdf(session_id: str):
     return FileResponse(
         pdf_path,
         media_type="application/pdf",
-        filename=f"UBS_Advisory_Memo_{session_id}.pdf"
+        filename=os.path.basename(pdf_path)
     )
 
 @app.get("/sessions/{session_id}/audit")

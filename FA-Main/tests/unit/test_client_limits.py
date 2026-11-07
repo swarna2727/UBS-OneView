@@ -151,3 +151,14 @@ def test_unknown_booking_centre_is_a_gap_not_a_guess(sample_profiles):
 def test_a_spoken_booking_centre_change_is_checked_against_the_matrix(sample_profiles):
     check = profile_change_limits_check(sarah(sample_profiles), "booking_centre", "Hong Kong")
     assert check.status == "FLAG" and "Cross-border restriction: US-domiciled funds" in check.newly_blocked_areas
+
+
+def test_hong_kong_mock_profile_cross_border_restrictions(sample_profiles):
+    charlotte = sample_profiles["demo_charlotte"]
+    om = client_limits_engine(charlotte)
+    assert om.status == "CLEAR"
+    # US-domiciled funds are blocked under cross-border rules for Hong Kong booking centre
+    assert "IEF" in om.blocked_tickers and "SPYG" in om.blocked_tickers
+    # UCITS (Ireland) funds and European single stocks remain eligible
+    assert "IEAC" in om.eligible_tickers and "AGGG" in om.eligible_tickers and "NESN" in om.eligible_tickers
+    assert any(a.area == "Cross-border restriction: US-domiciled funds" for a in om.blocked_areas)

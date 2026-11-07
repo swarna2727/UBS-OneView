@@ -41,12 +41,13 @@ load_dotenv()
 
 ROOT = Path(__file__).parent
 SAMPLE_PROFILES = json.loads((ROOT / "data" / "samples" / "client_profiles.json").read_text(encoding="utf-8"))
-VISIBLE_CLIENT_KEYS = ("demo_sarah", "demo_daniel", "demo_mdm_lim", "demo_aaron")
+VISIBLE_CLIENT_KEYS = ("demo_sarah", "demo_daniel", "demo_mdm_lim", "demo_aaron", "demo_charlotte")
 CLIENT_CARD_SUMMARIES = {
     "demo_sarah": ("Home down payment · 8 years", "Demo client for all three use cases"),
     "demo_daniel": ("S$180k property deposit · 15 months", "R5: willingness above capacity; one idea fails and is regenerated"),
     "demo_mdm_lim": ("Retirement reserve · 3 years", "Asks for a 'guaranteed 6%': R9 wording control"),
     "demo_aaron": ("Long-term growth · horizon not recorded", "R1: required field missing blocks the workflow"),
+    "demo_charlotte": ("Capital preservation · 5 years · Hong Kong", "Cross-border distribution: HK booking centre prunes US funds (slide 26)"),
 }
 PRE_MEETING, ADHOC, EVENT, POST_MEETING = "pre_meeting", "adhoc_request", "market_event", "post_meeting"
 USE_CASES = {
@@ -2140,10 +2141,11 @@ def render_brief(ctx: dict[str, Any]) -> None:
     profile = state["profile"]
     tabs = merge_tabs(["Overview", "Details", "Points"], [0, 1, 1, 1, 2, 1])
     with tabs[0]:
-        # Deck slide 9: relevance filtering, not summarisation. Each card says why it is in the briefing.
-        if brief.key_insights:
-            cols = st.columns(len(brief.key_insights))
-            for n, (col, ins) in enumerate(zip(cols, brief.key_insights), start=1):
+        # App workflow alignment: Client -> Portfolio -> Market (Discussion card omitted)
+        workflow_insights = [ins for ins in brief.key_insights if ins.area != "DISCUSSION"]
+        if workflow_insights:
+            cols = st.columns(len(workflow_insights))
+            for n, (col, ins) in enumerate(zip(cols, workflow_insights), start=1):
                 with col, card(height="stretch"):
                     html_block(f"<div class='eyebrow'>{esc(ins.area.title())}</div><div class='card-ticker'>{esc(ins.headline)}</div>")
                     if ins.area == "PORTFOLIO":
@@ -2292,14 +2294,36 @@ def render_audit(ctx: dict[str, Any]) -> None:
             prompt_t, completion_t = frame["Prompt tokens"].sum(), frame["Completion tokens"].sum()
             retries = int((frame["Attempts"] - (frame["Attempts"] > 0)).sum())
             cost = prompt_t / 1e6 * ASSUMED_PRICE_PER_MTOK["prompt"] + completion_t / 1e6 * ASSUMED_PRICE_PER_MTOK["completion"]
+
+            # Slide 31 operational recovery tracking
+            recovery_acts = [
+                (e.get("decision") or {}).get("action")
+                for e in log
+                if e.get("event") == "advisor_decision" and (e.get("decision") or {}).get("action") in {"regenerate", "revise", "edit_allocation", "unlock_idea", "reject"}
+            ]
+            clean_run = len(recovery_acts) == 0
+
+            st.markdown("##### Operational performance & cost (deck slide 31)")
             a, b, c, d = st.columns(4)
-            a.metric("Agent calls", len(frame))
-            b.metric("Total agent latency", f"{frame['Latency (ms)'].sum() / 1000:.2f} s", help="Pilot target: p95 ≤ 2 min end-to-end")
-            c.metric("Tokens (all attempts)", f"{int(prompt_t + completion_t):,}",
-                     "offline stubs use none" if prompt_t + completion_t == 0 else f"{int(prompt_t):,} prompt · {int(completion_t):,} completion"
-                     + (f" · {retries} retr{'y' if retries == 1 else 'ies'}" if retries else ""), delta_color="off", delta_arrow="off")
-            d.metric("Estimated model cost", f"US${cost:.3f}", "target ≤ US$0.50 per memo", delta_color="off", delta_arrow="off",
+            a.metric("End-to-end latency", f"{frame['Latency (ms)'].sum() / 1000:.2f} s", help="Pilot target: p95 ≤ 2 min end-to-end")
+            b.metric("Cost / run", f"US${cost:.3f}",
+                     "offline stubs use none" if prompt_t + completion_t == 0 else f"{int(prompt_t):,} prompt · {int(completion_t):,} comp",
+                     delta_color="off", delta_arrow="off",
                      help=f"Assumed rates: US${ASSUMED_PRICE_PER_MTOK['prompt']}/M prompt, US${ASSUMED_PRICE_PER_MTOK['completion']}/M completion tokens")
+            c.metric("Manual recovery rate", "100% clean" if clean_run else "0% (recovered)",
+                     "Ex. intended RM checkpoints",
+                     delta_color="normal" if clean_run else "inverse",
+                     help="Deck slide 31: runs completed without manual repair loops (regenerate, revise, reject) beyond standard approval checkpoints.")
+            d.metric("Agent calls & retries", len(frame),
+                     f"{retries} retr{'y' if retries == 1 else 'ies'}" if retries else "0 retries (first pass)",
+                     delta_color="off", delta_arrow="off")
+
+            if clean_run:
+                st.caption("✓ **Runs without manual recovery:** Run proceeded through standard RM approval gates with no manual intervention loops.")
+            else:
+                st.warning(f"**Manual recovery actions taken ({len(recovery_acts)}):** {', '.join(recovery_acts)}. (Tracked for Slide 31 operational viability).")
+
+            st.divider()
             agents = list(dict.fromkeys(frame["Agent"]))
             chart = alt.Chart(frame, title="Latency per agent call").mark_bar(cornerRadiusEnd=4, height=16).encode(
                 y=alt.Y("Call:N", sort=list(frame["Call"]), title=None), x=alt.X("Latency (ms):Q"),

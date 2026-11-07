@@ -44,6 +44,25 @@ from src.llm.base import LLMClientProtocol
 
 PDF_DIR = "data/pipeline_data"
 
+def _format_pdf_filename(state: AdvisoryState, doc_type: str) -> str:
+    """
+    Generate an intuitive artifact filename: <client_name>_<datetime>_<doc_type>.pdf
+    e.g. Sarah_Tan_20261107_161530_meeting_brief.pdf
+    Falls back cleanly to session ID if client name is unavailable.
+    """
+    import re
+    profile = state.get("profile")
+    raw_input = state.get("raw_input") or {}
+    name = (getattr(profile, "name", None) if profile else None) or raw_input.get("name")
+    if name:
+        clean_name = re.sub(r"[^\w\s-]", "", str(name)).strip()
+        clean_name = re.sub(r"[\s-]+", "_", clean_name)
+    else:
+        clean_name = state.get("session_id", "session")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{clean_name}_{timestamp}_{doc_type}.pdf"
+
 def checkpoint_serializer() -> JsonPlusSerializer:
     """Allow-list the advisory Pydantic models that are stored in graph checkpoints."""
     from src.schemas import advisory, tools
@@ -493,7 +512,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             research_brief=state.get("research_brief")))
         record = record.model_copy(update={"advisor_signature_block":
                                            f"Relationship Manager on {datetime.now().strftime('%d-%b-%Y %H:%M')}."})
-        pdf_path = decision_record_renderer(record, state["event_impact"], f"{PDF_DIR}/{session_id}_decision_record.pdf",
+        pdf_filename = _format_pdf_filename(state, "decision_record")
+        pdf_path = decision_record_renderer(record, state["event_impact"], f"{PDF_DIR}/{pdf_filename}",
                                             charts=event_charts(state["event_impact"]))
         record = record.model_copy(update={"pdf_artifact_path": pdf_path})
         log.record(session_id, "pdf_generated", record_id=record.record_id, pdf_path=pdf_path)
@@ -561,7 +581,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             "rm_confirmed": True, "agreement_changed": False,
             "advisor_signature_block": f"Confirmed by Relationship Manager on {datetime.now().strftime('%d-%b-%Y %H:%M')}."
                                        + (f" Note: {notes}" if notes else "")})
-        pdf_path = meeting_record_renderer(record, f"{PDF_DIR}/{session_id}_meeting_record.pdf")
+        pdf_filename = _format_pdf_filename(state, "meeting_record")
+        pdf_path = meeting_record_renderer(record, f"{PDF_DIR}/{pdf_filename}")
         record = record.model_copy(update={"pdf_artifact_path": pdf_path})
         updates = [{"change_id": c.change_id, "field": c.field, "label": c.label, "before": c.before, "after": c.after,
                     "notes": c.decision_notes} for c in record.profile_changes if c.decision == "APPROVED"]
@@ -628,7 +649,8 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
         charts = profile_charts(state["profile"], calc.willingness_score, calc.capacity_score)
         if brief.recommendations and state.get("candidate_ideas"):
             charts += portfolio_change_charts(state["profile"], state["candidate_ideas"].ideas)[:2]
-        pdf_path = meeting_brief_renderer(brief, f"{PDF_DIR}/{session_id}_meeting_brief.pdf", charts=charts)
+        pdf_filename = _format_pdf_filename(state, "meeting_brief")
+        pdf_path = meeting_brief_renderer(brief, f"{PDF_DIR}/{pdf_filename}", charts=charts)
         brief = brief.model_copy(update={"pdf_artifact_path": pdf_path})
         log.record(session_id, "pdf_generated", brief_id=brief.brief_id, pdf_path=pdf_path)
         return {"meeting_brief": brief, "pdf_path": pdf_path,
@@ -689,8 +711,9 @@ def create_advisory_nodes(llm_client: Optional[LLMClientProtocol] = None, run_lo
             "page_3_portfolio_view": memo.page_3_portfolio_view.model_copy(update={"advisor_signature_block": signature})
         })
         research = state.get("research_brief")
+        pdf_filename = _format_pdf_filename(state, "final_memo")
         pdf_path = research_note_memo_renderer(
-            approved, f"{PDF_DIR}/{session_id}_final_memo.pdf", profile=state["profile"], ideas=state["candidate_ideas"].ideas,
+            approved, f"{PDF_DIR}/{pdf_filename}", profile=state["profile"], ideas=state["candidate_ideas"].ideas,
             assessment=state["assessment"], sources=research.validated_sources if research else None,
             regeneration_history=state.get("regeneration_history"))
         approved = approved.model_copy(update={"pdf_artifact_path": pdf_path})

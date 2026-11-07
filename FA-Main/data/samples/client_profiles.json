@@ -549,6 +549,106 @@
       ]
     }
   },
+  "demo_charlotte": {
+    "client_id": "CL-DEMO-HK-001",
+    "name": "Charlotte Lee",
+    "base_currency": "HKD",
+    "goals": [
+      "Capital preservation and international growth in 5 years"
+    ],
+    "time_horizon_months": 60,
+    "stated_risk_willingness": "Moderate",
+    "liquidity_schedule": [
+      {
+        "due_months": 60,
+        "amount": 2000000.0,
+        "purpose": "Liquidity reserve"
+      }
+    ],
+    "total_wealth": 5000000.0,
+    "experience_level": "Experienced investor",
+    "constraints": {
+      "excluded_sectors": [
+        "Tobacco"
+      ],
+      "esg_mandate": false,
+      "max_single_stock_pct": 25.0,
+      "impact_themes": [
+        "Clean energy / energy security"
+      ]
+    },
+    "raw_holdings": [
+      {
+        "ticker": "IEAC",
+        "name": "iShares Core Euro Corporate Bond UCITS ETF",
+        "asset_class": "Fixed Income",
+        "region": "Europe",
+        "currency": "EUR",
+        "weight_pct": 40.0,
+        "risk_rating": 2
+      },
+      {
+        "ticker": "AGGG",
+        "name": "iShares Global Aggregate Bond UCITS ETF",
+        "asset_class": "Fixed Income",
+        "region": "Global",
+        "currency": "USD",
+        "weight_pct": 30.0,
+        "risk_rating": 2
+      },
+      {
+        "ticker": "NESN",
+        "name": "Nestle S.A.",
+        "asset_class": "Equities",
+        "region": "Europe",
+        "currency": "CHF",
+        "weight_pct": 20.0,
+        "risk_rating": 3
+      },
+      {
+        "ticker": "AZN",
+        "name": "AstraZeneca PLC",
+        "asset_class": "Equities",
+        "region": "Europe",
+        "currency": "GBP",
+        "weight_pct": 10.0,
+        "risk_rating": 3
+      }
+    ],
+    "advisor_notes": "Hong Kong-booked private wealth client. Holds UCITS and European equities under Hong Kong cross-border distribution rules.",
+    "client_notes": [
+      {
+        "date": "2026-09-20",
+        "source": "RM quarterly note",
+        "text": "Charlotte requested a review of her portfolio under Hong Kong booking centre guidelines, specifically examining European fixed income and global growth."
+      }
+    ],
+    "last_review": {
+      "date": "2026-06-15",
+      "goals": [
+        "Capital preservation and international growth in 5 years"
+      ],
+      "time_horizon_months": 60,
+      "stated_risk_willingness": "Moderate",
+      "total_wealth": 4800000.0,
+      "experience_level": "Experienced investor"
+    },
+    "regulatory_profile": {
+      "domicile": "Hong Kong",
+      "booking_centre": "Hong Kong",
+      "agreement_type": "Advisory",
+      "investor_classification": "Retail",
+      "pep_status": false,
+      "restrictions": [],
+      "cka_valid_until": "2028-06-30",
+      "tax_forms": [
+        {
+          "form": "W-8BEN",
+          "valid_until": "2028-12-31"
+        }
+      ]
+    }
+  },
   "incomplete_client": {
     "client_id": "CL-10492",
     "name": "Anonymous Client",

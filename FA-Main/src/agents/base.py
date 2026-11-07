@@ -16,7 +16,7 @@ class BaseAdvisoryAgent(ABC, Generic[InT, OutT]):
     """Base advisory agent with isolated role boundaries and deterministic tool bindings."""
 
     # Bump when the agent's prompt changes; recorded on every run for audit (AS-8).
-    PROMPT_VERSION = "v1"
+    PROMPT_VERSION = "v2"
 
     def __init__(self, name: str, llm_client: Optional[LLMClientProtocol] = None):
         self.name = name

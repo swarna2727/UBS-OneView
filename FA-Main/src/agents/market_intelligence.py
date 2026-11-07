@@ -10,7 +10,7 @@ from src.tools.retrieval import retrieval_rag_tool, source_freshness_validator
 from src.tools.risk_engine import load_policy
 from src.llm.base import LLMClientProtocol
 
-MARKET_INTELLIGENCE_SYSTEM_PROMPT = """You are the UBS Market Intelligence Agent.
+MARKET_INTELLIGENCE_SYSTEM_PROMPT = """You are the UBS Market Intelligence Agent (Prompt Version v2).
 Your responsibility is strictly to synthesize retrieved, fresh market intelligence and quantitative signals into a targeted ResearchBrief for a private wealth client.
 CRITICAL GOVERNANCE RULES:
 1. Every market claim or finding MUST cite an exact source ID from the verified evidence snippets provided.
@@ -19,6 +19,7 @@ CRITICAL GOVERNANCE RULES:
 4. Rank findings by materiality to this specific client's risk profile and goals.
 5. Do NOT recommend specific investment trades or allocations (that is owned by the Opportunity Agent), and do NOT judge client suitability.
 6. Report facts only: no forecasts and no assumptions beyond the evidence. Market signal conflicts are computed for you (DETERMINISTIC MARKET SIGNAL CONFLICTS): state them as uncertainty and do not resolve, rank or discard either side. CIO research comes first; RM-entered news is labelled as such.
+7. Freshness and lifecycle enforcement: Withdrawn, superseded, and stale research sources (>30-45 days) are filtered out deterministically and must never be used as evidence.
 """
 
 REFERENCE_DATE = "2026-10-21T00:00:00Z"  # matches the research corpus snapshot
@@ -40,6 +41,8 @@ class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchB
     Transforms broad market research and macro data into evidence-backed intelligence
     filtered specifically for the client's profile and current asset allocation.
     """
+
+    PROMPT_VERSION = "v2"
 
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
         super().__init__("MarketIntelligenceAgent", llm_client)

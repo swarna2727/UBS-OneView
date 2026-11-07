@@ -13,7 +13,7 @@ from src.llm.base import LLMClientProtocol
 class ClientLimitsAgent(BaseAdvisoryAgent[Dict[str, Any], OfferMap]):
     """Read the regulatory profile, match the product universe, attach disclosures, mark blocked areas and gaps, publish the offer map."""
 
-    PROMPT_VERSION = "rules-v1"  # no prompt: the version tracks the rule set in config/suitability_policy.yaml
+    PROMPT_VERSION = "rules-v2"  # no prompt: the version tracks the rule set in config/suitability_policy.yaml
 
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
         super().__init__("ClientLimitsLayer", llm_client)

@@ -19,6 +19,8 @@ class ClientProfileAgent(BaseAdvisoryAgent[Dict[str, Any], ClientAdvisoryProfile
     Strictly forbids inferring high-stakes data or recommending investments.
     """
 
+    PROMPT_VERSION = "v2"
+
     def __init__(self, llm_client: Optional[LLMClientProtocol] = None):
         super().__init__("ClientProfileAgent", llm_client)
 
