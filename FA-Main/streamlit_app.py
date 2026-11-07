@@ -19,6 +19,7 @@ import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
 import altair as alt
@@ -33,6 +34,7 @@ from src.tools.event_tools import MARKET_EVENTS, stress_impact
 from src.tools.exposure import portfolio_exposure_calculator
 from src.tools.memo_tools import readable_citations, source_index
 from src.tools.profile_tools import client_note_signals, profile_change_detector, required_field_validator, risk_profile_calculator
+from src.llm.transcription import AUDIO_FORMATS, transcribe_recording
 from src.tools.risk_engine import evaluate_profile_rules, load_policy, reference_mix_gaps, risk_band_points, risk_points
 
 load_dotenv()
@@ -1419,6 +1421,7 @@ def render_meeting(ctx: dict[str, Any]) -> None:
         return
     pending = ctx["stage"] == "record_approval"
     open_actions = [a for a in record.actions if a.status == "FLAGGED"]
+    wrong_client = any(r.rule_id == "T2" and r.outcome == "FLAG" for r in record.compliance_checks)
     undecided = [c for c in record.profile_changes if c.decision == "PENDING"]
     tabs = merge_tabs(["Summary", f"Actions ({len(record.actions)})", "Email"], [0, 1, 1, 2, 2])
     with tabs[0]:
@@ -1472,6 +1475,9 @@ def render_meeting(ctx: dict[str, Any]) -> None:
             edits["email_subject"] = subject
         if body != record.follow_up_email.body:
             edits["email_body"] = body
+        mailto = "mailto:?" + urlencode({"subject": record.follow_up_email.subject, "body": record.follow_up_email.body}, quote_via=quote)
+        st.link_button("Open in email", mailto, icon=":material/send:", disabled=not approved,
+                       help="Opens your email app with this draft" if approved else "Confirm the record first")
     with tabs[4]:
         for r in record.compliance_checks:
             st.markdown(f"{pill(r.outcome)} **{md(r.name)}** · {md(r.message)}", unsafe_allow_html=True)
@@ -1492,6 +1498,8 @@ def render_meeting(ctx: dict[str, Any]) -> None:
                 st.warning(f"{len(open_actions)} actions need owner / date", icon=":material/rule:")
             if undecided:
                 st.warning(f"{len(undecided)} changes to decide", icon=":material/rule:")
+            if wrong_client:
+                st.warning(f"Transcript does not name {record.client_name} · add a note to confirm", icon=":material/person_alert:")
         with mid:
             if edits:
                 if st.button("Save edits", type="primary", icon=":material/save:", width="stretch"):
@@ -2473,6 +2481,24 @@ def values_esg(raw: dict[str, Any]) -> None:
                    + ("".join(f"<span class='tag bad'>{esc(x)}</span>" for x in excluded) or "<div class='item-empty'>None</div>"))
 
 
+def transcribe_into_form(raw: dict[str, Any]) -> None:
+    """Fill the Record transcript from the uploaded recording: transcribed live, the demo transcript offline. The RM reviews it before Start."""
+    audio = st.session_state.get("uc3_audio")
+    if audio is None:
+        return
+    if st.session_state.get("mode") != LIVE:
+        st.session_state.uc3_transcript = DEMO_TRANSCRIPTS.get(st.session_state.client_key, "")
+        st.session_state.uc3_note = f"Offline · demo transcript used for {audio.name}. Review below."
+        return
+    first_name = str(raw.get("name", "Client")).replace("Mdm ", "").split()[0]
+    try:
+        with st.spinner("Transcribing…"):
+            st.session_state.uc3_transcript = transcribe_recording(audio.getvalue(), audio.name, [RM_NAME.split()[0], first_name])
+        st.session_state.uc3_note = f"Transcribed {audio.name}. Review below before Start."
+    except Exception as exc:
+        st.session_state.uc3_note = f"Transcription failed: {exc}"
+
+
 def render_client_home() -> None:
     record = client_record(st.session_state.client_key)
     raw = record["raw"]
@@ -2506,10 +2532,19 @@ def render_client_home() -> None:
                 st.session_state["uc2_amount"] = money_input("New capital (S$)", 120000.0, key="uc2_amount_text")
             elif key == POST_MEETING:
                 has_demo = bool(DEMO_TRANSCRIPTS.get(st.session_state.client_key))
-                with st.expander("Notes or transcript" + (" · pre-filled" if has_demo else ""), expanded=not has_demo):
+                st.session_state.setdefault("uc3_transcript", DEMO_TRANSCRIPTS.get(st.session_state.client_key, ""))
+                source = st.segmented_control("Source", ["Transcript", "Recording"], default="Transcript", key="uc3_source",
+                                              label_visibility="collapsed", width="stretch")
+                if source == "Recording":
+                    audio = st.file_uploader("Meeting recording", type=list(AUDIO_FORMATS), key="uc3_audio", label_visibility="collapsed")
+                    st.button("Transcribe", icon=":material/graphic_eq:", width="stretch", key="uc3_transcribe",
+                              disabled=audio is None, on_click=transcribe_into_form, args=(raw,))
+                    if st.session_state.get("uc3_note"):
+                        st.caption(st.session_state.uc3_note)
+                with st.expander("Notes or transcript" + (" · pre-filled" if has_demo else ""),
+                                 expanded=not has_demo or bool(st.session_state.get("uc3_note"))):
                     st.text_input("Meeting", value="Quarterly portfolio review", key="uc3_purpose")
                     st.text_area("Meeting notes or transcript", key="uc3_transcript", height=110,
-                                 value=DEMO_TRANSCRIPTS.get(st.session_state.client_key, ""),
                                  placeholder="Paste the transcript: one line per turn, e.g. 'Rachel: …' / 'Sarah: …'")
             else:
                 st.selectbox("Market event", list(MARKET_EVENTS), format_func=lambda k: MARKET_EVENTS[k]["title"], key="uc3_event",

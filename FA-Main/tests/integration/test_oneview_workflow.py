@@ -258,3 +258,22 @@ def test_uc3_reject_ends_without_a_record(sample_profiles, transcript):
     record_session(service, sample_profiles, transcript)
     view = act(service, "uc3", action="reject", notes="Wrong client.")
     assert view.outcome == "REJECTED" and service.get_pdf_path("uc3") is None
+
+
+def test_uc3_transcript_of_another_client_is_flagged_and_needs_a_documented_check(sample_profiles, transcript):
+    """Slide 28: changes tied to the correct client. A transcript that never names the client cannot be confirmed silently."""
+    service = new_service()
+    record_session(service, sample_profiles, transcript)
+    t2 = next(r for r in service.get_state("uc3")["meeting_record"].compliance_checks if r.rule_id == "T2")
+    assert t2.outcome == "PASS"
+
+    extraction = MeetingExtraction(email_subject="Follow-up", email_body="Dear client,\n\nThanks for meeting.")
+    service = new_service(FakeAdvisoryLLMClient(override_responses={"MeetingExtraction": extraction}))
+    view = record_session(service, sample_profiles, "Rachel: Thanks for coming in, Daniel.\nDaniel: I want to keep more in cash.", sid="other")
+    t2 = next(r for r in service.get_state("other")["meeting_record"].compliance_checks if r.rule_id == "T2")
+    assert t2.outcome == "FLAG" and "Sarah Tan" in t2.message
+    assert "approve" in view.pending_review.allowed_actions
+    with pytest.raises(ValueError, match="does not name this client"):
+        act(service, "other", action="approve")
+    view = act(service, "other", action="approve", notes="Checked: Sarah's meeting, the notes use her preferred name.")
+    assert view.outcome == "APPROVED"

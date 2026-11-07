@@ -180,6 +180,10 @@ class AdvisorySessionService:
                 f"Action '{action_request.action}' is not allowed at the '{stage}' review. "
                 f"Allowed: {pending_review.get('allowed_actions', [])}"
             )
+        if stage == REVIEW_RECORD and action == "approve" and not (action_request.notes or "").strip():
+            record = self.get_state(session_id).get("meeting_record")
+            if record and any(r.rule_id == "T2" and r.outcome == "FLAG" for r in record.compliance_checks):
+                raise ValueError("The transcript does not name this client: confirm it is the right meeting in 'notes'.")
         if action == "override_flag" and not (action_request.notes or "").strip():
             raise ValueError("An exception override must document the advisor's reasoning in 'notes'.")
         if stage == REVIEW_EVENT and not (action_request.notes or "").strip():

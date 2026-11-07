@@ -72,3 +72,15 @@ def test_empty_liquidity_schedule_is_a_valid_answer_but_missing_is_not():
             "raw_holdings": [{"ticker": "BIL", "weight_pct": 100.0}]}
     assert "liquidity_schedule" in required_field_validator(base).missing_fields
     assert required_field_validator({**base, "liquidity_schedule": []}).is_valid
+
+
+@pytest.mark.parametrize("text,name,ok", [
+    ("Rachel: Hello.\nSarah: Hi.", "Sarah Tan", True),
+    ("Rachel: Hello.\nMdm Lim: Good morning.", "Mdm Lim Siew Hong", True),
+    ("Client said her new job starts in January; Tan agreed to review cash.", "Sarah Tan", True),
+    ("Rachel: Hello Daniel.\nDaniel: Hi.", "Sarah Tan", False),
+], ids=["speaks", "honorific", "named", "other-client"])
+def test_transcript_client_match(text, name, ok):
+    from src.tools.transcript_tools import transcript_client_match, transcript_parser
+    matched, message = transcript_client_match(transcript_parser(text), name)
+    assert matched is ok and name in message

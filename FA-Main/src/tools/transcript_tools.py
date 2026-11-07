@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from src.schemas.tools import TranscriptLine
 
@@ -35,6 +35,19 @@ def lines_support_amounts(claim: str, cited: List[TranscriptLine]) -> List[str]:
     """Figures in a claim that no cited transcript line contains: the 'unclear amount' stress case."""
     available = {a for line in cited for a in amounts_in(line.text)}
     return [a for a in amounts_in(claim) if a not in available]
+
+HONORIFICS = {"mr", "mrs", "ms", "mdm", "madam", "miss", "dr"}
+
+def transcript_client_match(lines: List[TranscriptLine], client_name: str) -> Tuple[bool, str]:
+    """Does the transcript belong to this client? The client must speak, or at least be named (slide 28: changes tied to
+    the correct client). A transcript that never names the client is flagged for the RM, never guessed."""
+    names = [w for w in (t.strip(".,").lower() for t in client_name.split()) if len(w) > 1 and w not in HONORIFICS]
+    spoke = [l for l in lines if set(l.speaker.lower().replace(".", " ").split()) & set(names)]
+    if spoke:
+        return True, f"{client_name} speaks in {len(spoke)} transcript line(s)."
+    if any(re.search(rf"\b{re.escape(n)}\b", l.text.lower()) for l in lines for n in names):
+        return True, f"{client_name} is named in the transcript."
+    return False, f"{client_name} is not named in the transcript. Check it is this client's meeting before confirming."
 
 def index_lines(lines: List[TranscriptLine]) -> Dict[int, TranscriptLine]:
     return {l.line_no: l for l in lines}

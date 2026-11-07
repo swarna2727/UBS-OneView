@@ -16,7 +16,7 @@ from src.tools.event_tools import stress_impact
 from src.tools.memo_tools import memo_consistency_validator, citation_source_mapper
 from src.tools.profile_tools import client_note_signals
 from src.tools.risk_engine import prohibited_wording, portfolio_metrics, reference_mix_gaps, risk_points, risk_band_points
-from src.tools.transcript_tools import transcript_parser, transcript_fingerprint, index_lines, lines_support_amounts
+from src.tools.transcript_tools import transcript_parser, transcript_fingerprint, index_lines, lines_support_amounts, transcript_client_match
 from src.llm.base import LLMClientProtocol
 
 CURRENCY_SYMBOLS = {"SGD": "S$", "USD": "US$", "CHF": "CHF ", "EUR": "€", "GBP": "£"}
@@ -163,7 +163,9 @@ class BriefRecordAgent(BaseAdvisoryAgent[Any, Any]):
         hits = prohibited_wording(text)
         untraced = [l for l in said + decisions if not l.verified]
         flagged = [a for a in actions if a.status == "FLAGGED"]
+        client_ok, client_msg = transcript_client_match(lines, inputs.profile.name)
         checks = [
+            RuleResult(rule_id="T2", name="Transcript belongs to this client", outcome="PASS" if client_ok else "FLAG", message=client_msg),
             RuleResult(rule_id="R9", name="No prohibited wording", outcome="FAIL" if hits else "PASS",
                        message=f"Prohibited wording: {', '.join(sorted(set(hits)))}." if hits else "No guarantee or risk-free wording."),
             RuleResult(rule_id="T1", name="Every line traces to the transcript", outcome="FLAG" if untraced else "PASS",
