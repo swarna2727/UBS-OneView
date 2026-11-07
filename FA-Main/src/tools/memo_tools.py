@@ -155,7 +155,7 @@ def _source_links(lines: List[str], style: ParagraphStyle) -> List[Paragraph]:
         m = SOURCE_ID_PATTERN.search(line)
         info = source_index().get(m.group(1)) if m else None
         if info:
-            title = f"<link href='{info['url']}' color='#1F3A5F'><u>{info['title']}</u></link>" if info.get("url") else f"<b>{info['title']}</b>"
+            title = f"<link href='{info['url']}' color='#C8102E'><u>{info['title']}</u></link>" if info.get("url") else f"<b>{info['title']}</b>"
             out.append(Paragraph(f"{title} — {info['short']}, {info['date']}", style))
         else:
             out.append(Paragraph(readable_citations(line), style))

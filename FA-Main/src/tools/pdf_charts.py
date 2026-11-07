@@ -1,6 +1,6 @@
 """Charts for the PDF artifacts (memo, meeting brief, decision record), drawn with ReportLab graphics.
 
-Colours follow the OneView design system: blue-grey = current portfolio, navy = proposed / after,
+Colours follow the OneView design system: grey = current portfolio, red = proposed / after,
 status green / amber / red only for rule outcomes; brand red never in charts.
 """
 
@@ -14,9 +14,9 @@ from reportlab.lib import colors
 
 from src.tools.risk_engine import risk_points
 
-BEFORE = colors.HexColor("#9aa6b2")  # data-2: current
-AFTER = colors.HexColor("#1f3a5f")   # data-1: proposed
-SERIES = [colors.HexColor(c) for c in ("#1f3a5f", "#9aa6b2", "#2e7d76", "#b8892b", "#8e8a84", "#5b6f8a", "#c9c6bf", "#6f8f7a")]
+BEFORE = colors.HexColor("#b8b6b1")  # grey: current
+AFTER = colors.HexColor("#c8102e")   # UBS red: proposed
+SERIES = [colors.HexColor(c) for c in ("#c8102e", "#1a1a19", "#8a8884", "#e5717f", "#7a0a1c", "#4d4c49", "#c9c6bf", "#f2b8c0")]
 INK, MUTED, GRID = colors.HexColor("#0b0b0b"), colors.HexColor("#52514e"), colors.HexColor("#e1e0d9")
 WIDTH = 520
 
@@ -76,7 +76,7 @@ def risk_band(title: str, band: Sequence[float], points: Dict[str, float], width
         d.add(Line(scale(tick), y - 3, scale(tick), y + 3, strokeColor=MUTED, strokeWidth=0.6))
         d.add(String(scale(tick), y - 13, str(tick), fontName="Helvetica", fontSize=7, fillColor=MUTED, textAnchor="middle"))
     lo, hi = risk_points(band[0]), risk_points(band[1])
-    d.add(Rect(scale(lo), y + 6, scale(hi) - scale(lo), 14, fillColor=colors.HexColor("#dfe5ec"), strokeColor=None))
+    d.add(Rect(scale(lo), y + 6, scale(hi) - scale(lo), 14, fillColor=colors.HexColor("#f6d4d9"), strokeColor=None))
     d.add(String(scale(lo), y + 23, f"Applied band {lo}-{hi}", fontName="Helvetica", fontSize=7, fillColor=MUTED))
     d.add(String(0, y + 9, "Risk (0-100)", fontName="Helvetica", fontSize=7, fillColor=MUTED))
     items = []

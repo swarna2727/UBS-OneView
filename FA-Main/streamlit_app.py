@@ -32,7 +32,7 @@ from src.schemas.workspace import AdvisorActionRequest
 from src.tools.event_tools import MARKET_EVENTS, stress_impact
 from src.tools.exposure import portfolio_exposure_calculator
 from src.tools.memo_tools import readable_citations, source_index
-from src.tools.profile_tools import profile_change_detector, required_field_validator, risk_profile_calculator
+from src.tools.profile_tools import client_note_signals, profile_change_detector, required_field_validator, risk_profile_calculator
 from src.tools.risk_engine import evaluate_profile_rules, load_policy, reference_mix_gaps, risk_band_points, risk_points
 
 load_dotenv()
@@ -60,15 +60,17 @@ OFFLINE, LIVE = "Offline · test data stubs", "Live · OpenRouter"
 # Validated reference palette (dataviz skill): status colours never double as series colours.
 STATUS_COLORS = {"PASS": "#157f3b", "FLAG": "#b7791f", "FAIL": "#b42318", "BLOCK": "#b42318"}  # success / warning / danger
 STATUS_ICONS = {"PASS": "✓", "FLAG": "!", "FAIL": "✕", "BLOCK": "■"}
-# Design-system data colours: red is for the primary action and the active place, never for chart data.
-BEFORE_COLOR, AFTER_COLOR = "#9aa6b2", "#1f3a5f"  # data-2 current -> data-1 proposed
-SERIES = ["#1f3a5f", "#9aa6b2", "#2e7d76", "#b8892b", "#8e8a84", "#5b6f8a", "#c9c6bf", "#6f8f7a"]  # data-1 … data-5, then tints
+# Data colours: shades of UBS red, grey and black.
+BEFORE_COLOR, AFTER_COLOR = "#b8b6b1", "#c8102e"  # grey current -> red proposed
+SERIES = ["#c8102e", "#1a1a19", "#8a8884", "#e5717f", "#7a0a1c", "#4d4c49", "#c9c6bf", "#f2b8c0"]
 MUTED = "#6b6a66"  # ink-muted
 SERIES_NAMES = {"Before": "Current", "After": "Proposed"}
 INK, BORDER = "#1a1a19", "#e7e6e3"
 RM_NAME = "Rachel Wong"  # the deck's illustrative Relationship Manager
 # Assumed list prices used only for the cost estimate on the Audit screen (US$ per million tokens).
 ASSUMED_PRICE_PER_MTOK = {"prompt": 3.0, "completion": 15.0}
+IMPACT_THEMES = ["Clean energy / energy security", "Healthcare access / longevity", "Education", "Water & sustainable food", "Affordable housing"]
+EXCLUDABLE_SECTORS = ["Technology", "Financials", "Healthcare", "Consumer Staples", "Energy", "Tobacco", "Weapons", "Gambling"]
 RISK_OPTIONS = ["Conservative", "Low to moderate", "Moderate", "Balanced growth", "Aggressive growth"]
 EXPERIENCE_OPTIONS = ["New investor", "Limited", "ETF investor", "Knowledgeable", "Experienced investor"]
 
@@ -97,21 +99,22 @@ st.html("""
   :root {
     --brand-red: #c8102e; --brand-red-hover: #a50d26; --brand-tint: #fdecee;
     --canvas: #f6f6f4; --surface: #ffffff; --surface-subtle: #fafaf9; --border: #e7e6e3; --border-strong: #cfcdc8;
-    --ink: #1a1a19; --ink-secondary: #52514e; --ink-muted: #6b6a66; --focus: #1f3a5f;
+    --ink: #1a1a19; --ink-secondary: #52514e; --ink-muted: #6b6a66; --focus: #c8102e;
     --success: #157f3b; --success-bg: #e9f5ee; --warning: #8a5a00; --warning-bg: #fdf4e1; --danger: #b42318; --danger-bg: #fdecea;
     --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
     --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
     --shadow-sm: 0 1px 2px rgba(26, 26, 25, .05); --shadow-lg: 0 8px 24px rgba(26, 26, 25, .12);
-    --sidebar-width: 240px; --content-max: 1200px;
+    --sidebar-width: 240px;
   }
   .stApp { background: var(--canvas); color: var(--ink); }
-  .block-container { max-width: calc(var(--content-max) + 2 * var(--space-8)); padding: 3rem var(--space-8) 1.5rem; }
+  .block-container { max-width: none; padding: 3rem var(--space-8) 1.5rem; }
   /* the stock Streamlit chrome stays out of the product */
   header[data-testid="stHeader"] { background: transparent; }
   header[data-testid="stHeader"], header[data-testid="stHeader"] * { pointer-events: none !important; }
   header[data-testid="stHeader"] button, header[data-testid="stHeader"] button * { pointer-events: auto !important; }
   [data-testid="stToolbar"], [data-testid="stMainMenu"], [data-testid="stStatusWidget"], [data-testid="stElementToolbar"],
   [data-testid="stDecoration"] { visibility: hidden !important; }
+  [data-testid="stExpandSidebarButton"] { visibility: visible !important; }
   [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] { gap: var(--space-4); }
   h1, h2, h3, h4 { letter-spacing: -0.01em; color: var(--ink); }
   h2 { font-size: 24px !important; line-height: 32px !important; font-weight: 600 !important; padding: 0 !important; margin: 0 !important; }
@@ -123,12 +126,11 @@ st.html("""
     background: var(--surface); border: 1px solid var(--border) !important; border-radius: var(--radius-lg) !important;
     box-shadow: var(--shadow-sm); padding: var(--space-5) !important; }
   /* Action bar: fixed to the bottom of the window, aligned to the content column */
-  :root { --inset: max(var(--space-8), calc((100vw - var(--sidebar-width) - var(--content-max) - 2 * var(--space-8)) / 2 + var(--space-8)));
-          --inset-full: max(var(--space-8), calc((100vw - var(--content-max) - 2 * var(--space-8)) / 2 + var(--space-8))); }
+  :root { --inset: var(--space-8); }
   .st-key-footer, .st-key-footer_done { position: fixed; bottom: var(--space-4); left: calc(var(--sidebar-width) + var(--inset)); right: var(--inset);
     z-index: 50; box-shadow: var(--shadow-lg); padding: var(--space-3) var(--space-4) !important; width: auto !important; }
-  .stApp:has(section[data-testid="stSidebar"][aria-expanded="false"]) .st-key-footer,
-  .stApp:has(section[data-testid="stSidebar"][aria-expanded="false"]) .st-key-footer_done { left: var(--inset-full); right: var(--inset-full); }
+  .stApp:has(section[data-testid="stSidebar"][data-collapsed="true"]) .st-key-footer,
+  .stApp:has(section[data-testid="stSidebar"][data-collapsed="true"]) .st-key-footer_done { left: var(--inset); }
   .block-container { padding-bottom: 112px !important; }
   /* "Why" and "More" disclosures read as links, not boxes */
   [data-testid="stExpander"] details { border: none !important; background: transparent !important; }
@@ -195,6 +197,21 @@ st.html("""
   .card-label { color: var(--ink); font-weight: 600; }
   .subtle { color: var(--ink-secondary); font-size: 13px; line-height: 19px; }
   .card-ticker { font-size: 15px; line-height: 22px; font-weight: 600; }
+  /* Section cards (client home): uppercase heading with icon, small column labels, bordered item rows, tags */
+  .sec-head { display: flex; align-items: center; gap: var(--space-2); font-size: 13px; line-height: 20px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink); margin-bottom: var(--space-4); }
+  .sec-head svg { width: 16px; height: 16px; stroke: var(--ink); fill: none; stroke-width: 2; }
+  .sec-label { font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-muted);
+    margin-bottom: var(--space-2); }
+  .item-row { display: flex; align-items: center; gap: var(--space-2); background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); font-size: 13px; line-height: 20px; color: var(--ink); margin-bottom: var(--space-2); }
+  .item-row .ic { flex: none; width: 16px; text-align: center; font-weight: 700; }
+  .item-row .ic.goal { color: var(--brand-red); } .item-row .ic.gap { color: #b7791f; }
+  .item-empty { font-size: 13px; color: var(--ink-muted); }
+  .tag { display: inline-block; font-size: 12px; line-height: 18px; font-weight: 500; padding: 3px 12px; border-radius: 999px; margin: 0 6px 6px 0; border: 1px solid; }
+  .tag.good { background: var(--success-bg); color: var(--success); border-color: #cfe8d8; }
+  .tag.bad { background: var(--brand-tint); color: var(--brand-red); border-color: #f5c6cd; }
+  .st-key-card_strategic { border-left: 3px solid var(--brand-red) !important; background: var(--surface-subtle) !important; }
   .kv { font-size: 14px; line-height: 21px; color: var(--ink-secondary); margin-bottom: var(--space-2); }
   .kv b { color: var(--ink-muted); font-weight: 500; font-size: 12px; }
   .num { font-size: 20px; line-height: 28px; font-weight: 500; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
@@ -266,7 +283,7 @@ st.html("""
   /* Responsive: drawer sidebar and 16px gutter on phones, tighter gutter on tablets */
   @media (max-width: 1024px) {
     .block-container { padding-left: var(--space-6); padding-right: var(--space-6); }
-    :root { --inset: var(--space-6); --inset-full: var(--space-6); }
+    :root { --inset: var(--space-6); }
   }
   @media (max-width: 768px) {
     section[data-testid="stSidebar"] { width: 85vw !important; min-width: 0 !important; }
@@ -276,6 +293,8 @@ st.html("""
     .lineage .arrow { display: none; }
     .st-key-footer, .st-key-footer_done { bottom: var(--space-2); left: var(--space-2) !important; right: var(--space-2) !important; }
   }
+  /* A closed sidebar gives its space back to the page */
+  section[data-testid="stSidebar"][data-collapsed="true"] { width: 0 !important; min-width: 0 !important; }
 </style>
 """)
 
@@ -591,13 +610,16 @@ def go(screen: str) -> None:
     st.session_state.screen = screen
 
 
+KEEP_ON_RESET = ("mode", "records", "recorded_sessions", "signed_in")
+
+
 def reset_to_client_list() -> None:
-    for key in [k for k in st.session_state.keys() if k not in ("mode", "records", "recorded_sessions")]:
+    for key in [k for k in st.session_state.keys() if k not in KEEP_ON_RESET]:
         del st.session_state[key]
 
 
 def back_to_client() -> None:
-    for key in [k for k in st.session_state.keys() if k not in ("mode", "records", "recorded_sessions", "client_key")]:
+    for key in [k for k in st.session_state.keys() if k not in (*KEEP_ON_RESET, "client_key")]:
         del st.session_state[key]
 
 
@@ -743,6 +765,37 @@ def donut(weights: dict[str, float], title: str, height: int = 200) -> alt.Chart
     ).properties(height=height)
 
 
+def weight_bars(weights: dict[str, float], title: str, color: str = AFTER_COLOR, names: dict[str, str] | None = None) -> alt.Chart:
+    """Horizontal bars of portfolio weight %, largest first (funds, regions)."""
+    frame = pd.DataFrame([{"Category": k, "Name": (names or {}).get(k, k), "Weight": round(v, 1)}
+                          for k, v in sorted(weights.items(), key=lambda kv: -kv[1])])
+    bars = alt.Chart(frame, title=title).mark_bar(cornerRadiusEnd=4, height=14, color=color).encode(
+        y=alt.Y("Category:N", sort=list(frame["Category"]), title=None, axis=alt.Axis(labelLimit=140)),
+        x=alt.X("Weight:Q", title="Portfolio weight %"),
+        tooltip=["Name", alt.Tooltip("Weight:Q", format=".1f", title="Weight %")])
+    labels = bars.mark_text(align="left", dx=4, color=MUTED).encode(text=alt.Text("Weight:Q", format=".0f"))
+    return alt.layer(bars, labels).properties(height=28 * len(frame) + 50)
+
+
+def portfolio_charts(holdings: list[Any]) -> None:
+    """Allocation by fund, currency exposure and regional distribution, from holdings (records or dicts)."""
+    get = lambda h, f: h.get(f) if isinstance(h, dict) else getattr(h, f, None)
+    funds, currency, region, names = {}, {}, {}, {}
+    for h in holdings:
+        w = float(get(h, "weight_pct") or 0)
+        for bucket, field in ((funds, "ticker"), (currency, "currency"), (region, "region")):
+            label = get(h, field) or "Other"
+            bucket[label] = bucket.get(label, 0.0) + w
+        names[get(h, "ticker")] = get(h, "name") or get(h, "ticker")
+    left, mid, right = st.columns([1.3, 1, 1])
+    with left, card(height="stretch"):
+        show_chart(weight_bars(funds, "Allocation by fund", names=names))
+    with mid, card(height="stretch"):
+        show_chart(donut(currency, "Currency exposure"))
+    with right, card(height="stretch"):
+        show_chart(weight_bars(region, "Regional distribution", color=INK))
+
+
 def before_after_bars(frame: pd.DataFrame, title: str, height: int = 220) -> alt.Chart:
     long = frame.melt(id_vars="Category", value_vars=["Before", "After"], var_name="Portfolio", value_name="Weight")
     long["Portfolio"] = long["Portfolio"].map(SERIES_NAMES)
@@ -778,7 +831,7 @@ def risk_scale_chart(points: list[dict[str, Any]], band: list[float]) -> alt.Cha
     frame = pd.DataFrame([{**p, "Score": risk_points(p["Score"])} for p in points])
     order = list(frame["Measure"]) + ["Applied band"]
     y_scale = alt.Scale(domain=order)
-    band_rect = alt.Chart(pd.DataFrame([{"lo": risk_points(band[0]), "hi": risk_points(band[1]), "y": "Applied band"}])).mark_bar(color="#dfe5ec", cornerRadius=4).encode(
+    band_rect = alt.Chart(pd.DataFrame([{"lo": risk_points(band[0]), "hi": risk_points(band[1]), "y": "Applied band"}])).mark_bar(color="#f6d4d9", cornerRadius=4).encode(
         x=alt.X("lo:Q", scale=alt.Scale(domain=[0, 100]), title="Risk (0 = lowest, 100 = highest)"), x2="hi:Q",
         y=alt.Y("y:N", scale=y_scale, title=None, axis=alt.Axis(labelLimit=160)),
         tooltip=[alt.Tooltip("lo:Q", title="Band from"), alt.Tooltip("hi:Q", title="Band to")])
@@ -905,6 +958,16 @@ def done_footer(ctx: dict[str, Any], current: str, message: str) -> None:
                          on_click=go, args=(target[0],), key=f"next_{current}")
 
 
+def finished_footer(ctx: dict[str, Any], message: str, pdf_label: str) -> None:
+    """Footer for a finished run: the decision, its PDF and the way back to the client list."""
+    with st.container(border=True, key="footer_done"):
+        left, mid, right = st.columns([3, 1.3, 1], vertical_alignment="center")
+        left.markdown(message)
+        with mid:
+            render_pdf_download(ctx, pdf_label)
+        right.button("All clients", icon=":material/group:", width="stretch", key="done_clients", on_click=reset_to_client_list)
+
+
 def decision_summary(ctx: dict[str, Any], stage: str, label: str) -> str:
     rows = checkpoint_decisions(ctx["state"], stage)
     if not rows:
@@ -922,6 +985,7 @@ def render_sidebar(ctx: dict[str, Any]) -> None:
     uc = ctx["use_case"]
     with st.sidebar:
         html_block(brand_html())
+        st.button("All clients", key="side_all_clients", icon=":material/arrow_back:", width="stretch", on_click=reset_to_client_list)
         mode = "Live model" if st.session_state.get("mode") == LIVE else "Offline"
         html_block(f"<div class='client-chip'>{avatar(raw.get('name', 'Client'))}<div><b>{esc(raw.get('name', 'Client'))}</b><br>"
                    f"<span class='subtle' title='{esc(mode)}'>{esc(USE_CASES[uc][0])}</span></div></div>"
@@ -956,6 +1020,7 @@ def render_sidebar(ctx: dict[str, Any]) -> None:
             st.success("Complete", icon=":material/verified:")
         elif ctx["outcome"] == "REJECTED":
             st.error("Rejected", icon=":material/block:")
+        st.button("Sign out", key="sign_out", icon=":material/logout:", width="stretch", on_click=sign_out)
         html_block(user_chip())
 
 
@@ -966,6 +1031,10 @@ def brand_html() -> str:
 def avatar(name: str, large: bool = False) -> str:
     initials = "".join(w[0] for w in str(name).replace("Mdm ", "").split()[:2]).upper() or "?"
     return f"<span class='avatar{' lg' if large else ''}'>{esc(initials)}</span>"
+
+
+def sign_out() -> None:
+    st.session_state.clear()
 
 
 def user_chip() -> str:
@@ -983,6 +1052,7 @@ def render_home_sidebar() -> None:
                       type="primary" if key == current else "secondary", on_click=select_client, args=(key,))
         html_block("<span class='side-label'>New request</span>")
         st.button("Client intake", key="side_intake", icon=":material/person_add:", width="stretch", on_click=reset_to_client_list)
+        st.button("Sign out", key="sign_out", icon=":material/logout:", width="stretch", on_click=sign_out)
         html_block(user_chip())
 
 
@@ -1051,6 +1121,32 @@ def profile_form(ctx: dict[str, Any], raw: dict[str, Any], editable: bool) -> tu
                                   width="stretch", height=180, key=k("hold"), disabled=not editable,
                                   column_config={"weight_pct": st.column_config.NumberColumn("Weight %", min_value=0.0, max_value=100.0, format="%.1f"),
                                                  "risk_rating": st.column_config.NumberColumn("Risk 1–5", min_value=1, max_value=5)})
+    constraints = dict(raw.get("constraints") or {})
+    esg_col, intent_col = st.columns(2)
+    with esg_col, card(height="stretch"):
+        html_block(f"<div class='sec-head'>{ICON_LEAF}Values & ESG mandate</div>")
+        esg = st.toggle("ESG mandate", value=bool(constraints.get("esg_mandate")), key=k("esg"), disabled=not editable,
+                        help="Ideas limited to products rated A or above")
+        current_themes = list(constraints.get("impact_themes") or [])
+        themes = st.pills("Priority impact themes", list(dict.fromkeys(IMPACT_THEMES + current_themes)), default=current_themes,
+                          selection_mode="multi", key=k("themes"), disabled=not editable)
+        current_excl = list(constraints.get("excluded_sectors") or [])
+        excluded = st.pills("Excluded sectors", list(dict.fromkeys(EXCLUDABLE_SECTORS + current_excl)), default=current_excl,
+                            selection_mode="multi", key=k("excl"), disabled=not editable)
+    with intent_col, card(height="stretch"):
+        html_block(f"<div class='sec-head'>{ICON_TARGET}Strategic context & intent</div>"
+                   f"<div class='subtle' style='margin-top:4px'>Intent</div><b>{esc(USE_CASES[uc][1])}</b>")
+        notes = raw.get("client_notes") or []
+        if notes:
+            last = notes[-1]
+            html_block(f"<div class='subtle' style='margin-top:8px'>Latest note · {esc(fmt_date(last.get('date')))}</div>{esc(last.get('text', ''))}")
+        context = st.text_area("Context", value=raw.get("advisor_notes") or "", height=80, key=k("context"), disabled=not editable)
+    if esg != bool(constraints.get("esg_mandate")):
+        constraints["esg_mandate"] = esg
+    if excluded != current_excl:
+        constraints["excluded_sectors"] = excluded
+    if themes != current_themes:
+        constraints["impact_themes"] = themes
     values = {
         "goals": [g.strip() for g in goals.splitlines() if g.strip()],
         "time_horizon_months": int(horizon) if horizon else None,
@@ -1060,6 +1156,10 @@ def profile_form(ctx: dict[str, Any], raw: dict[str, Any], editable: bool) -> tu
         "liquidity_schedule": _norm_liquidity(liquidity.replace({pd.NA: None}).to_dict(orient="records")),
         "raw_holdings": _norm_holdings(holdings.replace({pd.NA: None}).to_dict(orient="records")),
     }
+    if constraints != (raw.get("constraints") or {}):
+        values["constraints"] = constraints
+    if context != (raw.get("advisor_notes") or ""):
+        values["advisor_notes"] = context
     if capital is not None:
         values["new_capital_amount"] = float(capital)
     missing = []
@@ -1128,9 +1228,9 @@ def render_profile(ctx: dict[str, Any]) -> None:
         return
     changes = profile_change_detector(raw, raw.get("last_review") or {}) if uc == PRE_MEETING else []
     if uc == PRE_MEETING:
-        tabs = merge_tabs(["Details", f"Changes ({len(changes)})", "Risk & checks"], [0, 1, 2, 2, 2])
+        tabs = merge_tabs(["Details", f"Changes ({len(changes)})", "Portfolio & checks"], [0, 1, 2, 2, 2])
     else:
-        tabs = merge_tabs(["Details", "Risk", "Checks"], [0, 1, 2, 2])
+        tabs = merge_tabs(["Details", "Portfolio", "Checks"], [0, 1, 2, 2])
     with tabs[0]:
         edits, missing = profile_form(ctx, raw, editable=pending)
     i = 1
@@ -1146,12 +1246,11 @@ def render_profile(ctx: dict[str, Any]) -> None:
                     f"<tr><td>{esc(c['label'])}</td><td>{esc(c['before'])}</td><td><b>{esc(c['after'])}</b></td></tr>" for c in changes) + "</table>")
         i += 1
     with tabs[i]:
-        left, mid, right = st.columns([1, 1, 1.3])
-        with left:
+        portfolio_charts(profile.parsed_holdings)
+        left, right = st.columns([1, 1.3])
+        with left, card(height="stretch"):
             show_chart(donut(profile.current_asset_class_weights, "Asset class"))
-        with mid:
-            show_chart(donut(profile.current_region_weights, "Region"))
-        with right:
+        with right, card(height="stretch"):
             calc = risk_profile_calculator(raw) if raw.get("time_horizon_months") else None
             total = sum(h.weight_pct for h in profile.parsed_holdings) or 1
             points = [{"Measure": "Current portfolio", "Score": round(sum(h.risk_rating * h.weight_pct for h in profile.parsed_holdings) / total, 2)}]
@@ -1378,11 +1477,8 @@ def render_meeting(ctx: dict[str, Any]) -> None:
             st.markdown(f"{pill(r.outcome)} **{md(r.name)}** · {md(r.message)}", unsafe_allow_html=True)
 
     if approved:
-        with st.container(border=True, key="footer_done"):
-            left, right = st.columns([3, 1.3], vertical_alignment="center")
-            left.markdown(decision_summary(ctx, "record_approval", "Record confirmed") + " · it feeds the next pre-meeting briefing.")
-            with right:
-                render_pdf_download(ctx, "Download compliance record PDF")
+        finished_footer(ctx, decision_summary(ctx, "record_approval", "Record confirmed") + " · it feeds the next pre-meeting briefing.",
+                        "Download compliance record PDF")
         return
     if not pending:
         return
@@ -1791,7 +1887,7 @@ def render_suitability(ctx: dict[str, Any]) -> None:
             for i, rule in enumerate(comparable):
                 with cols[i % len(cols)]:
                     show_chart(metric_vs_limit(rule, units.get(rule.metric or "", "%")))
-            st.caption("Grey = current · navy = proposed · dashed = limit")
+            st.caption("Grey = current · red = proposed · dashed = limit")
     with tabs[2]:
         left, mid, right = st.columns(3)
         with left:
@@ -1991,11 +2087,7 @@ def render_memo(ctx: dict[str, Any]) -> None:
         html_block(source_links())
 
     if approved:
-        with st.container(border=True, key="footer_done"):
-            left, right = st.columns([3, 1.3], vertical_alignment="center")
-            left.markdown(decision_summary(ctx, "advisor_approval", ""))
-            with right:
-                render_pdf_download(ctx, "Download memo PDF")
+        finished_footer(ctx, decision_summary(ctx, "advisor_approval", ""), "Download memo PDF")
         return
     if ctx["stage"] != "advisor_approval":
         done_footer(ctx, "memo", "Waiting for approval")
@@ -2100,11 +2192,7 @@ def render_brief(ctx: dict[str, Any]) -> None:
             show_chart(before_after_bars(exposure_frame(profile, state["candidate_ideas"].ideas, "asset_class"), "Asset allocation if implemented", height=170))
 
     if approved:
-        with st.container(border=True, key="footer_done"):
-            left, right = st.columns([3, 1.3], vertical_alignment="center")
-            left.markdown(decision_summary(ctx, "brief_approval", ""))
-            with right:
-                render_pdf_download(ctx, "Download meeting brief PDF")
+        finished_footer(ctx, decision_summary(ctx, "brief_approval", ""), "Download meeting brief PDF")
         return
     if ctx["stage"] != "brief_approval":
         return
@@ -2147,11 +2235,8 @@ def render_record(ctx: dict[str, Any]) -> None:
     with right:
         frame = pd.DataFrame([{"Holding": h.ticker, "Contribution": h.contribution_pct} for h in impact.holdings])
         show_chart(signed_bars(frame, "Holding", "Contribution", "Contribution to the move (% points)", height=200))
-    with st.container(border=True, key="footer_done"):
-        a, b = st.columns([3, 1.3], vertical_alignment="center")
-        a.markdown("✓ **Decision recorded.** It is saved to the client's history; a later review starts from it.")
-        with b:
-            render_pdf_download(ctx, "Download decision record PDF")
+    finished_footer(ctx, "✓ **Decision recorded.** It is saved to the client's history; a later review starts from it.",
+                    "Download decision record PDF")
 
 
 # --------------------------------------------------------------------------------------
@@ -2230,6 +2315,24 @@ def render_audit(ctx: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------------------
 # Landing and client home
 # --------------------------------------------------------------------------------------
+
+def render_sign_in() -> None:
+    """Demo sign-in: any email and password signs in as the RM (no real authentication in the prototype)."""
+    html_block("<style>section[data-testid='stSidebar'], [data-testid='stExpandSidebarButton'] { display: none !important; }</style>")
+    _, mid, _ = st.columns([1, 1.1, 1])
+    with mid:
+        html_block("<div style='height:12vh'></div><div class='brand' style='font-size:28px;line-height:36px;padding:0'><b>UBS</b> <span>OneView</span></div>"
+                   "<div class='subtle' style='margin:4px 0 24px'>Advisor workspace</div>")
+        with st.form("sign_in", border=True):
+            email = st.text_input("Email", placeholder="name@ubs.com")
+            password = st.text_input("Password", type="password")
+            if st.form_submit_button("Sign in", type="primary", width="stretch", icon=":material/login:"):
+                if email.strip() and password:
+                    st.session_state.signed_in = email.strip()
+                    st.rerun()
+                st.error("Enter email and password")
+        st.caption("Demo · any email and password")
+
 
 def render_landing() -> None:
     top_l, top_r = st.columns([5, 1], vertical_alignment="bottom")
@@ -2319,6 +2422,57 @@ def render_intake() -> None:
     st.rerun()
 
 
+ICON_TARGET = "<svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='9'/><circle cx='12' cy='12' r='5'/><circle cx='12' cy='12' r='1'/></svg>"
+ICON_LEAF = "<svg viewBox='0 0 24 24'><path d='M5 19c0-8 5-13 14-14-1 9-6 14-14 14z'/><path d='M5 19l7-7'/></svg>"
+
+
+def item_rows(items: list[str], kind: str, empty: str) -> str:
+    mark = {"goal": "◎", "gap": "⚠"}[kind]
+    return "".join(f"<div class='item-row'><span class='ic {kind}'>{mark}</span>{esc(i)}</div>" for i in items) or f"<div class='item-empty'>{esc(empty)}</div>"
+
+
+def client_gaps(raw: dict[str, Any]) -> list[str]:
+    """Deterministic gaps for the RM to discuss: client-note signals, CIO reference-mix gaps, single-fund concentration."""
+    since = (raw.get("last_review") or {}).get("date", "")
+    gaps = [f"{s['label']}: {s['implication'].rstrip('.')}" for s in client_note_signals(raw.get("client_notes") or [], since)]
+    weights: dict[str, float] = {}
+    for h in raw.get("raw_holdings") or []:
+        weights[h.get("asset_class") or "Other"] = weights.get(h.get("asset_class") or "Other", 0.0) + float(h.get("weight_pct") or 0)
+    if raw.get("time_horizon_months"):
+        tier = risk_profile_calculator(raw).risk_tier
+        gaps += [f"{g['asset_class']} {'under' if g['gap_pp'] < 0 else 'over'}weight vs CIO {tier.lower()} mix "
+                 f"({g['current_pct']:.0f}% vs {g['reference_pct']:.0f}%)" for g in reference_mix_gaps(weights, tier)[:2]]
+    else:
+        gaps.append("Time horizon not recorded")
+    top = max(raw.get("raw_holdings") or [{}], key=lambda h: float(h.get("weight_pct") or 0))
+    if float(top.get("weight_pct") or 0) >= 40:
+        gaps.append(f"Concentration: {top.get('ticker')} is {float(top['weight_pct']):.0f}% of the portfolio")
+    return gaps[:4]
+
+
+def strategic_context(raw: dict[str, Any]) -> None:
+    """Strategic context & intent: the client's objectives and the gaps identified, side by side."""
+    with st.container(border=True, key="card_strategic"):
+        html_block(f"<div class='sec-head'>{ICON_TARGET}Strategic context & intent</div>")
+        left, right = st.columns(2, gap="large")
+        left.html("<div class='sec-label'>Wealth management objectives</div>" + item_rows(raw.get("goals") or [], "goal", "Not recorded"))
+        right.html("<div class='sec-label'>Identified gaps & vulnerabilities</div>" + item_rows(client_gaps(raw), "gap", "None identified"))
+
+
+def values_esg(raw: dict[str, Any]) -> None:
+    """Values & ESG mandate: impact themes the client prioritises and sectors they exclude."""
+    constraints = raw.get("constraints") or {}
+    themes = list(constraints.get("impact_themes") or []) + (["ESG-rated products (A or above)"] if constraints.get("esg_mandate") else [])
+    excluded = constraints.get("excluded_sectors") or []
+    with card():
+        html_block(f"<div class='sec-head'>{ICON_LEAF}Values & ESG mandate</div>")
+        left, right = st.columns(2, gap="large")
+        left.html("<div class='sec-label'>Priority impact themes</div>"
+                  + ("".join(f"<span class='tag good'>{esc(x)}</span>" for x in themes) or "<div class='item-empty'>None recorded</div>"))
+        right.html("<div class='sec-label'>Excluded sectors</div>"
+                   + ("".join(f"<span class='tag bad'>{esc(x)}</span>" for x in excluded) or "<div class='item-empty'>None</div>"))
+
+
 def render_client_home() -> None:
     record = client_record(st.session_state.client_key)
     raw = record["raw"]
@@ -2327,11 +2481,15 @@ def render_client_home() -> None:
                f"<div class='subtle'>{esc(' · '.join(raw.get('goals', [])))}</div></div></div>")
     if st.session_state.get("error"):
         st.error(st.session_state.error)
+    strategic_context(raw)
     a, b, c, d = st.columns(4)
     a.metric("Wealth", fmt_money(raw.get("total_wealth"), raw.get("base_currency", "SGD")))
     b.metric("Horizon", fmt_horizon(raw.get("time_horizon_months")))
     c.metric("Risk", raw.get("stated_risk_willingness", "—"))
     d.metric("Last review", fmt_date((raw.get("last_review") or {}).get("date")) if raw.get("last_review") else "None")
+    if raw.get("raw_holdings"):
+        portfolio_charts(raw["raw_holdings"])
+    values_esg(raw)
 
     live_blocked = st.session_state.get("mode") == LIVE and not os.environ.get("OPENROUTER_API_KEY")
     last_run = {h["use_case"]: h for h in record["history"]}
@@ -2382,6 +2540,9 @@ PAGES = {
 
 def main() -> None:
     st.session_state.setdefault("mode", OFFLINE)
+    if not st.session_state.get("signed_in"):
+        render_sign_in()
+        return
     if not st.session_state.get("client_key"):
         render_home_sidebar()
         render_landing()

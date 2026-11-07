@@ -18,9 +18,16 @@
     "total_wealth": 800000.0,
     "experience_level": "ETF investor",
     "constraints": {
-      "excluded_sectors": [],
+      "excluded_sectors": [
+        "Weapons",
+        "Tobacco"
+      ],
       "esg_mandate": false,
-      "max_single_stock_pct": 20.0
+      "max_single_stock_pct": 20.0,
+      "impact_themes": [
+        "Clean energy / energy security",
+        "Healthcare access / longevity"
+      ]
     },
     "raw_holdings": [
       {
