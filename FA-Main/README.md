@@ -169,6 +169,10 @@ Agent outputs are validated against their Pydantic schema; invalid output is ret
 
 Every attempt is paid for, so every attempt is counted. `OpenRouterLLMClient` sums `prompt_tokens` and `completion_tokens` over all attempts of a call, including replies that fail schema validation, and keeps a run-level counter (`usage_total`, `reset_usage()`). `BaseAdvisoryAgent.run` accumulates every model call and retry of one agent run and records `usage: {prompt_tokens, completion_tokens, total_tokens, attempts, calls}` (`None` for an agent that makes no model call; a failed run keeps the tokens it spent in `last_run`). The performance report and the Audit tab read these cumulative figures, and show retries.
 
+### Tools over MCP (`src/mcp_tools/`)
+
+Three deterministic tools are also served by a minimal MCP server (Python MCP SDK, stdio), with their logic unchanged: `cio_research_search` (`retrieval_rag_tool`), `client_limits_check` (`client_limits_engine`) and `portfolio_risk_engine` (`suitability_rule_engine`). The Market Intelligence agent, the Client Limits layer and the Fit & Eligibility Critic call them through `src/mcp_tools/gateway.py`. `ONEVIEW_TOOL_TRANSPORT=direct` (default) calls the functions in-process as before; `ONEVIEW_TOOL_TRANSPORT=mcp` starts `python -m src.mcp_tools.server` once per process and calls the same functions over one stdio session (`client.py`). Pydantic models cross as JSON and are rebuilt on each side, so agents get the same types either way. Offline stub mode works with both. The architecture lint covers `src/mcp_tools/` as well as `src/tools/`. Measured on this prototype: identical evaluation results; about 2 s to start the server, then 6 to 11 ms added per tool call.
+
 ## 6. Audit Run Log
 
 Each session is one run ID. `data/runs/<session_id>.jsonl` (override with `RUN_LOG_DIR`) records the client inputs, policy version, every agent output with model and prompt version, rule results, automatic regenerations, advisor decisions and notes, PDF generation and the final outcome. `GET /sessions/{id}/audit` returns it.
@@ -270,5 +274,6 @@ The single-LLM baseline comparison (`src/evaluation/baseline.py`, `harness.py`) 
 - `tests/unit/test_retrieval_freshness.py`: freshness plus lifecycle status (withdrawn / superseded dropped with explicit reasons).
 - `tests/unit/test_market_signal_conflicts.py`: the deterministic conflict detector, its use by the agent and rule M1 in the Critic.
 - `tests/unit/test_token_accounting.py` and `test_openrouter_client.py`: tokens summed across retries, calls and failed runs.
+- `tests/integration/test_mcp_tools.py`: transport flag (default direct), the server's three tools, each tool returning the same result over MCP as in-process, and a full UC2 run identical in both transports.
 - `tests/unit/test_transcription.py`: recording transcription request (audio format, speakers), size and format checks before any call, provider failure surfaced.
 - `tests/integration/test_oneview_workflow.py`: the orchestration plan, the limits checkpoint, two lanes with fit and eligibility checks, a blocked idea regenerated and never shown (also after R10 escalation), RM news and 3-month sources, portfolio impact, the record feeding the next briefing, and UC3 end to end (flagged action, unclear amount, untraceable line, guarantee wording, spoken change vs limits, RM approval, agreement unchanged).

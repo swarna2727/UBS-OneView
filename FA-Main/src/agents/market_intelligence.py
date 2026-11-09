@@ -6,7 +6,8 @@ from src.agents.base import BaseAdvisoryAgent
 from src.schemas.advisory import ClientAdvisoryProfile, ResearchBrief, ResearchFinding
 from src.schemas.tools import DocumentSnippet, ExcludedSource
 from src.tools.market_tools import quantitative_analysis_tool, sentiment_analysis_tool, portfolio_impact_tool, detect_market_signal_conflicts
-from src.tools.retrieval import retrieval_rag_tool, source_freshness_validator
+from src.mcp_tools.gateway import cio_research_search
+from src.tools.retrieval import source_freshness_validator
 from src.tools.risk_engine import load_policy
 from src.llm.base import LLMClientProtocol
 
@@ -60,7 +61,7 @@ class MarketIntelligenceAgent(BaseAdvisoryAgent[ClientAdvisoryProfile, ResearchB
         # quantitative signals below, even when the client does not already hold them.
         # In the offline demo, this lets the advisor trace an idea back to a retrieved
         # source instead of failing the evidence check for a missing citation.
-        raw_snippets = retrieval_rag_tool(query, asset_universe=list(dict.fromkeys(tickers + ["MSFT"])))
+        raw_snippets = cio_research_search(query, asset_universe=list(dict.fromkeys(tickers + ["MSFT"])))
 
         # CIO research first, then news the RM entered. External news only by exception: the prototype never uses it.
         raw_snippets = raw_snippets + rm_news_snippets(rm_news or [])

@@ -8,7 +8,8 @@ from src.schemas.advisory import (
 )
 from src.tools.client_limits import profile_change_limits_check
 from src.schemas.tools import Breach, RuleResult
-from src.tools.risk_engine import suitability_rule_engine, worst_outcome
+from src.mcp_tools.gateway import portfolio_risk_engine
+from src.tools.risk_engine import worst_outcome
 from src.tools.universe import approved_product_universe_tool
 from src.llm.base import LLMClientProtocol
 
@@ -78,7 +79,7 @@ class FitEligibilityCriticAgent(BaseAdvisoryAgent[Any, Any]):
         ideas = inputs.candidate_ideas.ideas
         approved = {p.ticker.upper() for p in approved_product_universe_tool()}
 
-        engine = suitability_rule_engine(profile, ideas, inputs.research_brief, approved, offer_map=inputs.offer_map)
+        engine = portfolio_risk_engine(profile, ideas, inputs.research_brief, approved, offer_map=inputs.offer_map)
         portfolio_results: List[RuleResult] = engine["portfolio_results"]
 
         offer_map = inputs.offer_map
