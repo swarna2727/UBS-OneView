@@ -72,23 +72,27 @@ class OpenRouterLLMClient:
         return self.default_model
 
     def _chat(self, model: str, messages: List[Dict[str, str]], response_model: Type[BaseModel], temperature: float) -> Dict[str, Any]:
-        resp = self._http.post(
-            OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {self.api_key}", "X-Title": "UBS OneView Advisory"},
-            json={
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": response_model.__name__,
-                        "strict": False,
-                        "schema": response_model.model_json_schema()
-                    }
+        headers = {"Authorization": f"Bearer {self.api_key}", "X-Title": "UBS OneView Advisory"}
+        body = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_model.__name__,
+                    "strict": False,
+                    "schema": response_model.model_json_schema()
                 }
             }
-        )
+        }
+        resp = self._http.post(OPENROUTER_URL, headers=headers, json=body)
+        if resp.status_code == 400 and "grammar is too large" in resp.text:
+            # Some providers cannot compile large schemas into constrained decoding. The schema is already in the
+            # system prompt and every reply is validated against the Pydantic model, so resend without the format.
+            logger.info(f"{response_model.__name__}: schema too large for constrained decoding; retrying without response_format.")
+            body.pop("response_format")
+            resp = self._http.post(OPENROUTER_URL, headers=headers, json=body)
         resp.raise_for_status()
         return resp.json()
 

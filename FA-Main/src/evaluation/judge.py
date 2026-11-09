@@ -8,7 +8,7 @@ import json
 import re
 from typing import Any, Dict, List, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
 CRITERIA = {
     "idea": ["personalisation", "grounding", "explanation_clarity"],
@@ -27,6 +27,14 @@ class JudgeVerdict(BaseModel):
             raise ValueError("scores must be between 1 and 5")
         return v
 
+def _rubric_model(kind: str) -> type:
+    """One named, required 1-5 field per criterion: constrained decoding drops free-form dict keys, named fields it keeps."""
+    scores = create_model(f"{kind.title()}Scores", __config__=ConfigDict(extra="forbid"),
+                          **{c: (int, Field(..., ge=1, le=5)) for c in CRITERIA[kind]})
+    return create_model(f"{kind.title()}Verdict", __config__=ConfigDict(extra="forbid"), scores=(scores, ...), rationale=(str, ...))
+
+RUBRIC_MODELS = {kind: _rubric_model(kind) for kind in CRITERIA}
+
 class Judge(Protocol):
     name: str
     def judge(self, kind: str, subject: Dict[str, Any], context: Dict[str, Any]) -> JudgeVerdict: ...
@@ -43,11 +51,12 @@ class LLMJudge:
 
     def judge(self, kind: str, subject: Dict[str, Any], context: Dict[str, Any]) -> JudgeVerdict:
         criteria = CRITERIA[kind]
-        verdict = self.llm.generate_structured(
+        reply = self.llm.generate_structured(
             system_prompt=JUDGE_SYSTEM_PROMPT,
             user_prompt=f"KIND: {kind}\nCRITERIA: {criteria}\n<context>{json.dumps(context, default=str)}</context>\n"
                         f"<subject>{json.dumps(subject, default=str)}</subject>",
-            response_model=JudgeVerdict, temperature=0.0, agent_name="OutputJudge")
+            response_model=RUBRIC_MODELS[kind], temperature=0.0, agent_name="OutputJudge")
+        verdict = JudgeVerdict(scores=reply.scores.model_dump(), rationale=reply.rationale)
         missing = [c for c in criteria if c not in verdict.scores]
         if missing:
             raise ValueError(f"Judge did not score: {missing}")

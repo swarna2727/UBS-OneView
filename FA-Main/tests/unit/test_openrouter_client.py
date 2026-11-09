@@ -38,6 +38,21 @@ def test_returns_validated_model_and_sends_schema():
     assert seen[0]["model"] == "test/default"
     assert seen[0]["response_format"]["json_schema"]["name"] == "Answer"
 
+def test_schema_too_large_for_the_provider_is_resent_without_response_format():
+    """Providers that cannot compile a large schema reject it with a 400; the schema stays in the prompt and the reply is still validated."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        if "response_format" in body:
+            return httpx.Response(400, json={"error": {"message": "The compiled grammar is too large, which would cause performance issues."}})
+        return httpx.Response(200, json={"model": body["model"], "choices": [{"message": {"content": '{"ticker": "IEF", "weight_pct": 5}'}}]})
+
+    client = OpenRouterLLMClient(api_key="test-key", default_model="test/default", transport=httpx.MockTransport(handler))
+    assert client.generate_structured("sys", "user", Answer) == Answer(ticker="IEF", weight_pct=5.0)
+    assert len(seen) == 2 and "response_format" not in seen[1] and "JSON schema" in seen[1]["messages"][0]["content"]
+
 def test_invalid_output_is_retried_with_validation_feedback():
     seen = []
     client = make_client(['{"ticker": "IEF"}', '```json\n{"ticker": "IEF", "weight_pct": 5}\n```'], seen)

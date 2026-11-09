@@ -7,7 +7,7 @@ import dataclasses
 import pytest
 
 from src.evaluation import components, quality, trajectory
-from src.evaluation.judge import CRITERIA, HeuristicJudge, JudgeVerdict, LLMJudge, mean_score
+from src.evaluation.judge import CRITERIA, RUBRIC_MODELS, HeuristicJudge, JudgeVerdict, LLMJudge, mean_score
 from src.evaluation.performance import BUCKETS, performance_report
 from src.evaluation.runner import drive_session
 from src.evaluation.scorecard import scenarios, evaluate_run, judge_run
@@ -184,13 +184,16 @@ def good_verdict(kind):
 
 
 def test_llm_judge_scores_through_the_client_and_demands_every_criterion():
-    llm = FakeAdvisoryLLMClient(override_responses={"JudgeVerdict": good_verdict("idea")})
+    reply = RUBRIC_MODELS["idea"].model_validate(good_verdict("idea").model_dump())
+    llm = FakeAdvisoryLLMClient(override_responses={"IdeaVerdict": reply})
     verdict = LLMJudge(llm).judge("idea", {"thesis": "t"}, {"facts": []})
     assert verdict.scores == {"personalisation": 4, "grounding": 4, "explanation_clarity": 4}
     assert llm.call_history[-1]["agent_name"] == "OutputJudge" and "quoted data" in llm.call_history[-1]["system_prompt"]
-    partial = FakeAdvisoryLLMClient(override_responses={"JudgeVerdict": JudgeVerdict(scores={"grounding": 5}, rationale="x")})
-    with pytest.raises(ValueError, match="did not score"):
-        LLMJudge(partial).judge("idea", {}, {})
+    # every criterion is a named, required field, so a partial or empty score set never validates
+    schema = RUBRIC_MODELS["idea"].model_json_schema()
+    assert set(schema["$defs"]["IdeaScores"]["required"]) == set(CRITERIA["idea"])
+    with pytest.raises(ValueError):
+        RUBRIC_MODELS["idea"].model_validate({"scores": {"grounding": 5}, "rationale": "x"})
 
 
 def test_judge_verdict_rejects_out_of_range_scores():
