@@ -115,6 +115,20 @@ def test_an_idea_blocked_by_client_limits_is_regenerated_and_never_shown(sample_
     assert "E1" in state["regeneration_history"][0]["rules"]
 
 
+def test_regeneration_asks_the_model_for_the_failed_slot_only_and_keeps_locked_ideas(sample_profiles):
+    llm = FakeAdvisoryLLMClient()
+    service = new_service(llm)
+    reg = {**sample_profiles["demo_sarah"]["regulatory_profile"], "cka_valid_until": "2026-01-01"}
+    service.start_session(sarah(sample_profiles, use_case="adhoc_request", new_capital_amount=120000.0, regulatory_profile=reg), session_id="one")
+    reach_ideas(service, "one", notes="CKA refresh booked.")
+    calls = [c for c in llm.call_history if c["agent_name"] == "OpportunityAgent"]
+    assert [c["model_name"] for c in calls] == ["CandidateIdeaSet", "RegeneratedIdeas"]
+    assert "Slots to Generate/Regenerate: [2]" in calls[1]["user_prompt"]
+    rounds = service.get_state("one")["idea_rounds"]
+    before, after = ({i["slot_number"]: i for i in r["ideas"]} for r in rounds[:2])
+    assert before[1] == after[1] and before[3] == after[3] and before[2]["ticker"] != after[2]["ticker"]
+
+
 def test_blocked_idea_that_exhausts_regenerations_is_withheld_from_the_rm(sample_profiles):
     """If a blocked idea still reaches the RM after R10 escalation, its product is replaced, and it can never be locked."""
     always_hyg = FakeAdvisoryLLMClient()

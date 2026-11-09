@@ -5,7 +5,7 @@ import re
 from typing import Type, TypeVar, Optional, Dict, Any
 from pydantic import BaseModel
 from src.schemas.advisory import (
-    ResearchBrief, CandidateIdeaSet, InvestmentIdea, AllocationRange,
+    ResearchBrief, CandidateIdeaSet, RegeneratedIdeas, InvestmentIdea, AllocationRange,
     SuitabilityAssessment, IdeaStatus, StructuredMemo,
     MemoPage1Executive, MemoPage2IdeaDetail, MemoPage3PortfolioView,
     ExecutiveIdeaGlance, ResearchFinding, MeetingExtraction, RecordLine, CircumstanceChange, ExtractedAction
@@ -48,6 +48,14 @@ class FakeAdvisoryLLMClient:
             elif isinstance(override_val, dict):
                 return response_model.model_validate(override_val)
 
+        if issubclass(response_model, RegeneratedIdeas):
+            # A selective regeneration: build the full set as for a new request (a CandidateIdeaSet override included),
+            # then return only the regenerated slots, as the live model does.
+            full = self._candidate_ideas(user_prompt)
+            match = re.search(r"Slots to Generate/Regenerate: \[([\d, ]*)\]", user_prompt)
+            slots = {int(x) for x in match.group(1).split(",") if x.strip()} if match else set()
+            return response_model(ideas=[i for i in full.ideas if i.slot_number in slots],  # type: ignore
+                                  complementarity_thesis=full.complementarity_thesis, generation_round=full.generation_round)
         if response_model == ResearchBrief:
             return self._focus_findings(self._build_fake_research_brief(), user_prompt) # type: ignore
         elif response_model == CandidateIdeaSet:
@@ -350,6 +358,12 @@ class FakeAdvisoryLLMClient:
                  "Low", "Inflation-linked bonds.", ["SRC-GOLD-MONITOR-2026-10"], "ADD")],
         },
     }
+
+    def _candidate_ideas(self, user_prompt: str) -> CandidateIdeaSet:
+        override = self.override_responses.get("CandidateIdeaSet")
+        if override is not None:
+            return override if isinstance(override, BaseModel) else CandidateIdeaSet.model_validate(override)  # type: ignore
+        return self._build_fake_candidate_ideas(user_prompt)
 
     def _build_fake_candidate_ideas(self, user_prompt: str) -> CandidateIdeaSet:
         # A new idea set starts every slot at its first idea; a regeneration request advances only the listed slots.

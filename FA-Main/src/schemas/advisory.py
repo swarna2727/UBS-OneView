@@ -160,6 +160,35 @@ class CandidateIdeaSet(BaseModel):
             raise ValueError(f"CandidateIdeaSet ideas must be for 3 distinct instruments. Got {tickers}")
         return v
 
+class RegeneratedIdeas(BaseModel):
+    """The model's reply to a selective regeneration: only the regenerated slots. Locked ideas are kept by code and
+    never sent back. Use `regenerated_ideas_model(slots)`, which also checks the reply covers exactly those slots."""
+    model_config = ConfigDict(extra="forbid")
+    ideas: List[InvestmentIdea] = Field(..., min_length=1, max_length=2)
+    complementarity_thesis: str  # for the whole set, locked ideas included
+    generation_round: int = Field(default=1, ge=1)
+
+    @field_validator("ideas")
+    @classmethod
+    def validate_distinct(cls, v: List[InvestmentIdea]) -> List[InvestmentIdea]:
+        if len({i.slot_number for i in v}) != len(v) or len({i.ticker for i in v}) != len(v):
+            raise ValueError(f"Regenerated ideas need distinct slots and instruments. Got {[(i.slot_number, i.ticker) for i in v]}")
+        return v
+
+def regenerated_ideas_model(slots: List[int]) -> type:
+    expected = sorted(slots)
+
+    class _Regenerated(RegeneratedIdeas):
+        @model_validator(mode="after")
+        def covers_requested_slots(self) -> "_Regenerated":
+            got = sorted(i.slot_number for i in self.ideas)
+            if got != expected:
+                raise ValueError(f"Return ideas for slots {expected} only (locked slots are kept as they are). Got {got}")
+            return self
+
+    _Regenerated.__name__ = "RegeneratedIdeas"  # the schema name the model sees
+    return _Regenerated
+
 # ==========================================
 # 4. SUITABILITY CRITIC SCHEMAS (Slide 17)
 # ==========================================
