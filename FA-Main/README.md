@@ -4,6 +4,84 @@ A human-led multi-agent investment advisory application for UBS financial adviso
 
 ---
 
+## 0. Setup
+
+Run every command from this folder (`FA-Main`). No API key is needed to run the app, the tests or the evaluation: **Offline** mode uses scripted test data. A key is only needed for **Live** mode.
+
+### Environment
+
+Python 3 with `pip`. Tested on Python 3.14.7 (Windows 11).
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate             # Windows
+source .venv/bin/activate          # macOS / Linux
+pip install -r requirements.txt
+```
+
+### Dependencies
+
+All are listed in `requirements.txt` (minimum versions):
+
+| Package | Used for |
+|---|---|
+| `streamlit`, `altair`, `pandas` | Advisor workspace and its charts |
+| `langgraph`, `langchain-core` | Agent workflow and advisor checkpoints |
+| `pydantic` | Typed agent inputs and outputs |
+| `httpx` | OpenRouter calls (Live mode) |
+| `python-dotenv` | Reads the API key from `.env` |
+| `reportlab` | Memo, brief and record PDFs |
+| `pyyaml` | Suitability policy (`config/suitability_policy.yaml`) |
+| `fastapi`, `uvicorn` | REST API |
+| `mcp` | Optional MCP tool server (`src/mcp_tools/`) |
+| `pytest` | Tests |
+
+### Run
+
+```bash
+streamlit run streamlit_app.py      # advisor workspace: http://localhost:8501 (sign in with any email and password)
+python -m pytest -q                 # tests, offline
+python -m src.evaluation.scorecard --out reports/oneview_evaluation.md --json reports/oneview_evaluation.json
+```
+
+In the app, **Settings → Run mode** chooses **Offline · test data stubs** (default) or **Live · OpenRouter**.
+
+### API key (Live mode only)
+
+1. Create an account at [openrouter.ai](https://openrouter.ai), add credits, and create a key under **Keys**.
+2. Copy `.env.example` to `.env` and paste the key:
+   ```
+   OPENROUTER_API_KEY=sk-or-v1-...
+   ```
+3. Restart the app and pick **Live · OpenRouter** in Settings.
+
+`.env` is listed in `.gitignore`: never commit it or paste the key into code. In Live mode, client details are sent to the model provider and each run uses credits (a Discover run with Claude Sonnet 4.5 cost about US$0.25 in our tests). Optional settings are in `.env.example`.
+
+### Datasets
+
+Everything the app needs is in the repository; nothing is downloaded at run time.
+
+| Included | Contents |
+|---|---|
+| `data/samples/client_profiles.json` | Fictional demo clients (Sarah Tan, Daniel, Mdm Lim, Aaron, Charlotte) |
+| `data/samples/meeting_transcripts.json` | Demo meeting transcript for the Record use case |
+| `data/research/corpus.json` | Fixed sample of 8 dated research notes used by retrieval |
+| `data/market/prices/` | Fixed market-data snapshot and illustrative 3-month moves |
+| `data/universe/approved_products.json` | Approved product universe with risk, complexity and liquidity ratings |
+| `config/suitability_policy.yaml` | Suitability rules, limits and thresholds |
+
+| Not included | Why |
+|---|---|
+| Real client data | Only fictional clients may be used. New clients entered in the app stay in the browser session |
+| `.env` (API key) | Secret |
+| `data/runs/` (audit run logs) and `data/pipeline_data/*.pdf` (generated PDFs) | Created when the app runs |
+| Evaluation outputs in `reports/` | Created by the evaluation commands; rerun them to reproduce the results |
+| Live market or research feeds | The prototype uses the fixed files above. A production version would replace them with the bank's feeds |
+
+To add a demo client, add an entry to `client_profiles.json` with the same fields as the existing ones.
+
+---
+
 ## 1. Design Principles
 
 1. **Clear role boundaries**: five agents plus a rule layer, each owning one kind of work, hand off typed Pydantic objects. Agents reason, tools calculate or retrieve, controls constrain.
