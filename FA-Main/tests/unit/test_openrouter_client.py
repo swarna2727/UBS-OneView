@@ -118,3 +118,34 @@ def test_missing_usage_from_the_provider_counts_as_zero_not_an_error():
     client = make_client(['{"ticker": "IEF", "weight_pct": 1}'], [])
     client.generate_structured("sys", "user", Answer)
     assert client.last_call["usage"]["total_tokens"] == 0 and client.last_call["usage"]["attempts"] == 1
+
+def test_an_attempt_past_the_deadline_is_dropped_and_retried_and_logged_on_its_own():
+    """A reply held open with keep-alive bytes never trips the read timeout, so each attempt has a wall-clock deadline."""
+    import time
+    calls = []
+
+    class Trickle(httpx.SyncByteStream):
+        def __iter__(self):
+            for _ in range(4):
+                time.sleep(0.1)
+                yield b" "
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(200, stream=Trickle())
+        return httpx.Response(200, json={"model": "m", "choices": [{"message": {"content": '{"ticker": "IEF", "weight_pct": 5}'}}],
+                                         "usage": {"prompt_tokens": 10, "completion_tokens": 4}})
+
+    client = OpenRouterLLMClient(api_key="k", default_model="m", timeout_s=0.25, transport=httpx.MockTransport(handler))
+    assert client.generate_structured("sys", "user", Answer).ticker == "IEF"
+    first, second = client.last_call["attempt_log"]
+    assert first["outcome"].startswith("failed: TimeoutException") and first["completion_tokens"] == 0
+    assert second["outcome"] == "reply" and second["completion_tokens"] == 4 and client.last_call["attempts"] == 2
+
+def test_a_gzip_reply_is_decoded_once():
+    import gzip
+    body = json.dumps({"model": "m", "choices": [{"message": {"content": '{"ticker": "IEF", "weight_pct": 5}'}}]}).encode()
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, headers={"content-encoding": "gzip"}, content=gzip.compress(body)))
+    client = OpenRouterLLMClient(api_key="k", default_model="m", transport=transport)
+    assert client.generate_structured("sys", "user", Answer).ticker == "IEF"
